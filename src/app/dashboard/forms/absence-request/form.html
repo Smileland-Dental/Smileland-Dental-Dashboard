@@ -1,0 +1,1512 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Form</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding-top: 40px;
+            padding-bottom: 40px;
+            padding-left: 60px;
+            padding-right: 60px;
+            background: linear-gradient(to bottom, #87CEEB, #B0E0E6);
+            background-attachment: fixed;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* 구름 애니메이션 컨테이너 */
+        .clouds-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        /* 구름 스타일 */
+        .cloud {
+            position: absolute;
+            background: white;
+            border-radius: 50px;
+            opacity: 0.8;
+            filter: blur(1px);
+            animation: float 20s infinite linear;
+        }
+
+        .cloud:before,
+        .cloud:after {
+            content: '';
+            position: absolute;
+            background: white;
+            border-radius: 50px;
+        }
+
+        .cloud:before {
+            width: 50px;
+            height: 50px;
+            top: -20px;
+            left: 10px;
+        }
+
+        .cloud:after {
+            width: 30px;
+            height: 30px;
+            top: -10px;
+            right: 20px;
+        }
+
+        /* 구름 크기별 스타일 */
+        .cloud.small {
+            width: 60px;
+            height: 20px;
+            animation-duration: 25s;
+        }
+
+        .cloud.medium {
+            width: 100px;
+            height: 30px;
+            animation-duration: 20s;
+        }
+
+        .cloud.large {
+            width: 140px;
+            height: 40px;
+            animation-duration: 15s;
+        }
+
+        /* 구름 떠다니는 애니메이션 */
+        @keyframes float {
+            0% {
+                transform: translateX(-150px) translateY(0px);
+            }
+
+            50% {
+                transform: translateX(calc(50vw - 50px)) translateY(-20px);
+            }
+
+            100% {
+                transform: translateX(calc(100vw + 150px)) translateY(0px);
+            }
+        }
+
+        /* 구름별 다른 시작 위치와 속도 */
+        .cloud:nth-child(1) {
+            top: 15%;
+            left: -200px;
+            animation-delay: 0s;
+            animation-duration: 18s;
+        }
+
+        .cloud:nth-child(2) {
+            top: 25%;
+            left: -200px;
+            animation-delay: 3s;
+            animation-duration: 22s;
+        }
+
+        .cloud:nth-child(3) {
+            top: 35%;
+            left: -200px;
+            animation-delay: 6s;
+            animation-duration: 20s;
+        }
+
+        .cloud:nth-child(4) {
+            top: 45%;
+            left: -200px;
+            animation-delay: 9s;
+            animation-duration: 25s;
+        }
+
+        .cloud:nth-child(5) {
+            top: 55%;
+            left: -200px;
+            animation-delay: 12s;
+            animation-duration: 16s;
+        }
+
+        .cloud:nth-child(6) {
+            top: 65%;
+            left: -200px;
+            animation-delay: 15s;
+            animation-duration: 23s;
+        }
+
+        .form-container {
+            background-color: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            margin-top: 150px;
+            max-width: 1100px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 32px;
+            box-sizing: border-box;
+            position: relative;
+            z-index: 2;
+        }
+
+        .request-type-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: #f8f9fa;
+        }
+
+        .request-type-section h3 {
+            margin-bottom: 15px;
+            color: #333;
+            font-size: 16px;
+        }
+
+        .request-type-options {
+            display: flex;
+            flex-direction: row;
+            justify-content: flex-start;
+            gap: 40px;
+            flex-wrap: wrap;
+        }
+
+        .request-type-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 0;
+            transition: all 0.2s;
+        }
+
+        .request-type-option:hover {
+            transform: translateY(-1px);
+        }
+
+        .request-type-option input[type="radio"] {
+            margin: 0;
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .request-type-option label {
+            width: auto;
+            margin: 0;
+            font-size: 14px;
+            color: #495057;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: inline-block;
+            width: 120px;
+            margin-right: 15px;
+        }
+
+        input[type="text"],
+        input[type="date"],
+        input[type="email"],
+        select {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 250px;
+        }
+
+        .form-row {
+            display: flex;
+            align-items: center;
+            gap: 30px;
+            margin-bottom: 20px;
+        }
+
+        .form-row.top-balance {
+            display: flex;
+            justify-content: center;
+            gap: 40px;
+            margin-bottom: 20px;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .form-row.top-balance .form-group {
+            align-items: flex-start;
+            width: 100%;
+        }
+
+        .form-title {
+            text-align: center;
+            margin-bottom: 5px;
+            font-size: 24px;
+            font-weight: bold;
+            color: #2c3e50;
+        }
+
+        .form-note-box {
+            display: flex;
+            justify-content: center;
+            background: #f3f5f6;
+            border-radius: 4px;
+            margin-bottom: 30px;
+            padding: 10px 0 10px 0;
+        }
+
+        .form-note {
+            text-align: center;
+            margin: 0;
+            font-size: 14px;
+            color: #34495e;
+            font-style: italic;
+            background: none;
+            padding: 0;
+        }
+
+        .instructions {
+            margin: 20px 0;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .instructions h3 {
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .instructions ul {
+            list-style-type: none;
+            padding-left: 0;
+            margin: 0;
+        }
+
+        .instructions li {
+            margin-bottom: 8px;
+            padding-left: 25px;
+            position: relative;
+        }
+
+        .instructions li:before {
+            content: "•";
+            position: absolute;
+            left: 10px;
+            color: #666;
+        }
+
+        .attendance-type {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .attendance-type h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .radio-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .radio-option input[type="radio"] {
+            margin: 0;
+        }
+
+        .radio-option label {
+            width: auto;
+            margin: 0;
+        }
+
+        .time-input {
+            display: none;
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+        }
+
+        .time-input input[type="time"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 150px;
+        }
+
+        .time-input-inline {
+            display: inline-block;
+            margin-left: 10px;
+        }
+
+        .incident-date {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .incident-date h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .reason-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .reason-section h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .reason-section textarea {
+            width: 100%;
+            min-height: 120px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            resize: vertical;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            box-sizing: border-box;
+        }
+
+        .reason-section textarea:focus {
+            outline: none;
+            border-color: #4a90e2;
+            box-shadow: 0 0 5px rgba(74, 144, 226, 0.3);
+        }
+
+        .excuse-note {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .excuse-note h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .excuse-options {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .excuse-option {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .excuse-option input[type="radio"] {
+            margin: 0;
+        }
+
+        .excuse-option label {
+            width: auto;
+            margin: 0;
+        }
+
+        .file-upload {
+            margin-left: 25px;
+        }
+
+        .file-upload.visible {
+            display: block;
+        }
+
+        .file-upload input[type="file"] {
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        .signature-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .signature-section h3 {
+            margin-bottom: 15px;
+            color: #333;
+        }
+
+        .signature-pad {
+            width: 100%;
+            height: 200px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background-color: white;
+            margin-bottom: 10px;
+        }
+
+        .signature-controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .signature-controls button {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 4px;
+            background-color: #4a90e2;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .signature-controls button:hover {
+            background-color: #357abd;
+        }
+
+        .signature-controls button.clear {
+            background-color: #dc3545;
+        }
+
+        .signature-controls button.clear:hover {
+            background-color: #c82333;
+        }
+
+        .submit-section {
+            margin: 30px 0;
+            text-align: center;
+        }
+
+        .submit-button {
+            padding: 12px 30px;
+            font-size: 16px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        .submit-button:hover {
+            background-color: #218838;
+        }
+
+        .submit-button:disabled {
+            background-color: #6c757d;
+            cursor: not-allowed;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding: 20px;
+            color: #666;
+            font-size: 16px;
+            border-top: 1px solid #eee;
+        }
+
+        .key-holder-section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .key-holder-note {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 15px;
+            font-style: italic;
+        }
+
+        .key-holder-inputs {
+            display: flex;
+            gap: 20px;
+        }
+
+        .key-holder-inputs .form-group {
+            flex: 1;
+        }
+
+        .key-holder-inputs input {
+            width: 100%;
+            max-width: 300px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        .form-container {
+            max-width: 1100px;
+            width: 100%;
+            margin: 20px auto;
+            padding: 40px;
+            box-sizing: border-box;
+        }
+
+        .form-row,
+        .form-row.top-balance {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        .form-group {
+            flex: 1 1 200px;
+            min-width: 180px;
+        }
+
+        input[type="text"],
+        input[type="date"],
+        input[type="email"],
+        select,
+        textarea {
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        @media (max-width: 900px) {
+            .form-container {
+                max-width: 98vw;
+                padding: 8px;
+            }
+
+            .form-row,
+            .form-row.top-balance {
+                flex-direction: column;
+                gap: 0;
+            }
+
+            .form-group {
+                min-width: 0;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- 구름 애니메이션 컨테이너 -->
+    <div class="clouds-container">
+        <div class="cloud large"></div>
+        <div class="cloud medium"></div>
+        <div class="cloud small"></div>
+        <div class="cloud large"></div>
+        <div class="cloud medium"></div>
+        <div class="cloud small"></div>
+    </div>
+
+    <div class="form-container">
+        <h1 class="form-title"><span style="font-size:1.1em;vertical-align:-2px;">📝</span> Absence Request / Report Form
+            <span style="font-size:1.1em;vertical-align:-2px;">📋</span>
+        </h1>
+        <div class="form-note-box">
+            <p class="form-note">For PTO/PSL, please fill out PTO/PSL Request Form</p>
+        </div>
+
+        <form id="newForm">
+            <div class="request-type-section">
+                <h3>Type of Request <span style="color: red;">*</span></h3>
+                <div class="request-type-options">
+                    <div class="request-type-option">
+                        <input type="radio" id="incidentNotice" name="requestType" value="Incident Notice" required>
+                        <label for="incidentNotice">Incident Notice (Less than 30 days notice)</label>
+                    </div>
+                    <div class="request-type-option">
+                        <input type="radio" id="timeOffRequest" name="requestType" value="Time-Off Request">
+                        <label for="timeOffRequest">Time-Off Request (30 days or more notice)</label>
+                    </div>
+                    <div class="request-type-option">
+                        <input type="radio" id="taken" name="requestType" value="Taken">
+                        <label for="taken">Taken</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-row top-balance">
+                <div class="form-group">
+                    <label for="userName"><strong>Name: <span style="color: red;">*</span></strong></label>
+                    <input type="text" id="userName" name="userName" required placeholder="Enter your full name">
+                </div>
+                <div class="form-group">
+                    <label for="currentDate"><strong>Today's Date: <span style="color: red;">*</span></strong></label>
+                    <input type="date" id="currentDate" name="currentDate" required readonly>
+                </div>
+                <div class="form-group">
+                    <label for="userEmail"><strong>Email: <span style="color: red;">*</span></strong></label>
+                    <input type="email" id="userEmail" name="userEmail" required placeholder="Enter your email">
+                </div>
+            </div>
+            <div class="form-row top-balance">
+                <div class="form-group">
+                    <label for="officeSelect"><strong>Office: <span style="color: red;">*</span></strong></label>
+                    <select id="officeSelect" name="office" required
+                        style="padding: 8px; border: 1px solid #ddd; border-radius: 4px; width: 200px;">
+                        <option value="">-- Select Office --</option>
+                        <option value="Ming">Ming</option>
+                        <option value="Bernard">Bernard</option>
+                        <option value="Delano">Delano</option>
+                        <option value="Tulare">Tulare</option>
+                        <option value="Visalia">Visalia</option>
+                        <option value="Fresno">Fresno</option>
+                        <option value="California">California</option>
+                        <option value="Office Billing">Office Billing</option>
+                        <option value="Ortho">Ortho</option>
+                        <option value="Corporate">Corporate</option>
+                    </select>
+                </div>
+                <div class="form-group" id="departmentGroup" style="display:none;">
+                    <label for="departmentSelect"><strong>Department: <span
+                                style="color: red;">*</span></strong></label>
+                    <select id="departmentSelect" name="department">
+                        <option value="">-- Select Department --</option>
+                        <option value="AR">AR</option>
+                        <option value="Call Center">Call Center</option>
+                        <option value="EXEC">Exec</option>
+                        <option value="IT">IT</option>
+                        <option value="Marcom">Marcom</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="userPosition"><strong>Position: <span style="color: red;">*</span></strong></label>
+                    <input type="text" id="userPosition" name="userPosition" required placeholder="Enter your position">
+                </div>
+            </div>
+
+            <div class="instructions" id="instructionsBox">
+                <h3><span style="font-size:1.1em;vertical-align:-2px;">💡</span> Instructions:</h3>
+                <ul id="instructionsList">
+                    <li>Ensure all fields are completed to assist decision-making.</li>
+                    <li>Provide an excuse note to avoid potential disciplinary act.</li>
+                    <li>Request will be submitted to your supervisor.</li>
+                </ul>
+            </div>
+
+            <div class="attendance-type">
+                <h3>Type of Incident: <span style="color: red;">*</span></h3>
+                <div class="radio-group">
+                    <div class="radio-option">
+                        <input type="radio" id="absent" name="absenceType" value="Absent" required>
+                        <label for="absent">Absent</label>
+                    </div>
+                    <div class="radio-option" id="lateInOption">
+                        <input type="radio" id="lateIn" name="absenceType" value="Late In">
+                        <label for="lateIn">Late In</label>
+                        <span class="time-input-inline" id="etaInputInline" style="display:none; margin-left:10px;">
+                            <label for="eta" style="margin-right:5px;">ETA: <span style="color: red;">*</span></label>
+                            <input type="time" id="eta" name="eta" required>
+                        </span>
+                    </div>
+                    <div class="radio-option" id="earlyOutOption">
+                        <input type="radio" id="earlyOut" name="absenceType" value="Early Out">
+                        <label for="earlyOut">Early Out</label>
+                        <span class="time-input-inline" id="etdInputEarlyOutInline"
+                            style="display:none; margin-left:10px;">
+                            <label for="etdEarlyOut" style="margin-right:5px;">ETD: <span
+                                    style="color: red;">*</span></label>
+                            <input type="time" id="etdEarlyOut" name="etdEarlyOut" required>
+                        </span>
+                    </div>
+                    <div class="radio-option" id="longLunchOption">
+                        <input type="radio" id="longLunch" name="absenceType" value="Long Lunch">
+                        <label for="longLunch">Long Lunch</label>
+                        <span class="time-input-inline" id="etdInputLongLunchInline"
+                            style="display:none; margin-left:10px;">
+                            <label for="etdLongLunch" style="margin-right:5px;">ETD: <span
+                                    style="color: red;">*</span></label>
+                            <input type="time" id="etdLongLunch" name="etdLongLunch" required>
+                        </span>
+                    </div>
+                    <div class="radio-option" id="leaveComeBackOption">
+                        <input type="radio" id="leaveComeBack" name="absenceType" value="Leave & Come Back">
+                        <label for="leaveComeBack">Leave & Come Back</label>
+                        <span class="time-input-inline" id="etdInputLeaveComeBackInline"
+                            style="display:none; margin-left:10px;">
+                            <label for="etdLeaveComeBack" style="margin-right:5px;">ETD: <span
+                                    style="color: red;">*</span></label>
+                            <input type="time" id="etdLeaveComeBack" name="etdLeaveComeBack" required>
+                        </span>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" id="switchShift" name="absenceType" value="Switch Shift">
+                        <label for="switchShift">Switch Shift</label>
+                    </div>
+                    <div class="radio-option">
+                        <input type="radio" id="cancelling" name="absenceType" value="Cancelling">
+                        <label for="cancelling">Cancelling</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="form-group" id="cancelTargetGroup"
+                style="display:none; margin-top:10px; flex-direction:column;">
+                <label for="cancelTargetType" style="font-weight:bold; margin-bottom:4px; white-space: nowrap;">Which
+                    type of incident do you want to cancel?</label>
+                <select id="cancelTargetType" name="cancelTargetType">
+                    <option value="">-- Select Type to Cancel --</option>
+                    <option value="Absent">Absent</option>
+                    <option value="Late In">Late In</option>
+                    <option value="Early Out">Early Out</option>
+                    <option value="Long Lunch">Long Lunch</option>
+                    <option value="Leave & Come Back">Leave & Come Back</option>
+                    <option value="Switch Shift">Switch Shift</option>
+                </select>
+            </div>
+
+            <div class="incident-date">
+                <h3>Date of Incident: <span style="color: red;">*</span></h3>
+                <div id="incidentDateNote"
+                    style="display:none; font-size:12px; color:#666; margin-top:-10px; margin-bottom:10px;">
+                    * If you selected Cancelling, please enter the date of the previously requested incident you want to
+                    cancel.
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="incidentStartDate"><strong>Start Date: <span
+                                    style="color: red;">*</span></strong></label>
+                        <input type="date" id="incidentStartDate" name="incidentStartDate" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="incidentEndDate"><strong>End Date: <span
+                                    style="color: red;">*</span></strong></label>
+                        <input type="date" id="incidentEndDate" name="incidentEndDate" required>
+                    </div>
+                </div>
+            </div>
+
+            <div class="reason-section">
+                <h3>Reason for Incident: <span style="color: red;">*</span></h3>
+                <div class="form-group">
+                    <textarea id="incidentReason" name="incidentReason" required
+                        placeholder="Please provide an explanation of the incident"></textarea>
+                </div>
+            </div>
+
+            <div class="key-holder-section" id="keyHolderSection">
+                <p class="key-holder-note">* If Applicable (For Key Holders or Supervisors)</p>
+                <div class="key-holder-inputs">
+                    <div class="form-group">
+                        <label for="openingTime"><strong>Opening:</strong></label>
+                        <input type="text" id="openingTime" name="openingTime" placeholder="Enter opening staff">
+                    </div>
+                    <div class="form-group">
+                        <label for="closingTime"><strong>Closing:</strong></label>
+                        <input type="text" id="closingTime" name="closingTime" placeholder="Enter closing staff">
+                    </div>
+                </div>
+            </div>
+
+            <div class="excuse-note" id="excuseNoteSection">
+                <h3>Excuse Note: <span style="color: red;">*</span></h3>
+                <p style="font-size: 12px; color: #666; margin-bottom: 15px;">
+                    * To upload your Excuse Note, you may remove the iPad from the wall mount and use the "Take Photo"
+                    option.<br>
+                    Please note that if you use the "Take Photo" option, the photo will not be saved on the iPad after
+                    submission.
+                </p>
+                <div class="excuse-options">
+                    <div class="excuse-option" id="excuseOption1">
+                        <input type="radio" id="excuse1" name="excuseType" value="documents" required>
+                        <label for="excuse1">Submit Photo or Document</label>
+                        <div class="file-upload" id="fileUpload">
+                            <input type="file" id="supportingDocs" name="supportingDocs"
+                                accept=".pdf,.jpg,.jpeg,.png,.doc,.docx">
+                        </div>
+                    </div>
+                    <div class="excuse-option" id="excuseOption2">
+                        <input type="radio" id="excuse2" name="excuseType" value="willProvide" required>
+                        <label for="excuse2">Will Provide Note Upon Arrival <span
+                                style="font-size:12px; color:#888; margin-left:6px;">(Please use the Excuse Note
+                                Submission Form for note submission.)</span></label>
+                    </div>
+                    <div class="excuse-option" id="excuseOption3">
+                        <input type="radio" id="excuse3" name="excuseType" value="noNote" required>
+                        <label for="excuse3">No Excused Note Will Be Provided</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="signature-section">
+                <h3><span style="font-size:1.1em;vertical-align:-2px;">✍️</span> Signature: <span
+                        style="color: red;">*</span></h3>
+                <canvas id="signaturePad" class="signature-pad" width="600" height="200" required></canvas>
+                <div class="signature-controls">
+                    <button type="button" id="clearSignature" class="clear">Clear Signature</button>
+                </div>
+                <input type="hidden" id="signatureData" name="signatureData" required>
+            </div>
+
+            <div class="submit-section">
+                <button type="submit" class="submit-button" id="submitButton">Submit</button>
+            </div>
+        </form>
+
+        <div class="footer">
+            <p>Smileland Dental</p>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            const dateInput = document.getElementById('currentDate');
+
+            function setCaliforniaDate(inputElement) {
+                if (inputElement) {
+                    const laNow = new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' });
+                    const laDate = new Date(laNow);
+                    const yyyy = laDate.getFullYear();
+                    const mm = String(laDate.getMonth() + 1).padStart(2, '0');
+                    const dd = String(laDate.getDate()).padStart(2, '0');
+                    const todayLA = `${yyyy}-${mm}-${dd}`;
+                    inputElement.value = todayLA;
+                }
+            }
+
+            setCaliforniaDate(dateInput);
+
+            // Signature Pad Implementation
+            const canvas = document.getElementById('signaturePad');
+            const clearButton = document.getElementById('clearSignature');
+            const signatureData = document.getElementById('signatureData');
+            const ctx = canvas.getContext('2d');
+            let isDrawing = false;
+            let lastX = 0;
+            let lastY = 0;
+            let strokeCount = 0;
+
+            // 좌표 보정 함수
+            function getCanvasPos(e) {
+                const rect = canvas.getBoundingClientRect();
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+                let x, y;
+                if (e.touches) {
+                    x = (e.touches[0].clientX - rect.left) * scaleX;
+                    y = (e.touches[0].clientY - rect.top) * scaleY;
+                } else {
+                    x = (e.clientX - rect.left) * scaleX;
+                    y = (e.clientY - rect.top) * scaleY;
+                }
+                return [x, y];
+            }
+
+            // Set canvas background to white
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // Set initial drawing style
+            ctx.strokeStyle = '#000000';
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+
+            function startDrawing(e) {
+                isDrawing = true;
+                const [x, y] = getCanvasPos(e);
+                lastX = x;
+                lastY = y;
+                strokeCount++;
+            }
+
+            function draw(e) {
+                if (!isDrawing) return;
+                const [x, y] = getCanvasPos(e);
+                ctx.beginPath();
+                ctx.moveTo(lastX, lastY);
+                ctx.lineTo(x, y);
+                ctx.stroke();
+                lastX = x;
+                lastY = y;
+                // Save signature data
+                signatureData.value = canvas.toDataURL();
+                // Add visual feedback
+                canvas.style.borderColor = '#28a745';
+            }
+
+            function stopDrawing() {
+                isDrawing = false;
+            }
+
+            function clearSignature() {
+                ctx.fillStyle = 'white';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                signatureData.value = '';
+                strokeCount = 0;
+                // Remove any validation styling
+                canvas.style.borderColor = '#ddd';
+            }
+
+            // Check if signature is actually drawn (not just empty canvas)
+            function isSignatureValid() {
+                // Simple check: if signature data exists and stroke count is greater than 0
+                return signatureData.value && signatureData.value.length > 0 && strokeCount > 0;
+            }
+
+            // Event listeners for signature pad
+            canvas.addEventListener('mousedown', startDrawing);
+            canvas.addEventListener('mousemove', draw);
+            canvas.addEventListener('mouseup', stopDrawing);
+            canvas.addEventListener('mouseout', stopDrawing);
+            clearButton.addEventListener('click', clearSignature);
+
+            // Touch support for mobile devices
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                startDrawing(e);
+            });
+
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                draw(e);
+            });
+
+            canvas.addEventListener('touchend', stopDrawing);
+
+            // Excuse Note file upload handling
+            const excuse1 = document.getElementById('excuse1');
+            const fileUpload = document.getElementById('fileUpload');
+            const supportingDocs = document.getElementById('supportingDocs');
+
+            function updateFileUpload() {
+                if (excuse1.checked) {
+                    fileUpload.classList.add('visible');
+                    supportingDocs.required = true;
+                } else {
+                    fileUpload.classList.remove('visible');
+                    supportingDocs.required = false;
+                }
+            }
+
+            // Excuse Note 필수 설정 함수
+            function updateExcuseNoteRequired() {
+                const excuseNoteSection = document.getElementById('excuseNoteSection');
+                const excuseOptions = document.querySelectorAll('input[name="excuseType"]');
+
+                // Excuse Note 섹션이 보이는 경우에만 필수로 설정
+                if (excuseNoteSection.style.display !== 'none') {
+                    excuseOptions.forEach(option => {
+                        option.required = true;
+                    });
+                } else {
+                    excuseOptions.forEach(option => {
+                        option.required = false;
+                    });
+                }
+            }
+
+            excuse1.addEventListener('change', updateFileUpload);
+            document.getElementById('excuse2').addEventListener('change', updateFileUpload);
+            document.getElementById('excuse3').addEventListener('change', updateFileUpload);
+
+            // Excuse Note 옵션 변경 시 필수 설정 업데이트
+            document.querySelectorAll('input[name="excuseType"]').forEach(option => {
+                option.addEventListener('change', updateExcuseNoteRequired);
+            });
+
+            // Form submission handling
+            const form = document.getElementById('newForm');
+            const submitButton = document.getElementById('submitButton');
+
+            // Type of Incident 인라인 ETA/ETD 입력란 표시 기능
+            const lateInRadio = document.getElementById('lateIn');
+            const etaInputInline = document.getElementById('etaInputInline');
+            const eta = document.getElementById('eta');
+            const earlyOutRadio = document.getElementById('earlyOut');
+            const etdInputEarlyOutInline = document.getElementById('etdInputEarlyOutInline');
+            const etdEarlyOut = document.getElementById('etdEarlyOut');
+            const longLunchRadio = document.getElementById('longLunch');
+            const etdInputLongLunchInline = document.getElementById('etdInputLongLunchInline');
+            const etdLongLunch = document.getElementById('etdLongLunch');
+            const leaveComeBackRadio = document.getElementById('leaveComeBack');
+            const etdInputLeaveComeBackInline = document.getElementById('etdInputLeaveComeBackInline');
+            const etdLeaveComeBack = document.getElementById('etdLeaveComeBack');
+
+            function updateTimeInputsInline() {
+                etaInputInline.style.display = lateInRadio.checked ? 'inline-block' : 'none';
+                eta.required = lateInRadio.checked;
+                etdInputEarlyOutInline.style.display = earlyOutRadio.checked ? 'inline-block' : 'none';
+                etdEarlyOut.required = earlyOutRadio.checked;
+                etdInputLongLunchInline.style.display = longLunchRadio.checked ? 'inline-block' : 'none';
+                etdLongLunch.required = longLunchRadio.checked;
+                etdInputLeaveComeBackInline.style.display = leaveComeBackRadio.checked ? 'inline-block' : 'none';
+                etdLeaveComeBack.required = leaveComeBackRadio.checked;
+
+                // 다른 옵션 선택 시 ETA/ETD 필드 초기화 및 필수 해제
+                if (!lateInRadio.checked) {
+                    eta.value = '';
+                    eta.required = false;
+                }
+                if (!earlyOutRadio.checked) {
+                    etdEarlyOut.value = '';
+                    etdEarlyOut.required = false;
+                }
+                if (!longLunchRadio.checked) {
+                    etdLongLunch.value = '';
+                    etdLongLunch.required = false;
+                }
+                if (!leaveComeBackRadio.checked) {
+                    etdLeaveComeBack.value = '';
+                    etdLeaveComeBack.required = false;
+                }
+            }
+
+            // Event listeners for ETA/ETD fields
+            lateInRadio.addEventListener('change', updateTimeInputsInline);
+            earlyOutRadio.addEventListener('change', updateTimeInputsInline);
+            longLunchRadio.addEventListener('change', updateTimeInputsInline);
+            leaveComeBackRadio.addEventListener('change', updateTimeInputsInline);
+            document.getElementById('absent').addEventListener('change', updateTimeInputsInline);
+            document.getElementById('switchShift').addEventListener('change', updateTimeInputsInline);
+            document.getElementById('cancelling').addEventListener('change', updateTimeInputsInline);
+
+            // Web App URL for file upload (replace with your deployed Web App URL)
+            const WEB_APP_URL = 'YOUR_WEB_APP_URL_HERE';
+
+            const officeSelect = document.getElementById('officeSelect');
+            const departmentGroup = document.getElementById('departmentGroup');
+            const departmentSelect = document.getElementById('departmentSelect');
+            officeSelect.addEventListener('change', function () {
+                if (officeSelect.value === 'Corporate') {
+                    departmentGroup.style.display = 'block';
+                    departmentSelect.required = true;
+                } else {
+                    departmentGroup.style.display = 'none';
+                    departmentSelect.value = '';
+                    departmentSelect.required = false;
+                }
+            });
+
+            const cancellingRadio = document.getElementById('cancelling');
+            const cancelTargetGroup = document.getElementById('cancelTargetGroup');
+            const cancelTargetType = document.getElementById('cancelTargetType');
+            const incidentDateNote = document.getElementById('incidentDateNote');
+            function updateCancelTarget() {
+                if (cancellingRadio.checked) {
+                    cancelTargetGroup.style.display = 'block';
+                    cancelTargetType.required = true;
+                    incidentDateNote.style.display = 'block';
+                } else {
+                    cancelTargetGroup.style.display = 'none';
+                    cancelTargetType.value = '';
+                    cancelTargetType.required = false;
+                    incidentDateNote.style.display = 'none';
+                }
+            }
+            cancellingRadio.addEventListener('change', updateCancelTarget);
+            document.querySelectorAll('input[name="absenceType"]').forEach(radio => {
+                if (radio.id !== 'cancelling') radio.addEventListener('change', updateCancelTarget);
+            });
+
+            // Type of Request에 따라 instructions 변경
+            const instructionsList = document.getElementById('instructionsList');
+            const incidentNoticeRadio = document.getElementById('incidentNotice');
+            const timeOffRequestRadio = document.getElementById('timeOffRequest');
+            const startDateInput = document.getElementById('incidentStartDate');
+            const todayInput = document.getElementById('currentDate');
+
+            function updateInstructions() {
+                if (incidentNoticeRadio.checked) {
+                    instructionsList.innerHTML = `
+                        <li>Ensure all fields are completed to assist decision-making.</li>
+                        <li>Provide an excuse note to avoid potential disciplinary act.</li>
+                        <li>Request will be submitted to your supervisor.</li>
+                    `;
+                } else if (timeOffRequestRadio.checked) {
+                    instructionsList.innerHTML = `
+                        <li>Provide 30 days advanced notice when requesting time-off.</li>
+                        <li>Make sure your immediate supervisor signs off and is aware whether you got the time off approved or not.</li>
+                    `;
+                } else if (document.getElementById('taken').checked) {
+                    instructionsList.innerHTML = `
+                        <li>Ensure all fields are completed to assist decision-making.</li>
+                        <li>Provide an excuse note to avoid potential disciplinary act.</li>
+                        <li>Request will be submitted to Exec.</li>
+                    `;
+                }
+                // Excuse Note 표시/숨김 및 옵션 제어
+                const excuseNoteSection = document.getElementById('excuseNoteSection');
+                const excuseOption2 = document.getElementById('excuseOption2');
+                if (timeOffRequestRadio.checked) {
+                    excuseNoteSection.style.display = 'none';
+                } else {
+                    excuseNoteSection.style.display = '';
+                    if (incidentNoticeRadio.checked) {
+                        excuseOption2.style.display = '';
+                    } else if (document.getElementById('taken').checked) {
+                        excuseOption2.style.display = 'none';
+                    }
+                }
+                // Type of Incident Cancelling 옵션 제어
+                const cancellingOption = document.querySelector('.radio-option input#cancelling').parentElement;
+                if (document.getElementById('taken').checked) {
+                    cancellingOption.style.display = 'none';
+                } else {
+                    cancellingOption.style.display = '';
+                }
+                // Taken 선택 시 Opening/Closing(키홀더) 섹션 숨김
+                const keyHolderSection = document.getElementById('keyHolderSection');
+                if (document.getElementById('taken').checked) {
+                    keyHolderSection.style.display = 'none';
+                } else {
+                    keyHolderSection.style.display = '';
+                }
+
+                // Excuse Note 필수 설정 업데이트
+                updateExcuseNoteRequired();
+            }
+            incidentNoticeRadio.addEventListener('change', () => { updateInstructions(); checkNoticeDays(true); checkTakenStartDate(true); });
+            timeOffRequestRadio.addEventListener('change', () => { updateInstructions(); checkNoticeDays(true); checkTakenStartDate(true); });
+            document.getElementById('taken').addEventListener('change', () => { updateInstructions(); checkTakenStartDate(true); });
+            startDateInput.addEventListener('change', () => { checkNoticeDays(true); checkTakenStartDate(true); });
+            // 페이지 로드시 초기화
+            updateInstructions();
+            updateTimeInputsInline();
+            updateExcuseNoteRequired();
+
+            function getDaysDiff(start, today) {
+                const startDate = new Date(start);
+                const todayDate = new Date(today);
+                // 시간 차이(밀리초)
+                const diffTime = startDate - todayDate;
+                // 일수로 변환
+                return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            }
+
+            function checkNoticeDays(showAlert = true) {
+                const start = startDateInput.value;
+                const today = todayInput.value;
+                const requestType = document.querySelector('input[name="requestType"]:checked');
+                if (!start || !today || !requestType) return true;
+                const days = getDaysDiff(start, today);
+                if (requestType.value === 'Incident Notice' && days >= 30) {
+                    if (showAlert) {
+                        alert(`Your notice is a ${days}-day advance notice. Please submit a Time-Off Request (30 days or more notice).`);
+                    }
+                    return false;
+                }
+                if (requestType.value === 'Time-Off Request' && days < 30) {
+                    if (showAlert) {
+                        alert(`Your notice is a ${days}-day advance notice. Please submit an Incident Notice (Less than 30 days notice).`);
+                    }
+                    return false;
+                }
+                return true;
+            }
+
+            function checkTakenStartDate(showAlert = true) {
+                const start = startDateInput.value;
+                const today = todayInput.value;
+                const requestType = document.querySelector('input[name="requestType"]:checked');
+                if (!start || !today || !requestType) return true;
+
+                const startDate = new Date(start);
+                const todayDate = new Date(today);
+
+                if (requestType.value === 'Taken') {
+                    if (startDate > todayDate) {
+                        if (showAlert) {
+                            alert('If your start date is after today, please submit an Incident Notice or Time-Off Request instead of Taken.');
+                        }
+                        return false;
+                    }
+                } else if (requestType.value === 'Incident Notice' || requestType.value === 'Time-Off Request') {
+                    if (startDate < todayDate) {
+                        if (showAlert) {
+                            alert('If your start date is in the past, please submit a Taken request instead of ' + requestType.value + '.');
+                        }
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            // 제출 시에도 체크
+            form.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                if (!checkNoticeDays(true)) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Submit';
+                    return false;
+                }
+                if (!checkTakenStartDate(true)) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Submit';
+                    return false;
+                }
+
+                // Validate signature
+                if (!isSignatureValid()) {
+                    alert('Please provide your signature by drawing in the signature area');
+                    canvas.style.borderColor = '#dc3545';
+                    return false;
+                }
+
+                // Validate Excuse Note selection (when section is visible)
+                const excuseNoteSection = document.getElementById('excuseNoteSection');
+                if (excuseNoteSection.style.display !== 'none') {
+                    const selectedExcuseType = document.querySelector('input[name="excuseType"]:checked');
+                    if (!selectedExcuseType) {
+                        alert('Please select an excuse note option');
+                        return false;
+                    }
+                }
+
+                // Validate file upload if first excuse option is selected
+                if (excuse1.checked && !supportingDocs.files.length) {
+                    alert('Please upload supporting documents');
+                    return false;
+                }
+
+                // Validate ETA/ETD fields when applicable
+                if (lateInRadio.checked && !eta.value) {
+                    alert('Please enter your ETA for Late In');
+                    return false;
+                }
+                if (earlyOutRadio.checked && !etdEarlyOut.value) {
+                    alert('Please enter your ETD for Early Out');
+                    return false;
+                }
+                if (longLunchRadio.checked && !etdLongLunch.value) {
+                    alert('Please enter your ETD for Long Lunch');
+                    return false;
+                }
+                if (leaveComeBackRadio.checked && !etdLeaveComeBack.value) {
+                    alert('Please enter your ETD for Leave & Come Back');
+                    return false;
+                }
+
+                // Disable submit button to prevent double submission
+                submitButton.disabled = true;
+                submitButton.textContent = 'Submitting...';
+
+                // 1. 파일 업로드 (필요한 경우, base64로 변환 후 google.script.run으로 전달)
+                let fileUrl = '';
+                if (excuse1.checked && supportingDocs.files.length) {
+                    const file = supportingDocs.files[0];
+                    const reader = new FileReader();
+                    // base64 업로드는 비동기이므로 Promise로 래핑
+                    fileUrl = await new Promise((resolve, reject) => {
+                        reader.onload = function (e) {
+                            const base64 = e.target.result;
+
+                            // Excuse Note 파일명 생성 (PDF 형식에 맞춰)
+                            const requestType = document.querySelector('input[name="requestType"]:checked')?.value || '';
+                            const office = document.getElementById('officeSelect').value;
+                            const name = document.getElementById('userName').value;
+                            const incidentType = document.querySelector('input[name="absenceType"]:checked')?.value || '';
+                            const startDate = document.getElementById('incidentStartDate').value;
+
+                            // 파일 확장자 추출
+                            const fileExtension = file.name.split('.').pop();
+                            const excuseFileName = `Excuse Note_${office}_${name}_${incidentType}_${startDate}.${fileExtension}`;
+
+                            google.script.run
+                                .withSuccessHandler(function (res) {
+                                    if (res && res.success) {
+                                        resolve(res.fileUrl);
+                                    } else {
+                                        alert('File upload failed: ' + (res && res.message ? res.message : 'Unknown error'));
+                                        submitButton.disabled = false;
+                                        submitButton.textContent = 'Submit';
+                                        reject('File upload failed');
+                                    }
+                                })
+                                .withFailureHandler(function (err) {
+                                    alert('File upload failed: ' + err.message);
+                                    submitButton.disabled = false;
+                                    submitButton.textContent = 'Submit';
+                                    reject('File upload failed');
+                                })
+                                .uploadBase64File(base64, excuseFileName);
+                        };
+                        reader.readAsDataURL(file);
+                    });
+                }
+
+                try {
+                    // Create PDF
+                    const { jsPDF } = window.jspdf;
+                    const doc = new jsPDF();
+
+                    // 제목
+                    doc.setFontSize(18);
+                    doc.text('Incident Notice (Requested in Advance)', 105, 15, { align: 'center' });
+                    doc.setFontSize(12);
+                    doc.text('(Less than 30 days notice)', 105, 23, { align: 'center' });
+
+                    // 구분선
+                    doc.setLineWidth(0.5);
+                    doc.line(15, 27, 195, 27);
+
+                    // 기본 정보 표
+                    let y = 35;
+                    const rowHeight = 10;
+                    const leftX = 20;
+                    const valueX = 90;
+
+                    // ETA/ETD 값 추출 (input 존재 여부 체크, getInputValue 함수 사용)
+                    function getInputValue(id) {
+                        const el = document.getElementById(id);
+                        return el ? el.value : '';
+                    }
+                    let etaValue = '';
+                    let etdValue = '';
+                    if (document.getElementById('lateIn')?.checked) {
+                        etaValue = getInputValue('eta');
+                    }
+                    if (document.getElementById('earlyOut')?.checked) {
+                        etdValue = getInputValue('etdEarlyOut');
+                    } else if (document.getElementById('longLunch')?.checked) {
+                        etdValue = getInputValue('etdLongLunch');
+                    } else if (document.getElementById('leaveComeBack')?.checked) {
+                        etdValue = getInputValue('etdLeaveComeBack');
+                    }
+
+                    const fields = [
+                        { label: "Type of Request", value: document.querySelector('input[name="requestType"]:checked')?.value || '' },
+                        { label: "Name", value: document.getElementById('userName').value },
+                        { label: "Today's Date", value: document.getElementById('currentDate').value },
+                        { label: "Email", value: document.getElementById('userEmail').value },
+                        { label: "Office", value: document.getElementById('officeSelect').value },
+                        { label: "Department", value: document.getElementById('departmentSelect').value },
+                        { label: "Position", value: document.getElementById('userPosition').value },
+                        { label: "Type of Incident", value: document.querySelector('input[name="absenceType"]:checked')?.value || '' },
+                        { label: "ETA", value: etaValue },
+                        { label: "ETD", value: etdValue },
+                        { label: "Start Date", value: document.getElementById('incidentStartDate').value },
+                        { label: "End Date", value: document.getElementById('incidentEndDate').value },
+                        { label: "Reason for Incident", value: document.getElementById('incidentReason').value },
+                        { label: "Opening", value: document.getElementById('openingTime').value },
+                        { label: "Closing", value: document.getElementById('closingTime').value },
+                        { label: "Excuse Note", value: document.querySelector('input[name="excuseType"]:checked')?.value || '' },
+                        { label: "Excuse Note File", value: document.getElementById('supportingDocs').files[0]?.name || '' },
+                        { label: "Cancel Target Type", value: document.getElementById('cancelTargetType').value }
+                    ];
+
+                    doc.setFontSize(11);
+                    fields.forEach(field => {
+                        doc.text(`${field.label}:`, leftX, y);
+                        doc.text(field.value, valueX, y);
+                        y += rowHeight;
+                    });
+
+                    // 서명
+                    doc.text('Signature:', leftX, y + 5);
+                    const signatureCanvas = document.getElementById('signaturePad');
+                    const signatureImage = await html2canvas(signatureCanvas);
+                    const signatureDataUrl = signatureImage.toDataURL('image/png');
+                    doc.addImage(signatureDataUrl, 'PNG', valueX, y, 60, 20);
+
+                    // 하단 푸터
+                    doc.setFontSize(10);
+                    doc.text('Smileland Dental', 105, 285, { align: 'center' });
+
+                    // Save the PDF
+                    const pdfOutput = doc.output('blob');
+                    const pdfData = await new Promise((resolve) => {
+                        const reader = new FileReader();
+                        reader.onloadend = () => resolve(reader.result.split(',')[1]);
+                        reader.readAsDataURL(pdfOutput);
+                    });
+
+                    // Prepare form data
+                    console.log('Before formData');
+
+                    // Excuse Note 값 변환
+                    let excuseNoteValue = '';
+                    const selectedExcuseType = document.querySelector('input[name="excuseType"]:checked')?.value || '';
+                    if (selectedExcuseType === 'documents') {
+                        excuseNoteValue = 'Submitted';
+                    } else if (selectedExcuseType === 'willProvide') {
+                        excuseNoteValue = 'Will submit';
+                    } else if (selectedExcuseType === 'noNote') {
+                        excuseNoteValue = 'Will not submit';
+                    }
+
+                    const formData = {
+                        requestType: document.querySelector('input[name="requestType"]:checked')?.value || '',
+                        name: document.getElementById('userName').value,
+                        todayDate: document.getElementById('currentDate').value,
+                        email: document.getElementById('userEmail').value,
+                        office: document.getElementById('officeSelect').value,
+                        department: document.getElementById('departmentSelect').value,
+                        position: document.getElementById('userPosition').value,
+                        incidentType: document.querySelector('input[name="absenceType"]:checked')?.value || '',
+                        eta: etaValue,
+                        etd: etdValue,
+                        startDate: document.getElementById('incidentStartDate').value,
+                        endDate: document.getElementById('incidentEndDate').value,
+                        reason: document.getElementById('incidentReason').value,
+                        opening: document.getElementById('openingTime').value,
+                        closing: document.getElementById('closingTime').value,
+                        excuseType: excuseNoteValue,
+                        excuseFile: document.getElementById('supportingDocs').files[0]?.name || '',
+                        excuseFileUrl: fileUrl,
+                        signature: signatureData.value,
+                        pdfData: pdfData,
+                        cancelTargetType: document.getElementById('cancelTargetType').value
+                    };
+                    console.log('formData:', formData);
+
+                    // Submit to Google Apps Script
+                    google.script.run
+                        .withSuccessHandler(function (response) {
+                            if (response.success) {
+                                alert('Form submitted successfully!');
+                                form.reset();
+                                clearSignature();
+                            } else {
+                                alert('Error submitting form: ' + response.message);
+                            }
+                            submitButton.disabled = false;
+                            submitButton.textContent = 'Submit';
+                        })
+                        .withFailureHandler(function (error) {
+                            console.error('Error:', error);
+                            alert('Error submitting form. Please try again.');
+                            submitButton.disabled = false;
+                            submitButton.textContent = 'Submit';
+                        })
+                        .submitRequest(formData);
+                } catch (error) {
+                    console.error('Error submitting PDF:', error);
+                    alert('Error submitting PDF: ' + error);
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Submit';
+                }
+                return false;
+            });
+        });
+    </script>
+</body>
+
+</html>
