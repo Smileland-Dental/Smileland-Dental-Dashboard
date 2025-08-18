@@ -1476,28 +1476,44 @@
                         cancelTargetType: document.getElementById('cancelTargetType').value
                     };
                     console.log('formData:', formData);
+                    
+                    const webAppUrl = 'https://script.google.com/macros/s/AKfycbwemGx7GV9G1vbp1ZvgBHlT3B7bo7umv-XqbPpRWux_IvbFHM05wsFdZyD4lJYXYdS5/exec'; 
 
                     // Submit to Google Apps Script
-                    google.script.run
-                        .withSuccessHandler(function (response) {
-                            if (response.success) {
-                                alert('Form submitted successfully!');
-                                form.reset();
-                                clearSignature();
-                            } else {
-                                alert('Error submitting form: ' + response.message);
-                            }
-                            submitButton.disabled = false;
-                            submitButton.textContent = 'Submit';
-                        })
-                        .withFailureHandler(function (error) {
-                            console.error('Error:', error);
-                            alert('Error submitting form. Please try again.');
-                            submitButton.disabled = false;
-                            submitButton.textContent = 'Submit';
-                        })
-                        .submitRequest(formData);
-                } catch (error) {
+                    fetch(webAppUrl, {
+                        method: 'POST',
+                        // mode: 'no-cors' can be used if you get CORS errors, but it prevents you from seeing the response.
+                        // It's better to deploy the web app correctly to handle CORS.
+                        mode: 'no-cors',
+                        headers: {
+                            'Content-Type': 'text/plain;charset=utf-8', // Use text/plain for sending to Apps Script doPost
+                        },
+                        body: formData // Stringify the object
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            console.log('Success:', data);
+                            alert('Form submitted successfully!');
+                            form.reset();
+                            clearSignature();
+                        } else {
+                              alert('Error submitting form: ' + DATAmessage);
+                        }
+                    })
+                    .catch((error) => {
+                        console.error('Error:', error);
+                        alert('Error submitting form. Please try again.');
+                        submitButton.disabled = false;
+                        submitButton.textContent = 'Submit';
+                    })
+                    .finally(() => {
+                        const submitButton = document.getElementById('submit-button');
+                        submitButton.disabled = false;
+                        submitButton.textContent = 'Submit';
+                    });
+                }
+                catch (error) {
                     console.error('Error submitting PDF:', error);
                     alert('Error submitting PDF: ' + error);
                     submitButton.disabled = false;

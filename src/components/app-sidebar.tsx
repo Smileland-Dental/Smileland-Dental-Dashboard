@@ -72,8 +72,6 @@ export function AppSidebar() {
     }
   };
 
-
-
   return (
     <Sidebar>
       <SidebarContent>
