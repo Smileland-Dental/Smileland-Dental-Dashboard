@@ -19,6 +19,12 @@ type OfficeLinkGroup = {
   links: OfficeLink[];
 };
 
+function getColor(){ 
+  return "hsl(" + 360 * Math.random() + ',' +
+             (25 + 70 * Math.random()) + '%,' + 
+             (85 + 10 * Math.random()) + '%)'
+};
+
 export default function Page() {
   const [user, setUser] = useState<User | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -79,7 +85,7 @@ export default function Page() {
   }
 
   return (
-    <div>
+    <div className='mx-2'>
       {user ? (
         <div>
           <p>This is the forms page.</p>
@@ -88,15 +94,19 @@ export default function Page() {
 
           {/* New rendering logic for grouped links */}
           {userRole === 'manager' && groupedOfficeLinks.length > 0 && (
-            <div className="space-y-4">
+            <div className="flex flex-wrap gap-8 w-full">
               {/* Outer loop: iterates through each office group */}
               {groupedOfficeLinks.map((officeGroup, groupIndex) => (
-                <div key={groupIndex} className="p-4 border rounded-lg shadow-sm">
-                  <h3 className="text-lg font-semibold mb-3">{officeGroup.officeName}</h3>
-                  <div className="flex flex-col space-y-2">
+                <div 
+                  key={groupIndex} 
+                  className="p-8 border rounded-lg shadow-sm w-full md:w-[calc(50%-1rem)]" 
+                  style={{ backgroundColor: getColor() }}
+                >
+                  <h3 className="text-xl font-semibold mb-4">{officeGroup.officeName} Office</h3>
+                  <div className="flex flex-col space-y-4">
                     {/* Inner loop: iterates through links for the current office */}
                     {officeGroup.links.map((link, linkIndex) => (
-                      <Button asChild key={linkIndex} variant="secondary">
+                      <Button asChild key={linkIndex} variant="secondary" className="py-2.5 px-5 me-2 mb-2 text-lg font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">
                         <Link href={link.url} target="_blank" rel="noopener noreferrer">
                           {link.title}
                         </Link>

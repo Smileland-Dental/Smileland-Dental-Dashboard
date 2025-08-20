@@ -68,19 +68,20 @@ export default function Page() {
   }
 
   return (
-    <div>
+    <div className='mx-2'>
       {user ? (
         <div>
-          <h1>Welcome to the Dashboard, <strong>{user.displayName}</strong>!</h1>
+          <h1 className="text-2xl">Welcome to the Dashboard, 
+            <img
+              src={user.photoURL!}
+              height={40}
+              width={40}
+              referrerPolicy="no-referrer"
+              //className="hidden md:block"
+              alt="Screenshots of the dashboard project showing mobile version"
+            /><strong>{user.displayName}</strong>!
+          </h1>
           <p>You are logged in with the email: <strong>{user.email}</strong></p>
-          <p>UID: {user.uid}</p>
-                    <Image 
-                      src="/picture.svg"
-                      width={560}
-                      height={620}
-                      //className="hidden md:block"
-                      alt="Screenshots of the dashboard project showing mobile version"
-                    />
         </div>
       ) : (
         <div>
