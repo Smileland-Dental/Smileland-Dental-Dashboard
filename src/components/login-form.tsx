@@ -122,6 +122,9 @@ export function LoginForm({
 
   const handleGoogleSignIn = async () => {
     const provider = new GoogleAuthProvider();
+    provider.setCustomParameters({
+      prompt: 'select_account' // Ensures the user selects an account
+    })
     try {
       await signInWithPopup(auth, provider); //
     } catch (error) {
