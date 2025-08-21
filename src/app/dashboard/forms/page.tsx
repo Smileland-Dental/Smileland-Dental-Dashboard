@@ -85,21 +85,20 @@ export default function Page() {
   }
 
   return (
-    <div className='mx-2'>
+    <div className="mx-2">
       {user ? (
         <div>
-          <p>This is the forms page.</p>
-          <p>User ID: {user.uid}</p>
-          <p>Role: {userRole}</p>
+          <h1 className="text-2xl font-extrabold leading-none tracking-tight text-gray-900 md:text-3xl lg:text-4xl dark:text-white">Employee Forms</h1>
+          <p className="capitalize mb-5">Role: {userRole}</p>
 
           {/* New rendering logic for grouped links */}
           {userRole === 'manager' && groupedOfficeLinks.length > 0 && (
-            <div className="flex flex-wrap gap-8 w-full">
+            <div className="flex flex-wrap gap-8 w-screen sm:w-[100vw] md:w-[70vw]">
               {/* Outer loop: iterates through each office group */}
               {groupedOfficeLinks.map((officeGroup, groupIndex) => (
                 <div 
                   key={groupIndex} 
-                  className="p-8 border rounded-lg shadow-sm w-full md:w-[calc(50%-1rem)]" 
+                  className="p-8 border rounded-lg shadow-sm w-[96vw] md:w-[calc(50%-1rem)]" 
                   style={{ backgroundColor: getColor() }}
                 >
                   <h3 className="text-xl font-semibold mb-4">{officeGroup.officeName} Office</h3>
@@ -120,15 +119,19 @@ export default function Page() {
 
           {/* ... other role-based components */}
           {userRole === 'employee' && groupedOfficeLinks.length > 0 && (
-            <div className="space-y-4">
+            <div className="flex flex-wrap gap-8 w-screen">
               {/* Outer loop: iterates through each office group */}
               {groupedOfficeLinks.map((officeGroup, groupIndex) => (
-                <div key={groupIndex} className="p-4 border rounded-lg shadow-sm">
-                  <h3 className="text-lg font-semibold mb-3">Employee Forms</h3>
-                  <div className="flex flex-col space-y-2">
+                <div 
+                  key={groupIndex} 
+                  className="p-8 border rounded-lg shadow-sm w-[35vw]" 
+                  style={{ backgroundColor: getColor() }}
+                >
+                  <h3 className="text-xl font-semibold mb-4">Employee Forms</h3>
+                  <div className="flex flex-col space-y-4">
                     {/* Inner loop: iterates through links for the current office */}
                     {officeGroup.links.map((link, linkIndex) => (
-                      <Button asChild key={linkIndex} variant="secondary">
+                      <Button asChild key={linkIndex} variant="secondary" className="py-2.5 px-5 me-2 mb-2 text-lg font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">
                         <Link href={link.url} target="_blank" rel="noopener noreferrer">
                           {link.title}
                         </Link>
@@ -139,7 +142,15 @@ export default function Page() {
               ))}
             </div>
           )}
-        </div>
+
+          {groupedOfficeLinks.length === 0 && (
+            <div className="space-y-4">
+              You do not have any office links available.
+              <p>Please contact your administrator to set up your office links.</p>
+            </div>
+          )}
+
+          </div>
       ) : (
         <p>Please log in to access this page.</p>
       )}

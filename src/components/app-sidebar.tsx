@@ -8,6 +8,9 @@ import { auth } from '@/lib/firebase.config'; // Adjust the import path
 import { signOut } from 'firebase/auth';
 import { useRouter } from 'next/navigation';
 
+import { useState, useEffect } from 'react';
+import { onAuthStateChanged, User } from "firebase/auth";
+
 import {
   Sidebar,
   SidebarContent,
@@ -40,26 +43,25 @@ const items = [
   },*/
 ]
 
-import { getAuth, onAuthStateChanged, User } from "firebase/auth";
-
-onAuthStateChanged(auth, (user: User | null) => {
-  if (user) {
-    // User is signed in
-    const userName = user.displayName;
-    if (userName) {
-      console.log("Logged-in user's name:", userName);
-      // You can now use userName in your application
-    } else {
-      console.log("Logged-in user does not have a display name.");
-    }
-  } else {
-    // User is signed out
-    console.log("No user is currently logged in.");
-  }
-});
-
 export function AppSidebar() {
   const router = useRouter();
+  const [user, setUser] = useState<User | null>(null);
+  
+  useEffect(() => {
+    // This listener checks for changes in the user's login state.
+    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser) {
+        // User is signed in
+        setUser(currentUser);
+      } else {
+        // User is signed out
+        setUser(null);
+      }
+    });
+
+      // Cleanup the subscription when the component unmounts
+      return () => unsubscribe();
+    }, []); 
 
   const handleSignOut = async () => {
     try {
@@ -73,31 +75,40 @@ export function AppSidebar() {
   };
 
   return (
-    <Sidebar>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>Application</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {items.map((item) => (
-                <SidebarMenuItem key={item.title}>
-                  <SidebarMenuButton asChild>
-                    <Link href={item.url}>
-                      <item.icon />
-                      <span>{item.title}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <Button onClick={handleSignOut}>
-              <p>Sign Out</p>
-        </Button>
-      </SidebarFooter>
-    </Sidebar>
+    <div>
+      {user ? (
+      <Sidebar>
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupLabel>Smileland Dental</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {items.map((item) => (
+                  <SidebarMenuItem key={item.title}>
+                    <SidebarMenuButton asChild>
+                      <Link href={item.url}>
+                        <item.icon />
+                        <span>{item.title}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarFooter>
+          <p className="text-xs">Current User: <strong>{user.email}</strong></p>
+          <Button onClick={handleSignOut}>
+                <p>Sign Out</p>
+          </Button>
+        </SidebarFooter>
+      </Sidebar>
+      ) : (
+        <div>
+          <p>No user is logged in.</p>
+        </div>
+      )}
+    </div>
   )
 }

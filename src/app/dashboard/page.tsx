@@ -68,20 +68,12 @@ export default function Page() {
   }
 
   return (
-    <div className='mx-2'>
+    <div className="mx-2">
       {user ? (
         <div>
-          <h1 className="text-2xl">Welcome to the Dashboard, 
-            <img
-              src={user.photoURL!}
-              height={40}
-              width={40}
-              referrerPolicy="no-referrer"
-              //className="hidden md:block"
-              alt="Screenshots of the dashboard project showing mobile version"
-            /><strong>{user.displayName}</strong>!
+          <h1 className="mb-4 text-2xl font-extrabold leading-none tracking-tight text-gray-900 md:text-3xl lg:text-4xl dark:text-white">Welcome to the Smileland Dental Employee Dashboard, 
+            <br/><strong>{user.displayName}</strong>!
           </h1>
-          <p>You are logged in with the email: <strong>{user.email}</strong></p>
         </div>
       ) : (
         <div>
