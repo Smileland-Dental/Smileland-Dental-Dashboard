@@ -88,8 +88,8 @@ export default function Page() {
     <div className="mx-2">
       {user ? (
         <div>
-          <h1 className="text-2xl font-extrabold leading-none tracking-tight text-gray-900 md:text-3xl lg:text-4xl dark:text-white">Employee Forms</h1>
-          <p className="capitalize mb-5">Role: {userRole}</p>
+          <h1 className="text-2xl mb-5 font-extrabold leading-none tracking-tight text-gray-900 md:text-3xl lg:text-4xl dark:text-white">Employee Forms</h1>
+          {/*<p className="capitalize mb-5">Role: {userRole}</p>*/}
 
           {/* New rendering logic for grouped links */}
           {userRole === 'manager' && groupedOfficeLinks.length > 0 && (
@@ -101,7 +101,7 @@ export default function Page() {
                   className="p-8 border rounded-lg shadow-sm w-[96vw] md:w-[calc(50%-1rem)]" 
                   style={{ backgroundColor: getColor() }}
                 >
-                  <h3 className="text-xl font-semibold mb-4">{officeGroup.officeName} Office</h3>
+                  <h3 className="text-xl font-semibold mb-4">{officeGroup.officeName}</h3>
                   <div className="flex flex-col space-y-4">
                     {/* Inner loop: iterates through links for the current office */}
                     {officeGroup.links.map((link, linkIndex) => (
