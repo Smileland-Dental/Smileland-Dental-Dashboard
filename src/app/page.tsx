@@ -1,4 +1,3 @@
-import { GalleryVerticalEnd } from "lucide-react"
 import Image from 'next/image';
 import { LoginForm } from "@/components/login-form"
 import background from '../../public/background.jpg';
@@ -9,7 +8,7 @@ export default function LoginPage() {
     <div className="grid min-h-svh lg:grid-cols-2">
       <div className="flex flex-col gap-4 p-6 md:p-10">
         <div className="flex justify-center items-center gap-2 md:justify-start">
-            <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center rounded-md">
+            <div className="bg-primary text-primary-foreground flex size-9 items-center justify-center">
               <Image src={dashboard} className="size-8" alt="Icon for Smileland" />
             </div>
             <p className="font-bold underline">Smileland Dental</p>
@@ -30,7 +29,7 @@ export default function LoginPage() {
           <Image 
             src={background}
             className="absolute inset-0 h-full w-full object-cover dark:brightness-[0.2] dark:grayscale"
-            alt="Screenshots of the dashboard project showing mobile version"
+            alt="Background Image for Larger Screens"
           />
       </div>
     </div>
