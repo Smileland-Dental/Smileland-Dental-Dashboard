@@ -1,46 +1,8 @@
-/*import Image from 'next/image';
-import Link from 'next/link';
-import type { Metadata } from "next";
-
-import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { auth } from '@/lib/firebase.config'; // Adjust the import path as needed
-
-//const user = auth.currentUser
-
-export const metadata: Metadata = {
-  title: "Smileland Dental Dashboard",
-}
-
-export default function Page() {
-  onAuthStateChanged(auth, (user) => {
-    if (user) {
-      console.log("User is logged in:", user.displayName);
-    } else {
-      console.log("No user is logged in.");
-    }
-  });
-  return (
-    <div>
-        <div>This is the main dashboard.</div>
-    </div>
-  )
-} */
 'use client';
 
 import { useState, useEffect } from 'react';
-import type { Metadata } from "next";
 import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from '@/lib/firebase.config';
-import Image from 'next/image';
-
-// Note: Metadata export is for Server Components. 
-// For Client Components, you'd typically handle the title differently, 
-// but we'll leave it for context.
-/*
-export const metadata: Metadata = {
-  title: "Smileland Dental Dashboard",
-}
-*/
 
 export default function Page() {
   const [user, setUser] = useState<User | null>(null);
