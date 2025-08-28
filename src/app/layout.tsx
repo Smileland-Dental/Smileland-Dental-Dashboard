@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 });
 */
 
-
+// Metadata for the login or main page
 export const metadata: Metadata = {
   title: "Smileland Dental Login",
   description: "The Employee Dashboard for Smileland Dental",
