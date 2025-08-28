@@ -112,23 +112,25 @@ export function LoginForm({
         user.getIdToken().then((token) => {
           // Set the token in a cookie
           document.cookie = `firebaseAuthToken=${token}; path=/`;
-          router.push('/dashboard'); // Redirect to a protected page
+          router.push('/dashboard'); // Redirect to a protected page if logged in
         });
       }
     });
 
     return () => unsubscribe();
+    // Change when router is updated
   }, [router]);
 
+  // Function to handle google sign in
   const handleGoogleSignIn = async () => {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({
       prompt: 'select_account' // Ensures the user selects an account
     })
     try {
-      await signInWithPopup(auth, provider); //
+      await signInWithPopup(auth, provider); 
     } catch (error) {
-      console.error('Error during Google sign-in:', error); //
+      console.error('Error during Google sign-in:', error); 
     }
   };
 
@@ -155,7 +157,7 @@ export function LoginForm({
       </div>
       <div className="flex flex-col items-center gap-2 text-center">
         <p className="text-muted-foreground text-xs">
-          Remember to enable pop-ups in your <br/> browser settings
+          Remember to enable pop-ups in the<br/> browser settings
         </p>
       </div>
     </form>

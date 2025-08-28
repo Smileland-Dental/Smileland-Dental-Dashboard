@@ -4,7 +4,10 @@ import { useState, useEffect } from 'react';
 import { onAuthStateChanged, User } from "firebase/auth";
 import { auth } from '@/lib/firebase.config';
 
+
+// The /dashboard page
 export default function Page() {
+  // State to hold the user
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -25,10 +28,12 @@ export default function Page() {
     return () => unsubscribe();
   }, []); // The empty array ensures this effect runs only once on component mount
 
+  // Only render while loading
   if (loading) {
     return <div>Loading...</div>;
   }
 
+  // Rendering the main overview of the dashboard
   return (
     <div className="mx-2">
       {user ? (
@@ -38,6 +43,7 @@ export default function Page() {
           </h1>
         </div>
       ) : (
+        // Don't show anything if no user is logged in
         <div>
           <p>No user is logged in. Please return to the login page.</p>
         </div>

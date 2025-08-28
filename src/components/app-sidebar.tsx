@@ -63,6 +63,7 @@ export function AppSidebar() {
       return () => unsubscribe();
     }, []); 
 
+  // Allow the user to log out based on a button on the sidebar
   const handleSignOut = async () => {
     try {
       await signOut(auth);
@@ -106,7 +107,7 @@ export function AppSidebar() {
       </Sidebar>
       ) : (
         <div>
-          <p>No user is logged in.</p>
+          <p>No User</p>
         </div>
       )}
     </div>
