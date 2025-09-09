@@ -112,7 +112,7 @@ export function LoginForm({
         user.getIdToken().then((token) => {
           // Set the token in a cookie
           document.cookie = `firebaseAuthToken=${token}; path=/`;
-          router.push('/dashboard'); // Redirect to a protected page if logged in
+          router.push('/dashboard/forms'); // Redirect to a protected page if logged in
         });
       }
     });
