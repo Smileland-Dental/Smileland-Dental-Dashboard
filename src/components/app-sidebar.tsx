@@ -36,6 +36,16 @@ const items = [
     url: "/dashboard/forms",
     icon: File,
   },
+  {
+    title: "Excuse Note Form",
+    url: "/dashboard/test",
+    icon: File,
+  },
+    {
+    title: "HR Table",
+    url: "/dashboard/test2",
+    icon: File,
+  },
   /*{
     title: "Settings",
     url: "#",
