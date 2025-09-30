@@ -18,39 +18,73 @@ interface Absence {
   incident_submitted?: boolean; // N/A
   date_submitted?: string; // today_date
   comments?: string; // reason
-  excuse_note?: string; // file
   type_of_request?: string;
+  ETA_ETD?: string; // Hour:Minutes
+  excuse_note?: string[],
   // need a type of request
-  // need ETA/ETD
   // opening and closing?
 }
 
+const incidentTypes = [
+  "Late In",
+  "Early Out",
+  "Absent",
+  "Leave and Come Back",
+  "Long Lunch",
+  "Switch Shift",
+  "Cancelling"
+];
+
+const officeLocations = [
+  "Corporate",
+  "Ming",
+  "Bernard",
+  "California",
+  "Ortho",
+  "Delano",
+  "Tulare",
+  "Visalia",
+  "Fresno"
+]
+
 export default function AbsenceForm({ employeeID, onFormSubmit }: { employeeID: String, onFormSubmit: () => void }) {
   // State variables for form fields
-  const [type_of_request, setTypeOfRequest] = useState("");
-  const [office, setOffice] = useState("");
-  const [reason, setReason] = useState("");  
-  const [excuse_note, setExcuseNote] = useState<File | null>(null);
-
   const [formData, setFormData] = useState({
-    type_of_request: '',
-    date_submitted: getPSTDate(),
     employee_id: employeeID,
+    date_submitted: getPSTDate(),
+    type_of_request: '',
     office: '',
-    // Name
-    // Email
     type_of_incident: '',
     incident_start: '',
     incident_end: '',
     comments: '',
-    excuse_note: "Test URL",
     incident_submitted: true,
+    ETA_ETD: "", // Hour:Minutes
+    excuse_note: [],
+    // Name
+    // Email
   });
 
-
+  const [excuse_notes, setExcuseNotes] = useState<File[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState("");
+  const [isChecked, setIsChecked] = useState(false);
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+
+  // Handling Functions
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
+  };
+
+  // Files
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files) {
+      setExcuseNotes(Array.from(e.target.files));
+    }
+  };
+
+  /* const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSubmitStatus("Submitting...");
 
@@ -61,7 +95,7 @@ export default function AbsenceForm({ employeeID, onFormSubmit }: { employeeID: 
         await uploadBytes(storageRef, excuse_note);
         excuseNoteUrl = await getDownloadURL(storageRef);
     }
-    */
+    
 
     try {
         await addDoc(collection(db, "absences"), formData);
@@ -72,17 +106,60 @@ export default function AbsenceForm({ employeeID, onFormSubmit }: { employeeID: 
         console.error("Error updating document: ", error);
         setSubmitStatus("Error submitting data.");
     }
+  }; */
+
+const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!formData.type_of_request) {
+        alert("Please select a 'Type Of Request'.");
+        return;
+    }
+    setIsSubmitting(true);
+    setSubmitStatus("Submitting...");
+
+    try {
+      // 1. Create the document in Firestore first to get an ID
+      const absenceRef = await addDoc(collection(db, "absences"), {
+          ...formData,
+          excuse_note: [], // Start with an empty URL
+      });
+
+      const uploadedFileUrls: string[] = [];
+      // 2. If there's a file, upload it using the new document's ID
+      if (excuse_notes.length > 0) {
+        setSubmitStatus("Uploading file(s)...");
+        for (const file of excuse_notes) {
+          const storageRef = ref(storage, `excuse-notes/${absenceRef.id}/${file.name}`);
+          await uploadBytes(storageRef, file);
+          const downloadUrl = await getDownloadURL(storageRef);
+          uploadedFileUrls.push(downloadUrl);
+        }
+
+        // 3. Update the document with the array of file URLs
+        await updateDoc(doc(db, "absences", absenceRef.id), {
+          excuse_note: uploadedFileUrls,
+        });
+      }
+
+      setSubmitStatus("Request submitted successfully!");
+      setTimeout(() => onFormSubmit(), 1500); // Give user time to see success message
+    } catch (error) {
+      console.error("Error submitting request: ", error);
+      setSubmitStatus("Error submitting data. Please try again.");
+      setIsSubmitting(false);
+    }
   };
 
   const goBack = () => {
     setSubmitStatus("Discarding changes...");
     onFormSubmit(); 
-  }
+  };
 
+  const showEtaEtdField = ["Late In", "Early Out", "Leave and Come Back"].includes(formData.type_of_incident);
   const inputClasses = "w-full p-3 bg-gray-50 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition";
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-4xl mx-auto my-10 p-8 bg-blue-200 rounded-xl shadow-lg">
+    <form onSubmit={handleSubmit} className="max-w-4xl mx-auto my-10 p-8 bg-white rounded-xl shadow-lg border border-gray-200">
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-3xl font-bold text-center text-gray-800">
           Absence Request / Report Form
@@ -92,37 +169,95 @@ export default function AbsenceForm({ employeeID, onFormSubmit }: { employeeID: 
 
       {/* Type Of Request */}
       <div className="mb-6">
-      <input
-        type="radio"
-        id="option1"
-        name="Type Of Request"
-        value="option1"
-      />
-      <label htmlFor="option1">Option 1</label>
+        <legend className="block mb-2 font-semibold text-gray-700">Type Of Request <span className="text-red-500">*</span></legend>
+        <div className="flex items-center space-x-6">
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="radio" name="type_of_request" value="Incident Notice" onChange={handleChange} required />
+            <span>Incident Notice (Less than 30 days)</span>
+          </label>
+          <label className="flex items-center space-x-2 cursor-pointer">
+            <input type="radio" name="type_of_request" value="Time Off Request" onChange={handleChange} />
+            <span>Time-Off Request (More than 30 days)</span>
+          </label>
+        </div>
+      </div>
 
-      <input
-        type="radio"
-        id="option2"
-        name="Type Of Request"
-        value="option2"
-      />
-      <label htmlFor="option2">Option 2</label>
-            </div>
+      {/* Office, Incident Type, and ETA/ETD */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div>
+          <label htmlFor="type_of_incident" className="block mb-2 font-semibold text-gray-700">Type Of Incident</label>
+          <select id="type_of_incident" name="type_of_incident" value={formData.type_of_incident} onChange={handleChange} className={inputClasses} required>
+            <option value="" disabled>Select Incident Type...</option>
+            {incidentTypes.map(type => <option key={type} value={type}>{type}</option>)}
+          </select>
+        </div>
+        <div>
+          <label htmlFor="office" className="block mb-2 font-semibold text-gray-700">Office Location</label>
+          <select id="office" name="office" value={formData.office} onChange={handleChange} className={inputClasses} required>
+            <option value="" disabled>Select Office...</option>
+            {officeLocations.map(location => <option key={location} value={location}>{location}</option>)}
+          </select>
+        </div>
+      </div>
 
-            {/* Additional Comments */}
-            <div className="mb-6">
+      {/* Conditionally Rendered ETA/ETD Field */}
+      {showEtaEtdField && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <label htmlFor="eta_etd" className="block mb-2 font-semibold text-gray-700">Estimated Time of Arrival / Departure (ETA/ETD)</label>
+          <input type="time" id="eta_etd" name="ETA_ETD" value={formData.ETA_ETD} onChange={handleChange} className={inputClasses} required/>
+        </div>
+      )}
 
-            </div>
+      {/* Incident Start and End */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div>
+          <label htmlFor="incident_start" className="block mb-2 font-semibold text-gray-700">Start Date & Time</label>
+          <input type="date" id="incident_start" name="incident_start" value={formData.incident_start} onChange={handleChange} className={inputClasses} required/>
+        </div>
+        <div>
+          <label htmlFor="incident_end" className="block mb-2 font-semibold text-gray-700">End Date & Time</label>
+          <input type="date" id="incident_end" name="incident_end" value={formData.incident_end} onChange={handleChange} className={inputClasses} required/>
+        </div>
+      </div>
+      
+      {/* Additional Comments */}
+      <div className="mb-6">
+        <label htmlFor="comments" className="block mb-2 font-semibold text-gray-700">Reason for Incident</label>
+        <textarea id="comments" name="comments" value={formData.comments} onChange={handleChange} className={inputClasses} rows={4} required/>
+      </div>
 
-            {/* Submission Section */}
-            <div className="text-center">
-                <button 
-                    type="submit" 
-                    className="py-3 px-8 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                >
-                    {submitStatus === 'Submitting...' ? 'Submitting...' : 'Submit Report'}
-                </button>
-            </div>
-        </form>
-    );
+      {/* Excuse Note File Upload */}
+      <div className="mb-8">
+        <label htmlFor="excuse_note_files" className="block mb-2 font-semibold text-gray-700">Attach Excuse Note(s) (Optional)</label>
+        <input 
+          type="file" 
+          id="excuse_note_files" 
+          multiple // Key change: added 'multiple' attribute
+          onChange={handleFileChange} 
+          className={`${inputClasses} file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100`} 
+        />
+        {excuse_notes.length > 0 && (
+          <div className="mt-2 text-sm text-gray-600">
+            Selected files: {excuse_notes.map(file => file.name).join(', ')}
+          </div>
+        )}
+      </div>
+
+      {/* Submission Section */}
+      <div className="text-center border-t pt-6">
+         <div className="flex items-center justify-center mb-4">
+            <input type="checkbox" id="submitCheck" checked={isChecked} onChange={(e) => setIsChecked(e.target.checked)} className="h-4 w-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500" required/>
+            <label htmlFor="submitCheck" className="ml-2 block text-sm text-gray-900">I confirm the details are correct and wish to submit.</label>
+         </div>
+        <button 
+          disabled={!isChecked || isSubmitting}
+          type="submit"
+          className="py-3 px-8 bg-blue-600 text-white font-semibold rounded-lg shadow-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-75 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+        >
+          {isSubmitting ? submitStatus : 'Submit Report'}
+        </button>
+        {submitStatus && <p className="mt-4 text-center text-gray-600">{submitStatus}</p>}
+      </div>
+    </form>
+  );
 }

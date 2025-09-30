@@ -457,7 +457,7 @@ export default function Page() {
                     <td className="px-2 py-2"><input type="text" value={city.country || ''} onChange={(e) => handleInputChange(city.id, 'country', e.target.value)} className="w-full bg-transparent p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" /></td>
                     <td className="px-2 py-2"><input type="number" value={city.population || 0} onChange={(e) => handleInputChange(city.id, 'population', parseInt(e.target.value, 10))} className="w-full bg-transparent p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" /></td>
                     <td className="px-6 py-4 text-center"><input type="checkbox" checked={!!city.capital} onChange={(e) => handleInputChange(city.id, 'capital', e.target.checked)} className="h-5 w-5 rounded text-blue-600 focus:ring-blue-500" /></td>
-                    <td className="px-2 py-2"><input type="text" value={city.regions?.join(', ') || ''} onChange={(e) => handleInputChange(city.id, 'regions', e.target.value.split(',').map(s=>s.trim()))} className="w-full bg-transparent p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" /></td>
+                   {/*} <td className="px-2 py-2"><input type="text" value={city.regions?.join(', ') || ''} onChange={(e) => handleInputChange(city.id, 'regions', e.target.value.split(',').map(s=>s.trim()))} className="w-full bg-transparent p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" /></td>*/}
                   </tr>
                 ))}
               </tbody>
