@@ -235,7 +235,7 @@ export default function PatientLogSystem() {
           updatedRow.visit_type = '';
         }
         // Call In 또는 Call Out이 체크되면 현재 시간을 Time에 자동 입력
-        if ((field === 'call_in' || field === 'call_out') && value === true)s {
+        if ((field === 'call_in' || field === 'call_out') && value === true) {
           const now = new Date();
           const timeString = now.toTimeString().slice(0, 5); // HH:MM 형태
           updatedRow.time = timeString;
