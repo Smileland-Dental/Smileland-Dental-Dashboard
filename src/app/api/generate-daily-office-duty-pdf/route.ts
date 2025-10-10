@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import puppeteer from 'puppeteer';
 
 export async function POST(request: NextRequest) {
   try {
@@ -419,10 +420,41 @@ export async function POST(request: NextRequest) {
       </html>
     `;
 
-    return NextResponse.json({ 
-      success: true, 
-      html,
-      filename: `${dutyDate}_${selectedOffice || 'Ming'}_Daily_Office_Duty`
+    // Puppeteer로 PDF 생성
+    const browser = await puppeteer.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+    
+    const page = await browser.newPage();
+    await page.setContent(html);
+    
+    // 페이지 로딩 대기
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: {
+        top: '10mm',
+        right: '10mm',
+        bottom: '10mm',
+        left: '10mm'
+      },
+      preferCSSPageSize: false,
+      displayHeaderFooter: false
+    });
+    
+    await browser.close();
+    
+    // 파일명 생성
+    const filename = `${dutyDate}_${selectedOffice || 'Ming'}_Daily_Office_Duty.pdf`;
+    
+    return new NextResponse(pdf, {
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${filename}"`
+      }
     });
 
   } catch (error) {

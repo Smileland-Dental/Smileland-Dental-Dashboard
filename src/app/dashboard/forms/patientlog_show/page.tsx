@@ -9,13 +9,16 @@ export default function ShowCheckSystem() {
   const [loading, setLoading] = useState(false);
   const [appointments, setAppointments] = useState<any[]>([]);
   const [filteredAppointments, setFilteredAppointments] = useState<any[]>([]);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
   const [selectedOffice, setSelectedOffice] = useState('');
-  const [supervisorName, setSupervisorName] = useState('');
+  const [name, setName] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
+  const [submitStatus, setSubmitStatus] = useState('');
+  const [progress, setProgress] = useState(0);
 
   // Office 옵션
-  const officeOptions = ['All', 'Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
+  const officeOptions = ['All', 'Bernard', 'Call Center', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
   // 컴포넌트 마운트 시 데이터 로드
   useEffect(() => {
@@ -25,7 +28,35 @@ export default function ShowCheckSystem() {
   // 필터 변경 시 데이터 필터링
   useEffect(() => {
     filterAppointments();
-  }, [appointments, selectedDate, selectedOffice]);
+  }, [appointments, startDate, endDate, selectedOffice]);
+
+  // 제출 중 브라우저 네비게이션 방지
+  useEffect(() => {
+    const handleBeforeUnload = (e) => {
+      if (pdfLoading) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    const handlePopState = (e) => {
+      if (pdfLoading) {
+        e.preventDefault();
+        window.history.pushState(null, '', window.location.href);
+      }
+    };
+
+    if (pdfLoading) {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+      window.addEventListener('popstate', handlePopState);
+      window.history.pushState(null, '', window.location.href);
+    }
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('popstate', handlePopState);
+    };
+  }, [pdfLoading]);
 
   // Firebase에서 모든 환자 로그 불러오기
   const loadAppointments = async () => {
@@ -40,7 +71,7 @@ export default function ShowCheckSystem() {
           data.patientRows.forEach((row: any, index: number) => {
             if (row.appt_date && row.name) {
               allAppointments.push({
-                ...row,
+            ...row,
                 docId: doc.id,
                 rowIndex: index,
                 dutyDate: data.dutyDate,
@@ -68,9 +99,14 @@ export default function ShowCheckSystem() {
   const filterAppointments = () => {
     let filtered = appointments;
     
-    // 날짜 필터
-    if (selectedDate) {
-      filtered = filtered.filter(apt => apt.appt_date === selectedDate);
+    // 날짜 범위 필터
+    if (startDate && endDate) {
+      filtered = filtered.filter(apt => {
+        const aptDate = new Date(apt.appt_date);
+        const start = new Date(startDate);
+        const end = new Date(endDate);
+        return aptDate >= start && aptDate <= end;
+      });
     }
     
     // 오피스 필터
@@ -100,8 +136,8 @@ export default function ShowCheckSystem() {
         const updatedPatientRows = currentData.patientRows.map((row: any, index: number) => {
           if (index === appointment.rowIndex) {
             return { ...row, showStatus: newStatus };
-          }
-          return row;
+      }
+      return row;
         });
         
         // Firebase 업데이트
@@ -136,13 +172,19 @@ export default function ShowCheckSystem() {
 
     try {
       setPdfLoading(true);
+      setSubmitStatus('Saving...');
+      setProgress(10);
 
       // PDF용 데이터 준비
+      setSubmitStatus('Generating PDF...');
+      setProgress(30);
+      
       const pdfData = {
-        selectedDate,
+        startDate,
+        endDate,
         selectedOffice: selectedOffice || 'All Offices',
         appointments: filteredAppointments,
-        generatedBy: supervisorName || 'Supervisor',
+        generatedBy: name || 'Supervisor',
         timestamp: new Date().toISOString()
       };
 
@@ -155,45 +197,60 @@ export default function ShowCheckSystem() {
         body: JSON.stringify({ showCheckData: pdfData }),
       });
 
-      const result = await response.json();
-
-      if (result.success) {
-        // 파일명 생성
-        const date = selectedDate || new Date().toISOString().split('T')[0];
-        const office = selectedOffice || 'All';
-        const supervisor = supervisorName || 'Supervisor';
-        const filename = `${date}_${office}_${supervisor}_Show_Check_Report`;
+      if (response.ok) {
+        // PDF blob 받기
+        setSubmitStatus('Processing PDF...');
+        setProgress(60);
+        const blob = await response.blob();
         
-        // 인쇄 창 열기
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-          printWindow.document.write(result.html);
-          printWindow.document.close();
-          
-          printWindow.onload = function() {
-            setTimeout(async () => {
-              printWindow.print();
-              
-              // PDF 생성 후 해당 데이터 삭제
-              try {
-                await deleteProcessedAppointments();
-                alert(`📄 ${filename}.pdf\n\nPlease select "Save as PDF" in the print dialog to save!\n\n✅ Processed appointment data has been deleted from the database.`);
-              } catch (deleteError) {
-                console.error('Error deleting processed data:', deleteError);
-                alert(`📄 ${filename}.pdf\n\nPlease select "Save as PDF" in the print dialog to save!\n\n⚠️ PDF generated successfully, but failed to delete processed data.`);
-              }
-            }, 1000);
-          };
+        // 파일명 생성
+        const dateRange = startDate === endDate ? startDate : `${startDate}_to_${endDate}`;
+        const office = selectedOffice || 'All';
+        const supervisor = name || 'Supervisor';
+        const filename = `${dateRange}_${office}_${supervisor}_Show_Check_Report.pdf`;
+        
+        setSubmitStatus('Cleaning up...');
+        setProgress(80);
+        
+        // PDF 생성 후 해당 데이터 삭제
+        try {
+          await deleteProcessedAppointments();
+        } catch (deleteError) {
+          console.error('Error deleting processed data:', deleteError);
         }
+        
+        setSubmitStatus('Complete!');
+        setProgress(100);
+        
+        // PDF 다운로드
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        
+        // 2초 후 모달 닫기
+        setTimeout(() => {
+          setPdfLoading(false);
+          setSubmitStatus('');
+          setProgress(0);
+        }, 2000);
       } else {
-        throw new Error(result.error || 'PDF generation failed');
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'PDF generation failed');
       }
 
     } catch (error) {
       console.error('PDF generation error:', error);
-      alert('PDF generation failed: ' + error.message);
-    } finally {
-      setPdfLoading(false);
+      setSubmitStatus('❌ PDF generation failed: ' + error.message);
+      setProgress(0);
+      setTimeout(() => {
+        setPdfLoading(false);
+        setSubmitStatus('');
+      }, 3000);
     }
   };
 
@@ -382,11 +439,12 @@ export default function ShowCheckSystem() {
     boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)'
   };
 
-  const getStatusColor = (status) => {
+  const getStatusColor = (status, index) => {
     switch (status) {
-      case 'show': return '#d4edda';
-      case 'no-show': return '#f8d7da';
-      default: return '#fff3cd';
+      case 'show': return '#d4edda'; // 초록색 배경
+      case 'no-show': return '#f8d7da'; // 빨간색 배경
+      case 'pending': return '#fff3cd'; // 노란색 배경
+      default: return index % 2 === 0 ? '#f9f9f9' : 'white'; // 기본 교대로 배경색
     }
   };
 
@@ -399,10 +457,133 @@ export default function ShowCheckSystem() {
   };
 
   return (
-    <div style={bodyStyle}>
-      <div style={containerStyle}>
+    <>
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
+      <div style={bodyStyle}>
+        {/* 로딩 모달 */}
+        {pdfLoading && (
+          <div style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999
+          }}>
+            <div style={{
+              backgroundColor: "white",
+              padding: "40px",
+              borderRadius: "12px",
+              textAlign: "center",
+              boxShadow: "0 10px 30px rgba(0, 0, 0, 0.3)",
+              maxWidth: "400px",
+              width: "90%"
+            }}>
+              <div style={{
+                border: "4px solid #f3f3f3",
+                borderTop: "4px solid #4a90e2",
+                borderRadius: "50%",
+                width: "50px",
+                height: "50px",
+                animation: "spin 1s linear infinite",
+                margin: "0 auto 20px"
+              }}></div>
+              <h3 style={{
+                color: "#333",
+                fontSize: "1.2rem",
+                fontWeight: "600",
+                margin: "0 0 10px 0"
+              }}>
+                {submitStatus || "Processing..."}
+              </h3>
+              <p style={{
+                color: "#666",
+                fontSize: "0.9rem",
+                margin: "0 0 20px 0",
+                lineHeight: "1.4"
+              }}>
+                {submitStatus === 'Saving...'}
+                {submitStatus === 'Generating PDF...'}
+                {submitStatus === 'Processing PDF...'}
+                {submitStatus === 'Cleaning up...'}
+                {submitStatus === 'Complete!'}
+                {!submitStatus && 'Processing... Please wait'}
+              </p>
+              {/* 진행률 바 */}
+              <div style={{
+                width: "100%",
+                backgroundColor: "#e9ecef",
+                borderRadius: "10px",
+                overflow: "hidden",
+                marginBottom: "20px"
+              }}>
+                <div style={{
+                  width: `${progress}%`,
+                  height: "8px",
+                  backgroundColor: "#4a90e2",
+                  borderRadius: "10px",
+                  transition: "width 0.3s ease",
+                  background: "linear-gradient(90deg, #4a90e2, #357abd)"
+                }}></div>
+              </div>
+              <p style={{
+                color: "#495057",
+                fontSize: "0.8rem",
+                margin: "0 0 20px 0",
+                fontWeight: "500"
+              }}>
+                {progress}% Complete
+              </p>
+              <div style={{
+                backgroundColor: "#f8f9fa",
+                padding: "15px",
+                borderRadius: "8px",
+                border: "1px solid #e9ecef"
+              }}>
+                <p style={{
+                  color: "#495057",
+                  fontSize: "0.8rem",
+                  margin: 0,
+                  fontWeight: "500"
+                }}>
+                  ⚠️ Please do not close
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div style={containerStyle}>
         {/* 헤더 */}
-        <h1 style={headerStyle}>📋 Show/No Show Check System</h1>
+        <h1 style={headerStyle}>📋 Appointment Show/No Show Check</h1>
+
+        {/* Name 입력 섹션 */}
+        <div style={sectionStyle}>
+          <h2 style={{ color: '#0077B6', marginBottom: '20px' }}>👤 Name</h2>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
+            <div style={{ flex: '1', minWidth: '200px' }}>
+              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                Name:
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Enter your name"
+                style={inputStyle}
+              />
+            </div>
+          </div>
+        </div>
 
         {/* 필터 섹션 */}
         <div style={sectionStyle}>
@@ -411,16 +592,28 @@ export default function ShowCheckSystem() {
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                Appointment Date:
+                Start Date:
               </label>
               <input
                 type="date"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
                 style={inputStyle}
               />
             </div>
             
+            <div style={{ flex: '1', minWidth: '200px' }}>
+              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                End Date:
+              </label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                style={inputStyle}
+              />
+            </div>
+
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
                 Office:
@@ -436,18 +629,6 @@ export default function ShowCheckSystem() {
               </select>
             </div>
             
-            <div style={{ flex: '1', minWidth: '200px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                Supervisor Name:
-              </label>
-              <input
-                type="text"
-                value={supervisorName}
-                onChange={(e) => setSupervisorName(e.target.value)}
-                placeholder="Enter supervisor name"
-                style={inputStyle}
-              />
-            </div>
 
             <div style={{ flex: '1', minWidth: '200px', display: 'flex', alignItems: 'end' }}>
               <button 
@@ -467,16 +648,16 @@ export default function ShowCheckSystem() {
 
           <div style={{ 
             padding: '10px', 
-            backgroundColor: '#e3f2fd', 
+            backgroundColor: '#e3f2fd',
             borderRadius: '5px', 
             fontSize: '14px',
             color: '#1565c0'
           }}>
             📊 <strong>Total Appointments:</strong> {filteredAppointments.length}
-            {selectedDate && ` | Date: ${selectedDate}`}
+            {startDate && endDate && ` | Date Range: ${startDate} to ${endDate}`}
             {selectedOffice && selectedOffice !== 'All' && ` | Office: ${selectedOffice}`}
           </div>
-        </div>
+            </div>
 
         {/* 약속 목록 테이블 */}
         <div style={sectionStyle}>
@@ -491,54 +672,42 @@ export default function ShowCheckSystem() {
               No appointments found for the selected criteria.
             </div>
           ) : (
-            <div style={{ overflowX: 'auto' }}>
-              <table style={tableStyle}>
-                <thead style={{ backgroundColor: '#0077B6', color: 'white' }}>
-                  <tr>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={tableStyle}>
+              <thead style={{ backgroundColor: '#0077B6', color: 'white' }}>
+                <tr>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Patient Name</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Office</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Appt. Date</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Visit Type</th>
-                    <th style={{ padding: '12px 8px', textAlign: 'center' }}>Time</th>
-                    <th style={{ padding: '12px 8px', textAlign: 'center' }}>Staff</th>
-                    <th style={{ padding: '12px 8px', textAlign: 'center' }}>Work Office</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Status</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
+                </tr>
+              </thead>
+              <tbody>
                   {filteredAppointments.map((appointment, index) => (
                     <tr 
                       key={`${appointment.docId}-${appointment.rowIndex}`} 
                       style={{ 
-                        backgroundColor: index % 2 === 0 ? getStatusColor(appointment.showStatus) : 'white',
+                        backgroundColor: getStatusColor(appointment.showStatus, index),
                         opacity: appointment.showStatus === 'pending' ? 1 : 0.8
                       }}
                     >
                       <td style={{ padding: '12px 8px', fontWeight: 'bold' }}>
                         {appointment.name}
-                      </td>
+                    </td>
                       <td style={{ padding: '12px 8px', textAlign: 'center' }}>
                         {appointment.office}
-                      </td>
+                    </td>
                       <td style={{ padding: '12px 8px', textAlign: 'center' }}>
                         {appointment.appt_date}
-                      </td>
+                    </td>
                       <td style={{ padding: '12px 8px', textAlign: 'center' }}>
                         {appointment.visit_type}
-                      </td>
-                      <td style={{ padding: '12px 8px', textAlign: 'center' }}>
-                        {appointment.time || '-'}
-                      </td>
-                      <td style={{ padding: '12px 8px', textAlign: 'center' }}>
-                        {appointment.userName}
-                      </td>
-                      <td style={{ padding: '12px 8px', textAlign: 'center' }}>
-                        {appointment.workOffice}
-                      </td>
+                    </td>
                       <td style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 'bold' }}>
                         {getStatusText(appointment.showStatus)}
-                      </td>
+                    </td>
                       <td style={{ padding: '12px 8px', textAlign: 'center' }}>
                         <div style={{ display: 'flex', gap: '4px', justifyContent: 'center' }}>
                           <button
@@ -555,26 +724,26 @@ export default function ShowCheckSystem() {
                           >
                             No Show
                           </button>
-                          <button
+                        <button
                             onClick={() => updateShowStatus(appointment, 'pending')}
                             style={pendingButtonStyle}
                             disabled={appointment.showStatus === 'pending'}
                           >
-                            Reset
-                          </button>
+                            Pending
+                        </button>
                         </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           )}
         </div>
 
         {/* 통계 섹션 */}
         {filteredAppointments.length > 0 && (
-          <div style={sectionStyle}>
+        <div style={sectionStyle}>
             <h2 style={{ color: '#0077B6', marginBottom: '20px' }}>📊 Statistics</h2>
             <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
               {(() => {
@@ -633,13 +802,13 @@ export default function ShowCheckSystem() {
                 );
               })()}
             </div>
-          </div>
+        </div>
         )}
 
         {/* Submit 버튼 */}
         {filteredAppointments.length > 0 && (
           <div style={{textAlign: 'center', margin: '30px 0'}}>
-            <button
+          <button 
               onClick={handleGeneratePDF}
               disabled={pdfLoading}
               style={{
@@ -656,10 +825,11 @@ export default function ShowCheckSystem() {
               }}
             >
               {pdfLoading ? '📄 Generating PDF...' : '📄 Submit + Generate PDF'}
-            </button>
-          </div>
+          </button>
+        </div>
         )}
       </div>
     </div>
+    </>
   );
 }
