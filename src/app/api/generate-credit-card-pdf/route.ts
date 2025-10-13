@@ -1,5 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 
+// Interfaces for type safety
+interface Purchase {
+  date: string;
+  vendor: string;
+  reason: string;
+  amount: string;
+  description: string;
+}
+
+interface FileData {
+  name: string;
+  url: string;
+}
+
 // Convert image URL to Base64
 async function convertImageToBase64(imageUrl: string): Promise<string> {
   try {
@@ -57,10 +71,10 @@ export async function POST(request: NextRequest) {
     }
 
     // Convert receipt images to Base64
-    let base64FilesData = [];
+    let base64FilesData: FileData[] = [];
     if (filesData && filesData.length > 0) {
       console.log('📄 Converting receipt images to Base64...');
-      for (const file of filesData) {
+      for (const file of filesData as FileData[]) {
         try {
           const base64Url = await convertImageToBase64(file.url);
           base64FilesData.push({
@@ -78,7 +92,7 @@ export async function POST(request: NextRequest) {
     console.log('📄 Base64 conversion complete:', base64FilesData.length, 'files converted');
 
     // Calculate total amount
-    const totalAmount = purchases.reduce((sum, purchase) => {
+    const totalAmount = purchases.reduce((sum: number, purchase: Purchase) => {
       return sum + (parseFloat(purchase.amount) || 0);
     }, 0);
 
@@ -234,7 +248,7 @@ export async function POST(request: NextRequest) {
             </tr>
           </thead>
           <tbody>
-            ${purchases.map((purchase, index) => `
+            ${purchases.map((purchase: Purchase, index: number) => `
               <tr>
                 <td>${index + 1}</td>
                 <td>${purchase.date}</td>
@@ -253,7 +267,7 @@ export async function POST(request: NextRequest) {
           <div class="receipt-files">
             <h4>Receipt Images</h4>
             <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 10px;">
-              ${base64FilesData.map(file => `
+              ${base64FilesData.map((file: FileData) => `
                 <div style="padding: 10px; text-align: center; background: white;">
                   <img src="${file.url}" alt="Receipt" style="max-width: 100%; height: auto;" />
                 </div>
@@ -302,7 +316,7 @@ export async function POST(request: NextRequest) {
     console.error('📄 Error generating PDF:', error);
     return NextResponse.json({
       success: false,
-      error: error.message
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 }
