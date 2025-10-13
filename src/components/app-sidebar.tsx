@@ -36,7 +36,7 @@ const items = [
     url: "/dashboard/forms",
     icon: File,
   },
-  {
+  /*{
     title: "Excuse Note Form",
     url: "/dashboard/test",
     icon: File,
@@ -46,7 +46,7 @@ const items = [
     url: "/dashboard/test2",
     icon: File,
   },
-  /*{
+  {
     title: "Settings",
     url: "#",
     icon: Settings,
