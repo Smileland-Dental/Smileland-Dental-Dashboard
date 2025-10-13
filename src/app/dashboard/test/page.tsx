@@ -92,7 +92,8 @@ export default function Home() {
 
 import IncidentReportForm from '@/components/forms/excuse-note';
 import NewIncidentReportForm from '@/components/forms/new-excuse-note';
-import AbsenceForm from '@/components/forms/absence';
+import NewAbsenceForm from '@/components/forms/new-absence';
+import ExistingAbsenceForm from '@/components/forms/existing-absence';
 
 import { useState } from 'react';
 
@@ -102,6 +103,8 @@ import { Button } from '@/components/ui/button';
 
 export default function Page() {
   const [employee_id, setEmployeeID] = useState("");
+  const [employeeTitle, setEmployeeTitle] = useState("");
+  const [employeeName, setEmployeeName] = useState("");
   const [year, setYear] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [absences, setAbsences] = useState<any[]>([]);
@@ -125,6 +128,8 @@ export default function Page() {
       if (employeeDocSnap.exists() && employeeDocSnap.data().year === year) {
         setIsAuthenticated(true);
         fetchAbsences(employee_id);
+        setEmployeeTitle(employeeDocSnap.data().title);
+        setEmployeeName(employeeDocSnap.data().name);
         setEmployeeInfo(employeeDocSnap.data());
       }
       else {
@@ -164,11 +169,11 @@ export default function Page() {
   };
 
   if (selectedAbsence) {
-    return <IncidentReportForm absence={selectedAbsence} onFormSubmit={handleFormSubmit} />;
+    return <ExistingAbsenceForm absence={selectedAbsence} onFormSubmit={handleFormSubmit} />;
   };
 
   if (newAbsence) {
-    return <AbsenceForm employeeID={employee_id} onFormSubmit={handleFormSubmit} />;
+    return <NewAbsenceForm employeeID={employee_id} employeeTitle={employeeTitle} employeeName={employeeName} onFormSubmit={handleFormSubmit} />;
   };
 
   return (
