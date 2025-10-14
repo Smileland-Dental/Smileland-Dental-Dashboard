@@ -17,6 +17,15 @@ const firebaseConfig = {
 const app = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 const storage = getStorage(app);
 
+// Interface for type safety
+interface Purchase {
+  date: string;
+  vendor: string;
+  reason: string;
+  amount: string;
+  description: string;
+}
+
 // Excel 파일 생성 및 Firebase Storage에 저장
 export async function POST(request: NextRequest) {
   try {
@@ -39,7 +48,7 @@ export async function POST(request: NextRequest) {
     const excelFileName = 'credit-card-receipts.xlsx';
     const excelFileRef = ref(storage, `excel/${excelFileName}`);
     
-    let existingData = [];
+    let existingData: any[] = [];
     let worksheet;
     
     try {
@@ -59,7 +68,7 @@ export async function POST(request: NextRequest) {
     }
 
     // 새 데이터 추가
-    const newRows = purchases.map((purchase, index) => [
+    const newRows = purchases.map((purchase: Purchase, index: number) => [
       index === 0 ? employeeName : '', // 첫 번째 행에만 직원명
       index === 0 ? `****${cardNumber}` : '', // 첫 번째 행에만 카드번호
       purchase.date,
@@ -114,7 +123,7 @@ export async function POST(request: NextRequest) {
     console.error('Error creating/updating Excel file:', error);
     return NextResponse.json({
       success: false,
-      error: 'Failed to create/update Excel file: ' + error.message
+      error: 'Failed to create/update Excel file: ' + (error instanceof Error ? error.message : 'Unknown error')
     });
   }
 }

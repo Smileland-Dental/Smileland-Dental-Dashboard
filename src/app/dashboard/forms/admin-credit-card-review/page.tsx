@@ -5,14 +5,48 @@ import { collection, getDocs, deleteDoc, doc, setDoc } from 'firebase/firestore'
 import { ref, listAll, getDownloadURL, uploadBytes, deleteObject } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase.config';
 
+// Interfaces for type safety
+interface Purchase {
+  date: string;
+  vendor: string;
+  reason: string;
+  amount: string;
+  description: string;
+  receiptFiles: string[];
+}
+
+interface Submission {
+  id: string;
+  employeeName: string;
+  cardNumber: string;
+  date: string;
+  office: string;
+  submissionId: string;
+  purchases: Purchase[];
+  totalAmount: string;
+  submittedAt: Date;
+  lastUpdated: Date;
+  signatureURL?: string;
+  signatureSavedAt?: Date;
+  addedOnNumbersChecked?: boolean;
+  addedOnNumbersCheckedAt?: Date;
+}
+
+interface ReceiptFile {
+  name: string;
+  url: string;
+  purchaseNumber: number;
+  fullPath?: string;
+}
+
 const AdminCreditCardReview = () => {
-  const [submissions, setSubmissions] = useState([]);
-  const [selectedSubmission, setSelectedSubmission] = useState(null);
+  const [submissions, setSubmissions] = useState<Submission[]>([]);
+  const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
   const [loading, setLoading] = useState(false);
   const [signature, setSignature] = useState('');
   const [isDrawing, setIsDrawing] = useState(false);
-  const canvasRef = useRef(null);
-  const [receiptFiles, setReceiptFiles] = useState([]);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [receiptFiles, setReceiptFiles] = useState<ReceiptFile[]>([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [savedSignature, setSavedSignature] = useState('');
   const [isSignatureSaved, setIsSignatureSaved] = useState(false);
@@ -27,7 +61,7 @@ const AdminCreditCardReview = () => {
       
       let retryCount = 0;
       const maxRetries = 3;
-      let querySnapshot = null;
+      let querySnapshot: Awaited<ReturnType<typeof getDocs>> | null = null;
       
       while (retryCount < maxRetries && !querySnapshot) {
         try {
@@ -45,11 +79,15 @@ const AdminCreditCardReview = () => {
           }
         }
       }
-      const submissions = [];
+      const submissions: Submission[] = [];
+      
+      if (!querySnapshot) {
+        throw new Error('Failed to load submissions');
+      }
       
       querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        const totalAmount = data.data.reduce((sum, item) => sum + parseFloat(item.amount || 0), 0);
+        const data: any = doc.data();
+        const totalAmount = data.data.reduce((sum: number, item: any) => sum + parseFloat(item.amount || 0), 0);
         
         submissions.push({
           id: doc.id,
@@ -58,13 +96,13 @@ const AdminCreditCardReview = () => {
           date: data.date || data.data[0]?.date,
           office: data.office || 'N/A',
           submissionId: data.submissionId, // Include submission ID
-          purchases: data.data.map(item => ({
+          purchases: data.data.map((item: any) => ({
             date: item.date,
             vendor: item.vendor,
             reason: item.reason,
             amount: item.amount,
             description: item.description,
-            receiptFiles: item.receiptFiles ? item.receiptFiles.split(', ') : []
+            receiptFiles: item.receiptFiles && typeof item.receiptFiles === 'string' ? item.receiptFiles.split(', ') : (Array.isArray(item.receiptFiles) ? item.receiptFiles : [])
           })),
           totalAmount: totalAmount.toFixed(2),
           submittedAt: data.date ? new Date(data.date) : (data.createdAt?.toDate() || new Date()),
@@ -77,20 +115,21 @@ const AdminCreditCardReview = () => {
       });
       
       // Sort by submission date (newest first)
-      submissions.sort((a, b) => b.submittedAt - a.submittedAt);
+      submissions.sort((a: Submission, b: Submission) => b.submittedAt.getTime() - a.submittedAt.getTime());
       setSubmissions(submissions);
     } catch (error) {
       console.error('Error loading submissions:', error);
+      alert('Error loading submissions: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
     }
   };
 
   // Load receipt files for selected submission
-  const loadReceiptFiles = async (submission) => {
+  const loadReceiptFiles = async (submission: Submission) => {
     try {
       setLoadingFiles(true);
-      const files = [];
+      const files: ReceiptFile[] = [];
       
       // Get all files from receipts folder
       const listRef = ref(storage, 'receipts/');
@@ -119,7 +158,7 @@ const AdminCreditCardReview = () => {
       
       console.log('🔍 Total files in storage:', result.items.length);
       console.log('🔍 All files in storage:');
-      result.items.forEach((item, index) => {
+      result.items.forEach((item: any, index: number) => {
         console.log(`🔍   ${index + 1}. ${item.name}`);
       });
       
@@ -137,11 +176,12 @@ const AdminCreditCardReview = () => {
             files.push({
               name: itemRef.name,
               url: downloadURL,
-              fullPath: itemRef.fullPath
+              fullPath: itemRef.fullPath,
+              purchaseNumber: 0 // Will be set later when grouping
             });
             console.log('✅ Found matching file:', itemRef.name);
           } catch (urlError) {
-            console.warn('Error getting download URL for file:', itemRef.name, urlError.message);
+            console.warn('Error getting download URL for file:', itemRef.name, urlError instanceof Error ? urlError.message : 'Unknown error');
             // Continue with other files even if one fails
           }
         } else {
@@ -150,11 +190,11 @@ const AdminCreditCardReview = () => {
       }
       
       // Group files by purchase number first, then sort within each group
-      const filesByPurchase = {};
+      const filesByPurchase: Record<number, ReceiptFile[]> = {};
       
       // Group files by purchase number
       // New filename pattern: Name_CardNumber_Timestamp_purchaseX_SequenceNumber_Filename
-      files.forEach(file => {
+      files.forEach((file: ReceiptFile) => {
         console.log('🔍 Processing file:', file.name);
         
         // Split filename and find purchase number
@@ -201,17 +241,19 @@ const AdminCreditCardReview = () => {
       console.log('📁 Purchase groups:', Object.keys(filesByPurchase));
       
       // Log details about each purchase group
-      Object.keys(filesByPurchase).forEach(purchaseNum => {
-        console.log(`📁 Purchase ${purchaseNum}: ${filesByPurchase[purchaseNum].length} files`);
-        filesByPurchase[purchaseNum].forEach(file => {
+      Object.keys(filesByPurchase).forEach((purchaseNum: string) => {
+        const purchaseNumInt = parseInt(purchaseNum, 10);
+        console.log(`📁 Purchase ${purchaseNum}: ${filesByPurchase[purchaseNumInt].length} files`);
+        filesByPurchase[purchaseNumInt].forEach((file: ReceiptFile) => {
           console.log(`📁   - ${file.name}`);
         });
       });
       
       // Sort files within each purchase group by sequence number
-      Object.keys(filesByPurchase).forEach(purchaseNum => {
-        filesByPurchase[purchaseNum].sort((a, b) => {
-          const getSequenceNumber = (filename) => {
+      Object.keys(filesByPurchase).forEach((purchaseNum: string) => {
+        const purchaseNumInt = parseInt(purchaseNum, 10);
+        filesByPurchase[purchaseNumInt].sort((a: ReceiptFile, b: ReceiptFile) => {
+          const getSequenceNumber = (filename: string): number => {
             // New pattern: Name_CardNumber_Timestamp_purchaseX_SequenceNumber_Filename
             const parts = filename.split('_');
             for (let i = 0; i < parts.length; i++) {
@@ -229,10 +271,10 @@ const AdminCreditCardReview = () => {
       });
       
       // Flatten back to single array in purchase order
-      const sortedFiles = [];
-      const purchaseNumbers = Object.keys(filesByPurchase).map(Number).sort((a, b) => a - b);
+      const sortedFiles: ReceiptFile[] = [];
+      const purchaseNumbers = Object.keys(filesByPurchase).map(Number).sort((a: number, b: number) => a - b);
       
-      purchaseNumbers.forEach(purchaseNum => {
+      purchaseNumbers.forEach((purchaseNum: number) => {
         sortedFiles.push(...filesByPurchase[purchaseNum]);
       });
       
@@ -262,7 +304,7 @@ const AdminCreditCardReview = () => {
 
     // Filter by date range (using submission date, not purchase date)
     if (filterDateFrom || filterDateTo) {
-      filtered = filtered.filter(submission => {
+      filtered = filtered.filter((submission: Submission) => {
         // Get the submission date in a more reliable way
         let submissionDateStr;
         
@@ -313,7 +355,7 @@ const AdminCreditCardReview = () => {
 
     // Filter by office
     if (filterOffice) {
-      filtered = filtered.filter(submission => 
+      filtered = filtered.filter((submission: Submission) => 
         submission.office === filterOffice
       );
     }
@@ -323,27 +365,31 @@ const AdminCreditCardReview = () => {
   };
 
   // Get unique offices for filter dropdown
-  const getUniqueOffices = () => {
-    const offices = [...new Set(submissions.map(s => s.office))];
-    return offices.filter(office => office && office !== 'N/A');
+  const getUniqueOffices = (): string[] => {
+    const offices = [...new Set(submissions.map((s: Submission) => s.office))];
+    return offices.filter((office): office is string => Boolean(office) && office !== 'N/A');
   };
 
   // Handle signature drawing
-  const startDrawing = (e) => {
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
     setIsDrawing(true);
     const canvas = canvasRef.current;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
     
     ctx.beginPath();
     ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
   };
 
-  const draw = (e) => {
+  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
     if (!isDrawing) return;
     
     const canvas = canvasRef.current;
+    if (!canvas) return;
     const ctx = canvas.getContext('2d');
+    if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
     
     ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
@@ -353,7 +399,9 @@ const AdminCreditCardReview = () => {
   const stopDrawing = () => {
     setIsDrawing(false);
     const canvas = canvasRef.current;
-    setSignature(canvas.toDataURL());
+    if (canvas) {
+      setSignature(canvas.toDataURL());
+    }
   };
 
   const clearSignature = () => {
@@ -369,6 +417,11 @@ const AdminCreditCardReview = () => {
 
   // Check Added on Numbers (first step)
   const checkAddedOnNumbers = async () => {
+    if (!selectedSubmission) {
+      alert('No submission selected');
+      return;
+    }
+    
     try {
       setLoading(true);
       
@@ -387,7 +440,7 @@ const AdminCreditCardReview = () => {
       });
       
       // Update submissions list
-      setSubmissions(prev => prev.map(sub => 
+      setSubmissions(prev => prev.map((sub: Submission) => 
         sub.id === selectedSubmission.id 
           ? { ...sub, addedOnNumbersChecked: true, addedOnNumbersCheckedAt: new Date() }
           : sub
@@ -397,7 +450,7 @@ const AdminCreditCardReview = () => {
       
     } catch (error) {
       console.error('Error checking Added on Numbers:', error);
-      alert('Error checking Added on Numbers: ' + error.message);
+      alert('Error checking Added on Numbers: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -405,6 +458,11 @@ const AdminCreditCardReview = () => {
 
   // Manager Approve - Save signature and generate PDF in one action
   const managerApprove = async () => {
+    if (!selectedSubmission) {
+      alert('No submission selected');
+      return;
+    }
+    
     if (!signature) {
       alert('Please provide a signature before approving.');
       return;
@@ -414,6 +472,9 @@ const AdminCreditCardReview = () => {
       setLoading(true);
       
       // Convert signature data URL to blob (without fetch to avoid CORS)
+      if (!signature || typeof signature !== 'string') {
+        throw new Error('Invalid signature data');
+      }
       const base64Data = signature.split(',')[1];
       const byteCharacters = atob(base64Data);
       const byteNumbers = new Array(byteCharacters.length);
@@ -480,7 +541,7 @@ const AdminCreditCardReview = () => {
       
     } catch (error) {
       console.error('Error approving submission:', error);
-      alert('Error approving submission: ' + error.message);
+      alert('Error approving submission: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -502,6 +563,11 @@ const AdminCreditCardReview = () => {
 
   // Generate PDF with saved signature and delete all data
   const generatePDF = async () => {
+    if (!selectedSubmission) {
+      alert('No submission selected');
+      return;
+    }
+    
     console.log('🔵 [generatePDF] Function called');
     // Check if signature exists (either saved in current session or already saved in submission)
     const signatureToUse = savedSignature || selectedSubmission?.signatureURL;
@@ -515,7 +581,7 @@ const AdminCreditCardReview = () => {
       setLoading(true);
       
       // Get signature data - prefer current session signature, fallback to saved signature URL
-      let signatureData = null;
+      let signatureData: string | null = null;
       
       // Check if we have a current session signature
       if (signatureToUse && signatureToUse.trim() !== '') {
@@ -529,8 +595,9 @@ const AdminCreditCardReview = () => {
           const response = await fetch(selectedSubmission.signatureURL);
           const blob = await response.blob();
           const reader = new FileReader();
-          signatureData = await new Promise((resolve) => {
-            reader.onload = () => resolve(reader.result);
+          signatureData = await new Promise<string>((resolve, reject) => {
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
             reader.readAsDataURL(blob);
           });
           console.log('📄 Converted signature URL to base64 data');
@@ -594,7 +661,7 @@ const AdminCreditCardReview = () => {
       }
     } catch (error) {
       console.error('Error generating PDF:', error);
-      alert('Error generating PDF: ' + error.message);
+      alert('Error generating PDF: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -626,7 +693,7 @@ const AdminCreditCardReview = () => {
       }
     } catch (error) {
       console.error('Error downloading CSV file:', error);
-      alert('Error downloading CSV file: ' + error.message);
+      alert('Error downloading CSV file: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -636,14 +703,22 @@ const AdminCreditCardReview = () => {
   const saveToExcel = async () => {
     console.log('🟡 [saveToExcel] Function called');
     
+    if (!selectedSubmission) {
+      console.log('📊 No submission selected');
+      return;
+    }
+    
+    // Create local reference to avoid null checks
+    const submission = selectedSubmission;
+    
     // Check if submission has signature (either saved in Firestore or current session)
-    const hasSignatureURL = selectedSubmission?.signatureURL && selectedSubmission.signatureURL.trim() !== '';
+    const hasSignatureURL = submission.signatureURL && submission.signatureURL.trim() !== '';
     const hasCurrentSignature = (savedSignature && savedSignature.trim() !== '') || (signature && signature.trim() !== '');
     
     console.log('📊 Signature check:', {
       hasSignatureURL,
       hasCurrentSignature,
-      signatureURL: selectedSubmission?.signatureURL,
+      signatureURL: submission.signatureURL,
       savedSignature: savedSignature ? 'Present' : 'Missing',
       currentSignature: signature ? 'Present' : 'Missing'
     });
@@ -654,26 +729,27 @@ const AdminCreditCardReview = () => {
     }
     
     try {
-      const totalAmount = selectedSubmission.purchases.reduce((sum, purchase) => {
+      const totalAmount = submission.purchases.reduce((sum: number, purchase: Purchase) => {
         return sum + (parseFloat(purchase.amount) || 0);
       }, 0);
 
       // Generate PDF and save to Firebase Storage first
-      // Build filesData from selectedSubmission data instead of receiptFiles state
-      const filesData = [];
-      for (const purchase of selectedSubmission.purchases) {
+      // Build filesData from submission data instead of receiptFiles state
+      const filesData: Array<{name: string, url: string, fullPath: string}> = [];
+      for (const purchase of submission.purchases) {
         if (purchase.receiptFiles) {
-          let receiptFiles = [];
+          let receiptFiles: string[] = [];
           
           // Handle different data types
           if (typeof purchase.receiptFiles === 'string') {
-            receiptFiles = purchase.receiptFiles.split(', ');
+            const filesString: string = purchase.receiptFiles;
+            receiptFiles = filesString.split(', ');
           } else if (Array.isArray(purchase.receiptFiles)) {
             receiptFiles = purchase.receiptFiles;
           }
           
           for (const fileName of receiptFiles) {
-            if (fileName && fileName.trim()) {
+            if (fileName && typeof fileName === 'string' && fileName.trim()) {
               try {
                 const fileRef = ref(storage, `receipts/${fileName.trim()}`);
                 const downloadURL = await getDownloadURL(fileRef);
@@ -703,7 +779,7 @@ const AdminCreditCardReview = () => {
       });
       
       // Get signature data - prefer current session signature, fallback to saved signature URL
-      let signatureData = null;
+      let signatureData: string | null = null;
       
       // Check if we have a current session signature (prefer signature over savedSignature)
       if (signature && signature.trim() !== '') {
@@ -721,8 +797,9 @@ const AdminCreditCardReview = () => {
           const response = await fetch(selectedSubmission.signatureURL);
           const blob = await response.blob();
           const reader = new FileReader();
-          signatureData = await new Promise((resolve) => {
-            reader.onload = () => resolve(reader.result);
+          signatureData = await new Promise<string>((resolve, reject) => {
+            reader.onload = () => resolve(reader.result as string);
+            reader.onerror = reject;
             reader.readAsDataURL(blob);
           });
           console.log('📄 Converted signature URL to base64 data');
@@ -755,12 +832,12 @@ const AdminCreditCardReview = () => {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          name: selectedSubmission.employeeName,
-          cardNumber: selectedSubmission.cardNumber,
-          date: selectedSubmission.date,
-          office: selectedSubmission.office,
-          purchases: selectedSubmission.purchases,
-          filesData: filesData, // Built from selectedSubmission data
+          name: submission.employeeName,
+          cardNumber: submission.cardNumber,
+          date: submission.date,
+          office: submission.office,
+          purchases: submission.purchases,
+          filesData: filesData, // Built from submission data
           signature: signatureData
         })
       });
@@ -779,7 +856,7 @@ const AdminCreditCardReview = () => {
         try {
           const pdfBlob = new Blob([pdfResult.html], { type: 'text/html' });
           const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          const pdfFileName = `pdfs/${selectedSubmission.employeeName}_${selectedSubmission.cardNumber}_${timestamp}.html`;
+          const pdfFileName = `pdfs/${submission.employeeName}_${submission.cardNumber}_${timestamp}.html`;
           const pdfRef = ref(storage, pdfFileName);
           await uploadBytes(pdfRef, pdfBlob);
           pdfDownloadURL = await getDownloadURL(pdfRef);
@@ -788,7 +865,7 @@ const AdminCreditCardReview = () => {
           
           // Save PDF URL to Firestore for future Excel generation
           try {
-            const docRef = doc(db, 'credit-card-receipts', selectedSubmission.id);
+            const docRef = doc(db, 'credit-card-receipts', submission.id);
             await setDoc(docRef, {
               pdfURL: pdfDownloadURL,
               pdfGeneratedAt: new Date()
@@ -813,11 +890,11 @@ const AdminCreditCardReview = () => {
       // Build cumulative CSV from Firestore data (avoid CORS issues)
       console.log('📊 Building cumulative CSV from Firestore data...');
       console.log('📊 Current submission:', {
-        id: selectedSubmission.id,
-        employeeName: selectedSubmission.employeeName,
-        office: selectedSubmission.office,
-        cardNumber: selectedSubmission.cardNumber,
-        purchases: selectedSubmission.purchases.length
+        id: submission.id,
+        employeeName: submission.employeeName,
+        office: submission.office,
+        cardNumber: submission.cardNumber,
+        purchases: submission.purchases.length
       });
       
       // Define CSV file reference
@@ -831,7 +908,7 @@ const AdminCreditCardReview = () => {
       try {
         // Get all submissions that have been processed (have signatureURL)
         const querySnapshot = await getDocs(collection(db, 'credit-card-receipts'));
-        const processedSubmissions = [];
+        const processedSubmissions: any[] = [];
         
         querySnapshot.forEach((doc) => {
           const data = doc.data();
@@ -855,16 +932,18 @@ const AdminCreditCardReview = () => {
         // Add all processed submissions to CSV data (excluding current submission)
         for (const submission of processedSubmissions) {
           // Skip current submission to avoid duplication
-          if (submission.id === selectedSubmission.id) {
+          // Note: using 'submission' constant defined at function start
+          const currentSubmissionId = selectedSubmission?.id;
+          if (submission.id === currentSubmissionId) {
             continue;
           }
           
-          const totalAmount = submission.purchases.reduce((sum, purchase) => {
+          const totalAmount = submission.purchases.reduce((sum: number, purchase: Purchase) => {
             return sum + (parseFloat(purchase.amount) || 0);
           }, 0);
           
             // Add each purchase as a row
-            submission.purchases.forEach((purchase, index) => {
+            submission.purchases.forEach((purchase: Purchase, index: number) => {
               existingData.push([
                 index === 0 ? submission.employeeName : '',
                 index === 0 ? submission.office : '',
@@ -891,10 +970,14 @@ const AdminCreditCardReview = () => {
 
       // Add new data to existing data
       console.log('📊 Creating new rows with PDF download URL:', pdfDownloadURL);
-      const newRows = selectedSubmission.purchases.map((purchase, index) => [
-        index === 0 ? selectedSubmission.employeeName : '',
-        index === 0 ? selectedSubmission.office : '',
-        index === 0 ? `****${selectedSubmission.cardNumber}` : '',
+      // Use submission constant defined at function start
+      const currentSubmission = selectedSubmission;
+      if (!currentSubmission) return;
+      
+      const newRows = currentSubmission.purchases.map((purchase: Purchase, index: number) => [
+        index === 0 ? currentSubmission.employeeName : '',
+        index === 0 ? currentSubmission.office : '',
+        index === 0 ? `****${currentSubmission.cardNumber}` : '',
         purchase.date,
         purchase.vendor,
         purchase.reason,
@@ -917,7 +1000,7 @@ const AdminCreditCardReview = () => {
       console.log('📊 PDF URL in new rows:', newRows[0] ? newRows[0][11] : 'No rows');
 
       // Convert to CSV string (simple version)
-      const csvString = updatedData.map(row => row.join(',')).join('\n');
+      const csvString = updatedData.map((row: any[]) => row.join(',')).join('\n');
       
       // Create blob and upload to Firebase Storage (like credit-card-receipts.tsx)
       try {
@@ -929,7 +1012,7 @@ const AdminCreditCardReview = () => {
         
         console.log('✅ Cumulative CSV file updated successfully!');
         console.log('📊 Total rows in file:', updatedData.length);
-        console.log('📊 Added', newRows.length, 'new rows for submission:', selectedSubmission.employeeName);
+        console.log('📊 Added', newRows.length, 'new rows for submission:', currentSubmission.employeeName);
         console.log('📄 PDF link included:', pdfDownloadURL ? 'Yes' : 'No');
         console.log('📊 This CSV now contains ALL processed submissions');
       } catch (error) {
@@ -958,12 +1041,12 @@ const AdminCreditCardReview = () => {
       let incompleteCount = 0;
       
       // First, collect completed submissions and delete their Storage files
-      const completedSubmissions = [];
-      const deletePromises = [];
+      const completedSubmissions: Array<{id: string, employeeName: string, cardNumber: string, data: any, docRef: any}> = [];
+      const deletePromises: Promise<any>[] = [];
       
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        const isSigned = data.signatureURL && data.signatureURL.trim() !== '';
+        const isSigned = data.signatureURL && typeof data.signatureURL === 'string' && data.signatureURL.trim() !== '';
         const isNumbersChecked = data.addedOnNumbersChecked === true;
         
         if (isSigned && isNumbersChecked) {
@@ -1009,7 +1092,7 @@ const AdminCreditCardReview = () => {
               console.log(`🗑️ Processing purchase:`, purchase);
               
               if (purchase.receiptFiles) {
-                let receiptFiles = [];
+                let receiptFiles: string[] = [];
                 
                 // Handle different data types
                 if (typeof purchase.receiptFiles === 'string') {
@@ -1021,7 +1104,7 @@ const AdminCreditCardReview = () => {
                 console.log(`🗑️ Receipt files to delete:`, receiptFiles);
                 
                 for (const fileName of receiptFiles) {
-                  if (fileName && fileName.trim()) {
+                  if (fileName && typeof fileName === 'string' && fileName.trim()) {
                     const receiptRef = ref(storage, `receipts/${fileName.trim()}`);
                     try {
                       await deleteObject(receiptRef);
@@ -1096,7 +1179,7 @@ const AdminCreditCardReview = () => {
       
     } catch (error) {
       console.error('Error resetting data:', error);
-      alert('Error resetting data: ' + error.message);
+      alert('Error resetting data: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -1104,6 +1187,11 @@ const AdminCreditCardReview = () => {
 
   // Delete single submission data (but keep Excel file)
   const deleteAllSubmissionData = async () => {
+    if (!selectedSubmission) {
+      alert('No submission selected');
+      return;
+    }
+    
     try {
       // Delete from Firestore
       await deleteDoc(doc(db, 'credit-card-receipts', selectedSubmission.id));
@@ -1149,7 +1237,7 @@ const AdminCreditCardReview = () => {
       
     } catch (error) {
       console.error('Error deleting submission data:', error);
-      alert('Error deleting data: ' + error.message);
+      alert('Error deleting data: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
 
@@ -1406,7 +1494,7 @@ const AdminCreditCardReview = () => {
                 }}
               >
                 <option value="">All Offices</option>
-                {getUniqueOffices().map(office => (
+                {getUniqueOffices().map((office: string) => (
                   <option key={office} value={office}>{office}</option>
                 ))}
               </select>
@@ -1518,7 +1606,7 @@ const AdminCreditCardReview = () => {
           </div>
         ) : (
           <div style={styles.submissionsGrid}>
-            {getFilteredSubmissions().map((submission) => (
+            {getFilteredSubmissions().map((submission: Submission) => (
               <div
                 key={submission.id}
                 style={submission.signatureURL ? styles.submissionCardSigned : styles.submissionCard}
@@ -1610,7 +1698,7 @@ const AdminCreditCardReview = () => {
 
                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px'}}>
                   <h3 style={{margin: 0}}>Purchase Details</h3>
-                  {!selectedSubmission.addedOnNumbersChecked && (
+                  {!selectedSubmission?.addedOnNumbersChecked && (
                     <button
                       style={{
                         backgroundColor: '#17a2b8',
@@ -1650,7 +1738,7 @@ const AdminCreditCardReview = () => {
                     </tr>
                   </thead>
                   <tbody>
-                    {selectedSubmission.purchases.map((purchase, index) => (
+                    {selectedSubmission.purchases.map((purchase: Purchase, index: number) => (
                       <tr key={index}>
                         <td style={{
                           ...styles.tableCell,
@@ -1680,8 +1768,8 @@ const AdminCreditCardReview = () => {
                     <div style={{display: 'flex', flexDirection: 'column', gap: '25px'}}>
                       {(() => {
                         // Group files by purchase number
-                        const filesByPurchase = {};
-                        receiptFiles.forEach(file => {
+                        const filesByPurchase: Record<number, ReceiptFile[]> = {};
+                        receiptFiles.forEach((file: ReceiptFile) => {
                           // Extract purchase number from new filename pattern: Name_CardNumber_Timestamp_purchaseX_SequenceNumber_Filename
                           // e.g., "John_1234_2024-01-15T10-30-45-123Z_purchase1_0001759527445729_receipt.jpg" -> Purchase 1
                           const parts = file.name.split('_');
@@ -1716,9 +1804,9 @@ const AdminCreditCardReview = () => {
                         console.log('🔍 UI Files grouped by purchase:', filesByPurchase);
                         
                         // Sort purchase numbers and render each group
-                        const purchaseNumbers = Object.keys(filesByPurchase).map(Number).sort((a, b) => a - b);
+                        const purchaseNumbers = Object.keys(filesByPurchase).map(Number).sort((a: number, b: number) => a - b);
                         
-                        return purchaseNumbers.map(purchaseNum => (
+                        return purchaseNumbers.map((purchaseNum: number) => (
                           <div key={purchaseNum} style={{
                             border: '2px solid #17a2b8',
                             borderRadius: '10px',
@@ -1737,7 +1825,7 @@ const AdminCreditCardReview = () => {
                               🛒 Purchase {purchaseNum}
                             </h4>
                             <div style={{display: 'flex', flexDirection: 'column', gap: '15px'}}>
-                              {filesByPurchase[purchaseNum].map((file, index) => (
+                              {filesByPurchase[purchaseNum].map((file: ReceiptFile, index: number) => (
                                 <div key={index} style={{
                                   border: '1px solid #dee2e6',
                                   borderRadius: '8px',
@@ -1759,9 +1847,13 @@ const AdminCreditCardReview = () => {
                                         border: '1px solid #dee2e6',
                                         boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
                                       }}
-                                      onError={(e) => {
-                                        e.target.style.display = 'none';
-                                        e.target.nextSibling.style.display = 'block';
+                                      onError={(e: React.SyntheticEvent<HTMLImageElement>) => {
+                                        const target = e.target as HTMLImageElement;
+                                        target.style.display = 'none';
+                                        const nextSibling = target.nextSibling as HTMLElement | null;
+                                        if (nextSibling) {
+                                          nextSibling.style.display = 'block';
+                                        }
                                       }}
                                     />
                                   ) : file.name.toLowerCase().includes('.pdf') ? (
@@ -1840,17 +1932,17 @@ const AdminCreditCardReview = () => {
                         }}
                       />
                       <p style={{margin: '10px 0 0 0', fontSize: '12px', color: '#666'}}>
-                        Saved on: {selectedSubmission.signatureSavedAt ? 
-                          (selectedSubmission.signatureSavedAt.toDate ? 
-                            new Date(selectedSubmission.signatureSavedAt.toDate()).toLocaleString() : 
-                            new Date(selectedSubmission.signatureSavedAt).toLocaleString()) : 
+                        Saved on: {selectedSubmission?.signatureSavedAt ? 
+                          (selectedSubmission.signatureSavedAt && typeof (selectedSubmission.signatureSavedAt as any).toDate === 'function' ? 
+                            new Date((selectedSubmission.signatureSavedAt as any).toDate()).toLocaleString() : 
+                            new Date(selectedSubmission.signatureSavedAt as any).toLocaleString()) : 
                           'Unknown'}
                       </p>
                     </div>
                   )}
                   
                   {/* Only show canvas if not already signed */}
-                  {!selectedSubmission.signatureURL && (
+                  {!selectedSubmission?.signatureURL && (
                     <canvas
                       ref={canvasRef}
                       width={600}

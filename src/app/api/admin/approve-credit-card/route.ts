@@ -14,6 +14,15 @@ if (!getApps().length) {
 
 const db = getFirestore();
 
+// Purchase interface for type safety
+interface Purchase {
+  date: string;
+  vendor: string;
+  reason: string;
+  amount: string;
+  description: string;
+}
+
 // Approve credit card submission and generate PDF
 export async function POST(request: NextRequest) {
   try {
@@ -27,7 +36,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Calculate total amount
-    const totalAmount = purchases.reduce((sum, purchase) => {
+    const totalAmount = purchases.reduce((sum: number, purchase: Purchase) => {
       return sum + (parseFloat(purchase.amount) || 0);
     }, 0);
 
@@ -175,7 +184,7 @@ export async function POST(request: NextRequest) {
             </tr>
           </thead>
           <tbody>
-            ${purchases.map(purchase => `
+            ${purchases.map((purchase: Purchase) => `
               <tr>
                 <td>${purchase.date}</td>
                 <td>${purchase.vendor}</td>

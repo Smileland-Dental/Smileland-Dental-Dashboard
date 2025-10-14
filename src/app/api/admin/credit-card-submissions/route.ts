@@ -14,19 +14,40 @@ if (!getApps().length) {
 
 const db = getFirestore();
 
+// Interfaces for type safety
+interface Purchase {
+  date: string;
+  vendor: string;
+  reason: string;
+  amount: string;
+  description: string;
+  receiptFiles: string[];
+}
+
+interface Submission {
+  id: string;
+  employeeName: string;
+  cardNumber: string;
+  date: string;
+  purchases: Purchase[];
+  totalAmount: string;
+  submittedAt: Date;
+  lastUpdated: Date;
+}
+
 // Get all submitted credit card data
 export async function GET(request: NextRequest) {
   try {
     // Get all documents from credit-card-receipts collection
     const snapshot = await db.collection('credit-card-receipts').get();
     
-    const submissions = [];
+    const submissions: Submission[] = [];
     
     snapshot.forEach((doc) => {
       const data = doc.data();
       if (data.data && data.data.length > 0) {
         // Calculate total amount
-        const totalAmount = data.data.reduce((sum, row) => {
+        const totalAmount = data.data.reduce((sum: number, row: any[]) => {
           const amount = parseFloat(row[5]) || 0; // Amount is at index 5
           return sum + amount;
         }, 0);
@@ -36,7 +57,7 @@ export async function GET(request: NextRequest) {
           employeeName: data.name,
           cardNumber: data.cardNumber,
           date: data.date || data.data[0][2], // Use stored date or fallback to first purchase date
-          purchases: data.data.map(row => ({
+          purchases: data.data.map((row: any[]) => ({
             date: row[2],
             vendor: row[3],
             reason: row[4],
@@ -52,7 +73,7 @@ export async function GET(request: NextRequest) {
     });
 
     // Sort by submission date (newest first)
-    submissions.sort((a, b) => b.submittedAt - a.submittedAt);
+    submissions.sort((a: Submission, b: Submission) => b.submittedAt.getTime() - a.submittedAt.getTime());
 
     return NextResponse.json({
       success: true,

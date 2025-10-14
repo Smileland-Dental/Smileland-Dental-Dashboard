@@ -5,6 +5,21 @@ import { doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase.config';
 
+// Interfaces for type safety
+interface ReceiptFile {
+  name: string;
+  url: string;
+}
+
+interface Purchase {
+  date: string;
+  vendor: string;
+  reason: string;
+  amount: string;
+  description: string;
+  receiptFiles: ReceiptFile[];
+}
+
 const CreditCardReceipts = () => {
   // State management
   const [formData, setFormData] = useState({
@@ -13,7 +28,7 @@ const CreditCardReceipts = () => {
     date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), // 캘리포니아 시간대 오늘 날짜
     office: '' // Office 선택
   });
-  const [purchases, setPurchases] = useState([{
+  const [purchases, setPurchases] = useState<Purchase[]>([{
     date: '',
     vendor: '',
     reason: '',
@@ -81,7 +96,7 @@ const CreditCardReceipts = () => {
       };
     } catch (error) {
       console.error('Error uploading file:', error);
-      return { success: false, error: error.message };
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   };
 
@@ -110,11 +125,11 @@ const CreditCardReceipts = () => {
             <p><strong>Card Number:</strong> XXXX-XXXX-XXXX-${formData.cardLastFour}</p>
             <p><strong>Submission Date:</strong> ${formData.date}</p>
             <p><strong>Purchase Count:</strong> ${purchases.length}</p>
-            <p><strong>Total Amount:</strong> $${purchases.reduce((sum, purchase) => sum + parseFloat(purchase.amount || '0'), 0).toFixed(2)}</p>
+            <p><strong>Total Amount:</strong> $${purchases.reduce((sum: number, purchase: Purchase) => sum + parseFloat(purchase.amount || '0'), 0).toFixed(2)}</p>
             <p><strong>Submission ID:</strong> ${submissionId}</p>
             
             <h3>Purchase Details:</h3>
-            ${purchases.map((purchase, index) => `
+            ${purchases.map((purchase: Purchase, index: number) => `
               <div style="border: 1px solid #ddd; padding: 10px; margin: 10px 0;">
                 <h4>Purchase ${index + 1}</h4>
                 <p><strong>Date:</strong> ${purchase.date}</p>
@@ -148,7 +163,7 @@ const CreditCardReceipts = () => {
 
     } catch (error) {
       console.error('Submit error:', error);
-      setSubmitStatus('❌ Submission failed: ' + error.message);
+      setSubmitStatus('❌ Submission failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
       setTimeout(() => setSubmitStatus(''), 7000);
     } finally {
       setLoading(false);
@@ -157,7 +172,7 @@ const CreditCardReceipts = () => {
 
   // Collect form data
   const collectFormData = () => {
-    return purchases.map((purchase, index) => ({
+    return purchases.map((purchase: Purchase, index: number) => ({
       name: formData.name,
       cardLastFour: formData.cardLastFour,
       date: purchase.date, // Use individual purchase date, not form submission date
@@ -166,7 +181,7 @@ const CreditCardReceipts = () => {
       reason: purchase.reason,
       amount: purchase.amount,
       description: purchase.description,
-      receiptFiles: purchase.receiptFiles.map(file => file.name).join(', '),
+      receiptFiles: purchase.receiptFiles.map((file: ReceiptFile) => file.name).join(', '),
       index: index + 1
     }));
   };
@@ -188,7 +203,7 @@ const CreditCardReceipts = () => {
   // Remove purchase row
   const removePurchaseRow = (index: number) => {
     if (purchases.length > 1) {
-      const newPurchases = purchases.filter((_, i) => i !== index);
+      const newPurchases = purchases.filter((_: Purchase, i: number) => i !== index);
       setPurchases(newPurchases);
     }
   };
@@ -220,7 +235,7 @@ const CreditCardReceipts = () => {
     }
 
     console.log('Starting file upload process...');
-    const uploadPromises = Array.from(files).map(async (file, fileIndex) => {
+    const uploadPromises = Array.from(files).map(async (file: File, fileIndex: number) => {
       console.log(`Processing file ${fileIndex + 1}:`, { name: file.name, size: file.size, type: file.type });
       
       // Use the current submission ID for all files in this upload
@@ -244,7 +259,7 @@ const CreditCardReceipts = () => {
     });
 
     console.log('Waiting for all uploads to complete...');
-    const uploadedFiles = (await Promise.all(uploadPromises)).filter(file => file !== null);
+    const uploadedFiles = (await Promise.all(uploadPromises)).filter((file): file is ReceiptFile => file !== null);
     console.log('Uploaded files:', uploadedFiles);
     
     if (uploadedFiles.length > 0) {
