@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { credential } from 'firebase-admin';
+import { escapeHtml, sanitizeAmount, sanitizeString, safeLog, logError } from '@/lib/security-server';
 
 // Initialize Firebase Admin SDK
 if (!getApps().length) {
@@ -28,17 +29,44 @@ export async function POST(request: NextRequest) {
   try {
     const { submissionId, signature, employeeName, cardNumber, date, purchases } = await request.json();
 
+    // 🔒 보안: 로그 최소화
+    safeLog('Approve credit card request received');
+
+    // 🔒 입력 검증
     if (!submissionId || !signature || !employeeName || !cardNumber || !purchases) {
+      logError('Missing required fields', 'approve-credit-card');
       return NextResponse.json({
         success: false,
         error: 'Missing required fields'
-      });
+      }, { status: 400 });
     }
 
-    // Calculate total amount
+    // 🔒 XSS 방지: HTML Escape
+    const safeName = sanitizeString(employeeName, 100);
+    const safeCardNumber = sanitizeString(cardNumber, 4);
+    const safeDate = sanitizeString(date, 20);
+
+    // Calculate total amount with sanitization
     const totalAmount = purchases.reduce((sum: number, purchase: Purchase) => {
-      return sum + (parseFloat(purchase.amount) || 0);
+      return sum + sanitizeAmount(purchase.amount);
     }, 0);
+
+    // 🔒 XSS 방지: purchases 배열의 각 항목도 escape
+    interface SafePurchase {
+      date: string;
+      vendor: string;
+      reason: string;
+      amount: number;
+      description: string;
+    }
+    
+    const safePurchases: SafePurchase[] = purchases.map((purchase: Purchase) => ({
+      date: sanitizeString(purchase.date, 20),
+      vendor: sanitizeString(purchase.vendor, 200),
+      reason: sanitizeString(purchase.reason, 500),
+      amount: sanitizeAmount(purchase.amount),
+      description: sanitizeString(purchase.description, 200)
+    }));
 
     // Generate HTML for PDF
     const html = `
@@ -46,7 +74,7 @@ export async function POST(request: NextRequest) {
       <html>
       <head>
         <meta charset="utf-8">
-        <title>Credit Card Receipt - ${employeeName}</title>
+        <title>Credit Card Receipt - ${safeName}</title>
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -157,15 +185,15 @@ export async function POST(request: NextRequest) {
           <h3>Employee Information</h3>
           <div class="info-row">
             <span class="info-label">Employee Name:</span>
-            <span class="info-value">${employeeName}</span>
+            <span class="info-value">${safeName}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Card Number:</span>
-            <span class="info-value">****${cardNumber}</span>
+            <span class="info-value">****${safeCardNumber}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Date of Purchase:</span>
-            <span class="info-value">${date}</span>
+            <span class="info-value">${safeDate}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Approval Date:</span>
@@ -184,12 +212,12 @@ export async function POST(request: NextRequest) {
             </tr>
           </thead>
           <tbody>
-            ${purchases.map((purchase: Purchase) => `
+            ${safePurchases.map((purchase) => `
               <tr>
                 <td>${purchase.date}</td>
                 <td>${purchase.vendor}</td>
                 <td>${purchase.reason}</td>
-                <td>$${parseFloat(purchase.amount).toFixed(2)}</td>
+                <td>$${purchase.amount.toFixed(2)}</td>
                 <td>${purchase.description}</td>
               </tr>
             `).join('')}
@@ -216,7 +244,13 @@ export async function POST(request: NextRequest) {
     `;
 
     // Delete the original submission from Firestore
-    await db.collection('credit-card-receipts').doc(submissionId).delete();
+    try {
+      await db.collection('credit-card-receipts').doc(submissionId).delete();
+      safeLog('Submission deleted from Firestore');
+    } catch (deleteError) {
+      logError(deleteError, 'Firestore delete');
+      // Continue even if delete fails
+    }
 
     return NextResponse.json({
       success: true,
@@ -225,10 +259,12 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error approving submission:', error);
+    logError(error, 'approve-credit-card');
+    
+    // 🔒 보안: 에러 메시지에서 민감 정보 제외
     return NextResponse.json({
       success: false,
       error: 'Failed to approve submission'
-    });
+    }, { status: 500 });
   }
 }

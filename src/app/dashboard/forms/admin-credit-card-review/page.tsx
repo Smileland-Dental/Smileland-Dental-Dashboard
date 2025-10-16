@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { collection, getDocs, deleteDoc, doc, setDoc } from 'firebase/firestore';
 import { ref, listAll, getDownloadURL, uploadBytes, deleteObject } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase.config';
+import { enableAllSecurityMeasures } from '@/lib/security-client';
 
 // Interfaces for type safety
 interface Purchase {
@@ -53,6 +54,19 @@ const AdminCreditCardReview = () => {
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
   const [filterOffice, setFilterOffice] = useState('');
+  const savedSignatureCanvasRef = useRef<HTMLCanvasElement>(null);
+
+  // 🔒 보안 조치 활성화
+  useEffect(() => {
+    enableAllSecurityMeasures({
+      disableConsole: true,
+      disableRightClick: true,
+      disableShortcuts: true,
+      disableCopy: false,
+      disableSelection: false,
+      monitorDevTools: false
+    });
+  }, []);
 
   // Load all submissions from Firestore
   const loadSubmissions = async () => {
@@ -144,9 +158,11 @@ const AdminCreditCardReview = () => {
         submissionPrefix = `${submission.employeeName}_${submission.cardNumber}_${submission.submissionId}`;
         console.log('🔍 Using submission ID for matching:', submission.submissionId);
       } else {
-        // Fallback to name + card number (less precise)
-        submissionPrefix = `${submission.employeeName}_${submission.cardNumber}`;
-        console.log('⚠️ No submission ID found, using fallback matching');
+        // No submission ID - cannot reliably match files, so don't load any
+        console.log('⚠️ No submission ID found, skipping file loading to avoid loading wrong files');
+        setReceiptFiles([]);
+        setLoadingFiles(false);
+        return;
       }
       
       console.log('🔍 Filtering files for submission:', {
@@ -298,6 +314,55 @@ const AdminCreditCardReview = () => {
     loadSubmissions();
   }, []);
 
+  // Initialize canvas when modal opens
+  useEffect(() => {
+    if (selectedSubmission && !selectedSubmission.signatureURL && canvasRef.current) {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        // Initialize canvas with white background and drawing styles
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+      }
+    }
+  }, [selectedSubmission]);
+
+  // Load saved signature to canvas (Elements 탭에서 URL 숨기기)
+  useEffect(() => {
+    const loadSavedSignature = async () => {
+      if (selectedSubmission?.signatureURL && savedSignatureCanvasRef.current) {
+        const canvas = savedSignatureCanvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // White background
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        try {
+          // Use API proxy to avoid CORS and hide URL
+          const response = await fetch(`/api/get-signature-image?url=${encodeURIComponent(selectedSubmission.signatureURL)}`);
+          if (!response.ok) throw new Error('Failed to fetch');
+          
+          const data = await response.json();
+          const img = new Image();
+          img.onload = () => {
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          };
+          img.src = data.dataUrl;
+        } catch (error) {
+          // Failed to load signature
+        }
+      }
+    };
+
+    loadSavedSignature();
+  }, [selectedSubmission]);
+
   // Filter submissions based on date range and office
   const getFilteredSubmissions = () => {
     let filtered = submissions;
@@ -305,33 +370,42 @@ const AdminCreditCardReview = () => {
     // Filter by date range (using submission date, not purchase date)
     if (filterDateFrom || filterDateTo) {
       filtered = filtered.filter((submission: Submission) => {
-        // Get the submission date in a more reliable way
-        let submissionDateStr;
+        // Use the date string directly if available (format: "YYYY-MM-DD")
+        // This is the California date selected by the user
+        let submissionDateStr = submission.date;
         
-        if (submission.submittedAt instanceof Date) {
-          // If it's already a Date object
-          const year = submission.submittedAt.getFullYear();
-          const month = String(submission.submittedAt.getMonth() + 1).padStart(2, '0');
-          const day = String(submission.submittedAt.getDate()).padStart(2, '0');
-          submissionDateStr = `${year}-${month}-${day}`;
-        } else {
-          // If it's a string or timestamp, convert to Date first
-          const submissionDate = new Date(submission.submittedAt);
-          const year = submissionDate.getFullYear();
-          const month = String(submissionDate.getMonth() + 1).padStart(2, '0');
-          const day = String(submissionDate.getDate()).padStart(2, '0');
+        // If date string is not in the expected format, try to convert from submittedAt
+        if (!submissionDateStr || !/^\d{4}-\d{2}-\d{2}$/.test(submissionDateStr)) {
+          let submissionDate: Date;
+          
+          if (submission.submittedAt instanceof Date) {
+            submissionDate = submission.submittedAt;
+          } else {
+            submissionDate = new Date(submission.submittedAt);
+          }
+          
+          // Get California time components using Intl.DateTimeFormat
+          const formatter = new Intl.DateTimeFormat('en-US', {
+            timeZone: 'America/Los_Angeles',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit'
+          });
+          
+          const parts = formatter.formatToParts(submissionDate);
+          const year = parts.find(p => p.type === 'year')?.value || '';
+          const month = parts.find(p => p.type === 'month')?.value || '';
+          const day = parts.find(p => p.type === 'day')?.value || '';
           submissionDateStr = `${year}-${month}-${day}`;
         }
         
         console.log('Filtering submission:', {
+          date: submission.date,
           submittedAt: submission.submittedAt,
           submissionDateStr,
           filterDateFrom,
           filterDateTo,
-          submission: submission.employeeName,
-          match: filterDateFrom && filterDateTo ? 
-            (submissionDateStr >= filterDateFrom && submissionDateStr <= filterDateTo) :
-            (filterDateFrom ? submissionDateStr >= filterDateFrom : submissionDateStr <= filterDateTo)
+          submission: submission.employeeName
         });
         
         // If only From date is set
@@ -371,19 +445,32 @@ const AdminCreditCardReview = () => {
   };
 
   // Handle signature drawing
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
     setIsDrawing(true);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    
+    let clientX, clientY;
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
     
     ctx.beginPath();
-    ctx.moveTo(e.clientX - rect.left, e.clientY - rect.top);
+    ctx.moveTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
   };
 
-  const draw = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
     if (!isDrawing) return;
     
     const canvas = canvasRef.current;
@@ -391,8 +478,19 @@ const AdminCreditCardReview = () => {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
     
-    ctx.lineTo(e.clientX - rect.left, e.clientY - rect.top);
+    let clientX, clientY;
+    if ('touches' in e) {
+      clientX = e.touches[0].clientX;
+      clientY = e.touches[0].clientY;
+    } else {
+      clientX = e.clientX;
+      clientY = e.clientY;
+    }
+    
+    ctx.lineTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
     ctx.stroke();
   };
 
@@ -410,6 +508,14 @@ const AdminCreditCardReview = () => {
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Reset drawing styles
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = 2;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        // Fill with white background
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
       }
     }
     setSignature('');
@@ -586,28 +692,24 @@ const AdminCreditCardReview = () => {
       // Check if we have a current session signature
       if (signatureToUse && signatureToUse.trim() !== '') {
         signatureData = signatureToUse;
-        console.log('📄 Using current session signature');
       }
       // If no current session signature, try to get from saved signature URL
       else if (selectedSubmission?.signatureURL && selectedSubmission.signatureURL.trim() !== '') {
         try {
-          console.log('📄 Converting signature URL to base64 data...');
-          const response = await fetch(selectedSubmission.signatureURL);
-          const blob = await response.blob();
-          const reader = new FileReader();
-          signatureData = await new Promise<string>((resolve, reject) => {
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-          console.log('📄 Converted signature URL to base64 data');
+          // Use API proxy to avoid CORS issues
+          const response = await fetch(`/api/get-signature-image?url=${encodeURIComponent(selectedSubmission.signatureURL)}`);
+          
+          if (!response.ok) {
+            throw new Error('Failed to fetch signature image');
+          }
+          
+          const data = await response.json();
+          signatureData = data.dataUrl;
         } catch (error) {
-          console.error('📄 Error converting signature URL:', error);
           signatureData = selectedSubmission.signatureURL; // Fallback to URL
-          console.log('📄 Using signature URL as fallback');
         }
       } else {
-        console.log('📄 No signature data available');
+        // No signature data available
       }
       
       console.log('📄 Final signature data type:', typeof signatureData);
@@ -784,32 +886,27 @@ const AdminCreditCardReview = () => {
       // Check if we have a current session signature (prefer signature over savedSignature)
       if (signature && signature.trim() !== '') {
         signatureData = signature;
-        console.log('📄 Using current session signature (signature)');
       }
       else if (savedSignature && savedSignature.trim() !== '') {
         signatureData = savedSignature;
-        console.log('📄 Using current session signature (savedSignature)');
       }
       // If no current session signature, try to get from saved signature URL
       else if (selectedSubmission?.signatureURL && selectedSubmission.signatureURL.trim() !== '') {
         try {
-          console.log('📄 Converting signature URL to base64 data...');
-          const response = await fetch(selectedSubmission.signatureURL);
-          const blob = await response.blob();
-          const reader = new FileReader();
-          signatureData = await new Promise<string>((resolve, reject) => {
-            reader.onload = () => resolve(reader.result as string);
-            reader.onerror = reject;
-            reader.readAsDataURL(blob);
-          });
-          console.log('📄 Converted signature URL to base64 data');
+          // Use API proxy to avoid CORS issues
+          const response = await fetch(`/api/get-signature-image?url=${encodeURIComponent(selectedSubmission.signatureURL)}`);
+          
+          if (!response.ok) {
+            throw new Error('Failed to fetch signature image');
+          }
+          
+          const data = await response.json();
+          signatureData = data.dataUrl;
         } catch (error) {
-          console.error('📄 Error converting signature URL:', error);
           signatureData = selectedSubmission.signatureURL; // Fallback to URL
-          console.log('📄 Using signature URL as fallback');
         }
       } else {
-        console.log('📄 No signature data available');
+        // No signature data available
       }
       
       console.log('📄 Final signature data type:', typeof signatureData);
@@ -1018,6 +1115,22 @@ const AdminCreditCardReview = () => {
       } catch (error) {
         console.error('Error uploading CSV file:', error);
         // Continue execution even if CSV upload fails
+      }
+      
+      // 🗑️ PDF 생성 및 CSV 저장 완료 후 Storage에서 서명 삭제
+      if (selectedSubmission?.signatureURL && selectedSubmission.signatureURL.startsWith('https://')) {
+        try {
+          const url = new URL(selectedSubmission.signatureURL);
+          const pathMatch = url.pathname.match(/\/o\/(.+)\?/);
+          
+          if (pathMatch && pathMatch[1]) {
+            const filePath = decodeURIComponent(pathMatch[1]);
+            const fileRef = ref(storage, filePath);
+            await deleteObject(fileRef);
+          }
+        } catch (deleteError) {
+          // 삭제 실패해도 계속 진행
+        }
       }
       
     } catch (error) {
@@ -1398,7 +1511,9 @@ const AdminCreditCardReview = () => {
       border: '2px solid #dee2e6',
       borderRadius: '8px',
       cursor: 'crosshair',
-      backgroundColor: 'white'
+      backgroundColor: 'white',
+      touchAction: 'none' as const,
+      maxWidth: '100%'
     },
     signatureButtons: {
       marginTop: '15px',
@@ -1629,7 +1744,26 @@ const AdminCreditCardReview = () => {
                     )}
                   </div>
                   <div style={styles.submissionDate}>
-                    Submitted: {submission.date}
+                    Submitted: {submission.date || (() => {
+                      // Fallback: Convert to California time zone if date string not available
+                      const submissionDate = submission.submittedAt instanceof Date 
+                        ? submission.submittedAt 
+                        : new Date(submission.submittedAt);
+                      
+                      const formatter = new Intl.DateTimeFormat('en-US', {
+                        timeZone: 'America/Los_Angeles',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit'
+                      });
+                      
+                      const parts = formatter.formatToParts(submissionDate);
+                      const year = parts.find(p => p.type === 'year')?.value || '';
+                      const month = parts.find(p => p.type === 'month')?.value || '';
+                      const day = parts.find(p => p.type === 'day')?.value || '';
+                      
+                      return `${year}-${month}-${day}`;
+                    })()}
                   </div>
                 </div>
                 <div style={styles.submissionDetails}>
@@ -1694,7 +1828,26 @@ const AdminCreditCardReview = () => {
                 <p><strong>Name:</strong> {selectedSubmission.employeeName}</p>
                 <p><strong>Office:</strong> {selectedSubmission.office}</p>
                 <p><strong>Card Number:</strong> ****{selectedSubmission.cardNumber}</p>
-                <p><strong>Submission Date:</strong> {selectedSubmission.date}</p>
+                <p><strong>Submission Date:</strong> {selectedSubmission.date || (() => {
+                  // Fallback: Convert to California time zone if date string not available
+                  const submissionDate = selectedSubmission.submittedAt instanceof Date 
+                    ? selectedSubmission.submittedAt 
+                    : new Date(selectedSubmission.submittedAt);
+                  
+                  const formatter = new Intl.DateTimeFormat('en-US', {
+                    timeZone: 'America/Los_Angeles',
+                    year: 'numeric',
+                    month: '2-digit',
+                    day: '2-digit'
+                  });
+                  
+                  const parts = formatter.formatToParts(submissionDate);
+                  const year = parts.find(p => p.type === 'year')?.value || '';
+                  const month = parts.find(p => p.type === 'month')?.value || '';
+                  const day = parts.find(p => p.type === 'day')?.value || '';
+                  
+                  return `${year}-${month}-${day}`;
+                })()}</p>
 
                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px'}}>
                   <h3 style={{margin: 0}}>Purchase Details</h3>
@@ -1920,15 +2073,19 @@ const AdminCreditCardReview = () => {
                   {selectedSubmission.signatureURL && (
                     <div style={{marginBottom: '20px', padding: '15px', backgroundColor: '#e8f5e8', borderRadius: '8px', border: '2px solid #28a745'}}>
                       <h4 style={{margin: '0 0 10px 0', color: '#155724'}}>✅ Saved Signature</h4>
-                      <img 
-                        src={selectedSubmission.signatureURL} 
-                        alt="Saved Signature" 
+                      <canvas 
+                        ref={savedSignatureCanvasRef}
+                        width={800}
+                        height={200}
                         style={{
                           maxWidth: '300px',
                           maxHeight: '100px',
+                          width: '100%',
+                          height: 'auto',
                           border: '1px solid #ddd',
                           backgroundColor: 'white',
-                          borderRadius: '4px'
+                          borderRadius: '4px',
+                          display: 'block'
                         }}
                       />
                       <p style={{margin: '10px 0 0 0', fontSize: '12px', color: '#666'}}>
@@ -1945,13 +2102,16 @@ const AdminCreditCardReview = () => {
                   {!selectedSubmission?.signatureURL && (
                     <canvas
                       ref={canvasRef}
-                      width={600}
+                      width={800}
                       height={200}
-                      style={styles.signatureCanvas}
+                      style={{...styles.signatureCanvas, width: '100%', height: 'auto', aspectRatio: '4/1'}}
                       onMouseDown={startDrawing}
                       onMouseMove={draw}
                       onMouseUp={stopDrawing}
                       onMouseLeave={stopDrawing}
+                      onTouchStart={startDrawing}
+                      onTouchMove={draw}
+                      onTouchEnd={stopDrawing}
                     />
                   )}
                   

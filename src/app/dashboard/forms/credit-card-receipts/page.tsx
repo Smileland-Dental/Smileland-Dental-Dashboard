@@ -4,6 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase.config';
+import { enableAllSecurityMeasures } from '@/lib/security-client';
 
 // Interfaces for type safety
 interface ReceiptFile {
@@ -41,6 +42,18 @@ const CreditCardReceipts = () => {
   const [submissionId, setSubmissionId] = useState('');
   // Auto-save status removed since auto-save is disabled
 
+  // 🔒 보안 조치 활성화
+  useEffect(() => {
+    enableAllSecurityMeasures({
+      disableConsole: true,
+      disableRightClick: true,
+      disableShortcuts: true,
+      disableCopy: false,
+      disableSelection: false,
+      monitorDevTools: false
+    });
+  }, []);
+
   // Office options
   const officeOptions = ['Bernard', 'California', 'Corporate', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
@@ -56,18 +69,19 @@ const CreditCardReceipts = () => {
   };
 
   // Save data to Firestore
-  const saveData = async () => {
+  const saveData = async (currentSubmissionId: string) => {
     try {
       // Generate unique document ID with timestamp to prevent overwriting
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
       const uniqueId = `${formData.name}_${formData.cardLastFour}_${timestamp}`;
+      
       const docRef = doc(db, 'credit-card-receipts', uniqueId);
       await setDoc(docRef, {
         name: formData.name,
         cardNumber: formData.cardLastFour,
-        date: formData.date,
+        date: formData.date, // Keep the California date string "YYYY-MM-DD"
         office: formData.office,
-        submissionId: submissionId,
+        submissionId: currentSubmissionId,
         data: collectFormData(),
         lastUpdated: new Date(),
         createdAt: new Date()
@@ -107,50 +121,16 @@ const CreditCardReceipts = () => {
       setLoading(true);
       setSubmitStatus('📤 Submitting...');
 
-      // Save data to Firestore (final save)
-      await saveData();
-      
-      // Firebase Extensions를 통한 자동 이메일 전송
-      // Firestore에 이메일 데이터 저장하면 자동으로 이메일 전송됨
-      try {
-        // 이메일 알림용 별도 문서 생성
-        const emailDocRef = doc(db, 'email-notifications', `${submissionId}_${Date.now()}`);
-        await setDoc(emailDocRef, {
-          to: 'manager@company.com', // 관리자 이메일
-          subject: `New Credit Card Receipt Submission - ${formData.name}`,
-          html: `
-            <h2>New Credit Card Receipt Submission</h2>
-            <p><strong>Employee:</strong> ${formData.name}</p>
-            <p><strong>Office:</strong> ${formData.office}</p>
-            <p><strong>Card Number:</strong> XXXX-XXXX-XXXX-${formData.cardLastFour}</p>
-            <p><strong>Submission Date:</strong> ${formData.date}</p>
-            <p><strong>Purchase Count:</strong> ${purchases.length}</p>
-            <p><strong>Total Amount:</strong> $${purchases.reduce((sum: number, purchase: Purchase) => sum + parseFloat(purchase.amount || '0'), 0).toFixed(2)}</p>
-            <p><strong>Submission ID:</strong> ${submissionId}</p>
-            
-            <h3>Purchase Details:</h3>
-            ${purchases.map((purchase: Purchase, index: number) => `
-              <div style="border: 1px solid #ddd; padding: 10px; margin: 10px 0;">
-                <h4>Purchase ${index + 1}</h4>
-                <p><strong>Date:</strong> ${purchase.date}</p>
-                <p><strong>Vendor:</strong> ${purchase.vendor}</p>
-                <p><strong>Reason:</strong> ${purchase.reason}</p>
-                <p><strong>Amount:</strong> $${purchase.amount}</p>
-                <p><strong>Account:</strong> ${purchase.description}</p>
-              </div>
-            `).join('')}
-            
-            <p>Please review the submission in the admin panel.</p>
-          `,
-          createdAt: new Date()
-        });
-        
-        console.log('📧 Email notification queued for manager');
-        setSubmitStatus('✅ Submitted successfully! Email sent to manager.');
-      } catch (error) {
-        console.error('📧 Email failed:', error);
-        setSubmitStatus('✅ Submitted successfully! (Email notification failed)');
+      // Generate submission ID if not already set (in case no files were uploaded)
+      let currentSubmissionId = submissionId;
+      if (!currentSubmissionId) {
+        currentSubmissionId = generateSubmissionId();
+        setSubmissionId(currentSubmissionId);
+        console.log('🆔 Generated submission ID during submit:', currentSubmissionId);
       }
+
+      // Save data to Firestore (final save)
+      await saveData(currentSubmissionId);
       
       // Reset form
       setFormData({ name: '', cardLastFour: '', date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), office: '' });
@@ -438,6 +418,17 @@ const CreditCardReceipts = () => {
 
   return (
     <div style={styles.body}>
+      <style>{`
+        /* Remove number input arrows/spinners */
+        input[type=number]::-webkit-inner-spin-button,
+        input[type=number]::-webkit-outer-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
+        input[type=number] {
+          -moz-appearance: textfield;
+        }
+      `}</style>
       <div style={styles.container}>
         <header style={styles.header}>
           <h1 style={styles.title}>Company Credit Card Receipt Form</h1>
