@@ -110,3 +110,30 @@ export function logError(error: unknown, context: string): void {
   }
 }
 
+/**
+ * CSV Injection 방지 (CSV 파일용)
+ * @param text - CSV 셀에 들어갈 텍스트
+ * @returns CSV Injection이 방지된 안전한 텍스트
+ */
+export function sanitizeCSVCell(text: string | number | null | undefined): string {
+  if (text === null || text === undefined) return '';
+  
+  const str = String(text);
+  
+  // 1. 빈 문자열
+  if (str.trim() === '') return '';
+  
+  // 2. CSV Formula Injection 방지 (=, +, -, @, 탭, 캐리지 리턴으로 시작)
+  if (str.match(/^[=+\-@\t\r]/)) {
+    return `'${str.replace(/"/g, '""')}`;
+  }
+  
+  // 3. 특수문자 escape (쉼표, 따옴표, 줄바꿈 포함 시 따옴표로 감싸기)
+  if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('\r')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  
+  // 4. 일반 텍스트
+  return str;
+}
+

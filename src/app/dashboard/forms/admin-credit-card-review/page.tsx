@@ -5,6 +5,7 @@ import { collection, getDocs, deleteDoc, doc, setDoc } from 'firebase/firestore'
 import { ref, listAll, getDownloadURL, uploadBytes, deleteObject } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase.config';
 import { enableAllSecurityMeasures } from '@/lib/security-client';
+import { sanitizeCSVCell } from '@/lib/security-server';
 
 // Interfaces for type safety
 interface Purchase {
@@ -1039,21 +1040,21 @@ const AdminCreditCardReview = () => {
             return sum + (parseFloat(purchase.amount) || 0);
           }, 0);
           
-            // Add each purchase as a row
+            // Add each purchase as a row with CSV Injection protection
             submission.purchases.forEach((purchase: Purchase, index: number) => {
               existingData.push([
-                index === 0 ? submission.employeeName : '',
-                index === 0 ? submission.office : '',
-                index === 0 ? `****${submission.cardNumber}` : '',
-                purchase.date,
-                purchase.vendor,
-                purchase.reason,
-                `$${parseFloat(purchase.amount).toFixed(2)}`,
-                purchase.description,
-                index === 0 ? `$${totalAmount.toFixed(2)}` : '',
-                submission.signatureSavedAt ? submission.signatureSavedAt.toDate().toLocaleDateString() : new Date().toLocaleDateString(),
-                'Approved & PDF Generated',
-                index === 0 ? (submission.pdfURL || '') : ''
+                index === 0 ? sanitizeCSVCell(submission.employeeName) : '',
+                index === 0 ? sanitizeCSVCell(submission.office) : '',
+                index === 0 ? sanitizeCSVCell(`****${submission.cardNumber}`) : '',
+                sanitizeCSVCell(purchase.date),
+                sanitizeCSVCell(purchase.vendor),
+                sanitizeCSVCell(purchase.reason),
+                sanitizeCSVCell(`$${parseFloat(purchase.amount).toFixed(2)}`),
+                sanitizeCSVCell(purchase.description),
+                index === 0 ? sanitizeCSVCell(`$${totalAmount.toFixed(2)}`) : '',
+                sanitizeCSVCell(submission.signatureSavedAt ? submission.signatureSavedAt.toDate().toLocaleDateString() : new Date().toLocaleDateString()),
+                sanitizeCSVCell('Approved & PDF Generated'),
+                index === 0 ? sanitizeCSVCell(submission.pdfURL || '') : ''
               ]);
             });
         }
@@ -1072,18 +1073,18 @@ const AdminCreditCardReview = () => {
       if (!currentSubmission) return;
       
       const newRows = currentSubmission.purchases.map((purchase: Purchase, index: number) => [
-        index === 0 ? currentSubmission.employeeName : '',
-        index === 0 ? currentSubmission.office : '',
-        index === 0 ? `****${currentSubmission.cardNumber}` : '',
-        purchase.date,
-        purchase.vendor,
-        purchase.reason,
-        `$${parseFloat(purchase.amount).toFixed(2)}`,
-        purchase.description,
-        index === 0 ? `$${totalAmount.toFixed(2)}` : '',
-        new Date().toLocaleDateString(),
-        'Approved & PDF Generated',
-        index === 0 ? pdfDownloadURL : '' // PDF URL
+        index === 0 ? sanitizeCSVCell(currentSubmission.employeeName) : '',
+        index === 0 ? sanitizeCSVCell(currentSubmission.office) : '',
+        index === 0 ? sanitizeCSVCell(`****${currentSubmission.cardNumber}`) : '',
+        sanitizeCSVCell(purchase.date),
+        sanitizeCSVCell(purchase.vendor),
+        sanitizeCSVCell(purchase.reason),
+        sanitizeCSVCell(`$${parseFloat(purchase.amount).toFixed(2)}`),
+        sanitizeCSVCell(purchase.description),
+        index === 0 ? sanitizeCSVCell(`$${totalAmount.toFixed(2)}`) : '',
+        sanitizeCSVCell(new Date().toLocaleDateString()),
+        sanitizeCSVCell('Approved & PDF Generated'),
+        index === 0 ? sanitizeCSVCell(pdfDownloadURL) : '' // PDF URL
       ]);
 
       // Combine existing and new data
