@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { escapeHtml, sanitizeAmount, sanitizeString, safeLog, logError } from '@/lib/security-server';
 
 // Interfaces for type safety
 interface Purchase {
@@ -17,12 +18,32 @@ interface FileData {
 // Convert image URL to Base64
 async function convertImageToBase64(imageUrl: string): Promise<string> {
   try {
-    const response = await fetch(imageUrl);
+    // 🔒 보안 1: Firebase Storage URL만 허용 (SSRF 방지)
+    if (!imageUrl.includes('firebasestorage.googleapis.com')) {
+      logError(`Invalid image URL: ${imageUrl}`, 'convertImageToBase64');
+      return imageUrl; // Fallback to original URL
+    }
+
+    // 🔒 보안 2: 타임아웃 설정 (30초)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    const response = await fetch(imageUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
     const arrayBuffer = await response.arrayBuffer();
+
+    // 🔒 보안 3: 파일 크기 제한 10MB (DoS 방지)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    if (arrayBuffer.byteLength > MAX_FILE_SIZE) {
+      logError(`File too large: ${arrayBuffer.byteLength} bytes`, 'convertImageToBase64');
+      return imageUrl; // Fallback to original URL
+    }
+
     const base64 = Buffer.from(arrayBuffer).toString('base64');
     return `data:image/jpeg;base64,${base64}`;
   } catch (error) {
-    console.warn('⚠️ Could not convert image to Base64:', error);
+    logError(error, 'convertImageToBase64');
     return imageUrl; // Fallback to original URL
   }
 }
@@ -32,48 +53,36 @@ export async function POST(request: NextRequest) {
   try {
     const { name, cardNumber, date, office, purchases, filesData, signature } = await request.json();
 
-    console.log('📄 PDF API received data:', { 
-      name, 
-      cardNumber, 
-      date, 
-      office, 
-      purchases: purchases?.length, 
-      filesData: filesData?.length,
-      signature: signature ? 'Present' : 'Missing'
-    });
-    
-    console.log('📄 Full request data:', {
-      name,
-      cardNumber,
-      date,
-      office,
-      purchases,
-      filesData,
-      signature: signature ? 'Present' : 'Missing'
-    });
-    
-    console.log('📄 Signature details:', {
-      signatureType: typeof signature,
-      signatureLength: signature ? signature.length : 0,
-      signatureStart: signature ? signature.substring(0, 50) + '...' : 'None',
-      hasSignature: !!signature,
-      isBase64: signature ? signature.startsWith('data:image') : false,
-      isURL: signature ? signature.startsWith('http') : false,
-      isMissing: signature === 'Missing',
-      signatureValue: signature
+    // 🔒 보안: Production에서는 민감 정보 로그 출력 안 함
+    safeLog('📄 PDF API received data:', { 
+      hasName: !!name,
+      hasCardNumber: !!cardNumber,
+      hasDate: !!date,
+      hasOffice: !!office,
+      purchaseCount: purchases?.length,
+      fileCount: filesData?.length,
+      hasSignature: !!signature
     });
 
+    // 🔒 입력 검증
     if (!name || !cardNumber || !purchases) {
+      logError('Missing required fields', 'generate-credit-card-pdf');
       return NextResponse.json({
         success: false,
         error: 'Missing required fields'
       });
     }
 
+    // 🔒 XSS 방지: HTML Escape
+    const safeName = sanitizeString(name, 100);
+    const safeCardNumber = sanitizeString(cardNumber, 4);
+    const safeDate = sanitizeString(date, 20);
+    const safeOffice = sanitizeString(office, 50);
+
     // Convert receipt images to Base64
     let base64FilesData: FileData[] = [];
     if (filesData && filesData.length > 0) {
-      console.log('📄 Converting receipt images to Base64...');
+      safeLog('📄 Converting receipt images to Base64...');
       for (const file of filesData as FileData[]) {
         try {
           const base64Url = await convertImageToBase64(file.url);
@@ -81,20 +90,37 @@ export async function POST(request: NextRequest) {
             ...file,
             url: base64Url
           });
-          console.log(`📄 Converted ${file.name} to Base64`);
+          safeLog(`📄 Converted file to Base64`);
         } catch (error) {
-          console.warn(`⚠️ Could not convert ${file.name} to Base64:`, error);
+          logError(error, 'Base64 conversion');
           base64FilesData.push(file); // Use original URL as fallback
         }
       }
     }
     
-    console.log('📄 Base64 conversion complete:', base64FilesData.length, 'files converted');
+    safeLog('📄 Base64 conversion complete:', base64FilesData.length);
 
-    // Calculate total amount
+    // Calculate total amount with sanitization
     const totalAmount = purchases.reduce((sum: number, purchase: Purchase) => {
-      return sum + (parseFloat(purchase.amount) || 0);
+      return sum + sanitizeAmount(purchase.amount);
     }, 0);
+
+    // 🔒 XSS 방지: purchases 배열의 각 항목도 escape
+    interface SafePurchase {
+      date: string;
+      vendor: string;
+      reason: string;
+      amount: number;
+      description: string;
+    }
+    
+    const safePurchases: SafePurchase[] = purchases.map((purchase: Purchase) => ({
+      date: sanitizeString(purchase.date, 20),
+      vendor: sanitizeString(purchase.vendor, 200),
+      reason: sanitizeString(purchase.reason, 500),
+      amount: sanitizeAmount(purchase.amount),
+      description: sanitizeString(purchase.description, 200)
+    }));
 
     // Generate HTML for PDF
     const html = `
@@ -102,7 +128,7 @@ export async function POST(request: NextRequest) {
       <html>
       <head>
         <meta charset="utf-8">
-        <title>Credit Card Receipt - ${name}</title>
+        <title>Credit Card Receipt - ${safeName}</title>
         <style>
           body {
             font-family: Arial, sans-serif;
@@ -216,22 +242,22 @@ export async function POST(request: NextRequest) {
       </head>
       <body>
         <div class="header">
-          <h1>${office || 'Company'} Credit Card Receipt</h1>
+          <h1>${safeOffice || 'Company'} Credit Card Receipt</h1>
           <div class="header-line"></div>
         </div>
 
         <div class="info-section">
           <div class="info-row">
             <span class="info-label">Name:</span>
-            <span class="info-value">${name}</span>
+            <span class="info-value">${safeName}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Card Number:</span>
-            <span class="info-value">XXXX-XXXX-XXXX-${cardNumber}</span>
+            <span class="info-value">XXXX-XXXX-XXXX-${safeCardNumber}</span>
           </div>
           <div class="info-row">
             <span class="info-label">Submission Date:</span>
-            <span class="info-value">${date}</span>
+            <span class="info-value">${safeDate}</span>
           </div>
         </div>
 
@@ -248,13 +274,13 @@ export async function POST(request: NextRequest) {
             </tr>
           </thead>
           <tbody>
-            ${purchases.map((purchase: Purchase, index: number) => `
+            ${safePurchases.map((purchase, index: number) => `
               <tr>
                 <td>${index + 1}</td>
                 <td>${purchase.date}</td>
                 <td>${purchase.vendor}</td>
                 <td>${purchase.reason}</td>
-                <td>$${parseFloat(purchase.amount).toFixed(2)}</td>
+                <td>$${purchase.amount.toFixed(2)}</td>
                 <td>${purchase.description}</td>
               </tr>
             `).join('')}
@@ -298,13 +324,7 @@ export async function POST(request: NextRequest) {
       </html>
     `;
 
-    console.log('📄 PDF HTML generated successfully, length:', html.length);
-    console.log('📄 Signature section included:', signature && signature.trim() !== '' ? 'Yes' : 'No');
-    console.log('📄 Final signature check:', {
-      hasSignature: !!signature,
-      signatureNotEmpty: signature && signature.trim() !== '',
-      signatureLength: signature ? signature.length : 0
-    });
+    safeLog('📄 PDF HTML generated successfully');
     
     return NextResponse.json({
       success: true,
@@ -313,10 +333,12 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('📄 Error generating PDF:', error);
+    logError(error, 'generate-credit-card-pdf');
+    
+    // 🔒 보안: 에러 메시지에서 민감 정보 제외
     return NextResponse.json({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
-    });
+      error: 'Failed to generate PDF'
+    }, { status: 500 });
   }
 }

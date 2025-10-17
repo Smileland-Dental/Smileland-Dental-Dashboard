@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { initializeApp, getApps } from 'firebase-admin/app';
 import { getFirestore } from 'firebase-admin/firestore';
 import { credential } from 'firebase-admin';
+import { safeLog, logError } from '@/lib/security-server';
 
 // Initialize Firebase Admin SDK
 if (!getApps().length) {
@@ -81,10 +82,12 @@ export async function GET(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('Error loading submissions:', error);
+    logError(error, 'credit-card-submissions');
+    
+    // 🔒 보안: 에러 메시지에서 민감 정보 제외
     return NextResponse.json({
       success: false,
       error: 'Failed to load submissions'
-    });
+    }, { status: 500 });
   }
 }

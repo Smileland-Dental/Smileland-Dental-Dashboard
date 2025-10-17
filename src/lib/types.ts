@@ -20,3 +20,16 @@ export type AbsenceRequest = {
   final_approval: 'pending' | 'approved' | 'denied';
   final_name: string;
 };
+
+export interface Employee {
+  id: string;
+  name: string;
+  role: string;
+  office: string;
+  imageURL: string;
+  bio: string;
+}
+
+export type GroupedEmployees = {
+  [office: string]: Employee[];
+};
