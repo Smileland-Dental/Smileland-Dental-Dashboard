@@ -94,6 +94,10 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit }: { absence
       const finalNotes = [...remainingNotes, ...newNoteUrls];
 
       const dataToUpdate: { [key: string]: any } = {
+        manager_approval: 'pending',
+        final_approval: 'pending',
+        manager_name: '',
+        final_name: '',
         employee_comments: comments,
         date_submitted: getPSTDate(),
         excuse_note: finalNotes,
