@@ -3,6 +3,20 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { doc, setDoc, collection, getDocs, deleteDoc, getDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
+import { enableAllSecurityMeasures, sanitizeFirebaseDataClient, sanitizeFirebaseDocIdClient } from "@/lib/security-client";
+
+// 타입 정의
+interface PatientRowProps {
+  row: any;
+  updatePatientRow: (id: number, field: string, value: any) => void;
+  removePatientRow: (id: number) => void;
+  patientOfficeOptions: string[];
+  getVisitTypeOptions: (office: string) => string[];
+  remarkOptions: string[];
+  otherDutyOptions: string[];
+  inputStyle: React.CSSProperties;
+  buttonStyle: React.CSSProperties;
+}
 
 // 개별 환자 행 컴포넌트 (메모이제이션 최적화)
 const PatientRow = React.memo(({ 
@@ -15,7 +29,7 @@ const PatientRow = React.memo(({
   otherDutyOptions,
   inputStyle,
   buttonStyle
-}) => {
+}: PatientRowProps) => {
   const visitTypeOptions = getVisitTypeOptions(row.office);
   
   return (
@@ -151,10 +165,21 @@ const PatientRow = React.memo(({
 });
 
 function PatientLogSystem() {
+  // 보안 조치 활성화
+  useEffect(() => {
+    enableAllSecurityMeasures({
+      disableConsole: true,
+      disableRightClick: true,
+      disableShortcuts: true,
+      disableCopy: false,
+      disableSelection: false,
+      monitorDevTools: false
+    });
+  }, []);
   
   // 기본 상태
   const [loading, setLoading] = useState(false);
-  const [savedLogs, setSavedLogs] = useState([]);
+  const [savedLogs, setSavedLogs] = useState<any[]>([]);
   const [autoSaveStatus, setAutoSaveStatus] = useState(''); // 자동 저장 상태 표시
   
   // 마지막 저장된 데이터 추적 (dailyofficeduty 방식)
@@ -200,7 +225,7 @@ function PatientLogSystem() {
   const patientOfficeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
   
   // Visit Type 옵션을 Office에 따라 동적으로 생성 (useCallback 최적화)
-  const getVisitTypeOptions = useCallback((office) => {
+  const getVisitTypeOptions = useCallback((office: string): string[] => {
     if (office === 'Ortho') {
       return ['Adjustment', 'Bonding', 'Consult', 'Full Deband', 'Partial Deband', 'Records', 'Retainer Check', 'RPE Check'];
     } else {
@@ -221,7 +246,7 @@ function PatientLogSystem() {
   ];
 
   // Document ID 생성 함수 (모든 Basic Information 포함)
-  const generateDocId = (dutyDate, userName, workOffice, workHoursFrom, workHoursTo) => {
+  const generateDocId = (dutyDate: string, userName: string, workOffice: string, workHoursFrom: string, workHoursTo: string): string => {
     return `${dutyDate}_${userName}_${workOffice}_${workHoursFrom}_${workHoursTo}`.replace(/[^a-zA-Z0-9_-]/g, '_');
   };
 
@@ -255,24 +280,23 @@ function PatientLogSystem() {
         autoSaved: true
       };
 
-      const docId = generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo);
+      // Firebase 데이터 보안 검증
+      const safeDataToSave = sanitizeFirebaseDataClient(dataToSave);
+      const docId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
       
-      // 자동 저장 시작 표시
-      setAutoSaveStatus('💾 Saving...');
+      // 자동 저장 시작 (메시지 표시 안함)
       
       // Firebase 저장 (비동기 처리로 UI 블로킹 방지)
-      setDoc(doc(db, "patient-logs", docId), dataToSave)
+      setDoc(doc(db, "patient-logs", docId), safeDataToSave)
         .then(() => {
-          // 저장 성공 표시
-          setAutoSaveStatus('✅ Auto-saved');
-          
-          // 1초 후 상태 메시지 제거
-          setTimeout(() => {
-            setAutoSaveStatus('');
-          }, 1000);
+          // 자동 저장 성공 (메시지 표시 안함)
+          // setAutoSaveStatus('✅ Auto-saved');
         })
         .catch((error) => {
-          console.error("Auto-save error:", error);
+          // Production에서는 에러 로깅 비활성화
+          if (process.env.NODE_ENV !== 'production') {
+            console.error("Auto-save error:", error);
+          }
           setAutoSaveStatus('❌ Save failed');
           
           // 2초 후 상태 메시지 제거
@@ -282,7 +306,10 @@ function PatientLogSystem() {
         });
       
     } catch (error) {
-      console.error("Auto-save error:", error);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error("Auto-save error:", error);
+      }
     }
   }, [formData, patientRows]);
 
@@ -305,7 +332,7 @@ function PatientLogSystem() {
     }
 
     try {
-      const docId = generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo);
+      const docId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
       const docRef = doc(db, "patient-logs", docId);
       
       // 직접 document 참조로 조회 (전체 collection 스캔 방지)
@@ -316,7 +343,7 @@ function PatientLogSystem() {
         
         if (matchingLog && matchingLog.patientRows) {
           // 기존 저장된 환자 로그를 현재 patientRows에 로드
-          const loadedRows = matchingLog.patientRows.map((row, index) => ({
+          const loadedRows = matchingLog.patientRows.map((row: any, index: number) => ({
             ...row,
             id: index + 1
           }));
@@ -352,7 +379,10 @@ function PatientLogSystem() {
         }
       }
     } catch (error) {
-      console.error("Error loading existing data:", error);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error("Error loading existing data:", error);
+      }
     }
   };
 
@@ -379,17 +409,24 @@ function PatientLogSystem() {
       querySnapshot.forEach((doc) => {
         logs.push({ id: doc.id, ...doc.data() });
       });
-      setSavedLogs(logs.sort((a: any, b: any) => new Date(b.dutyDate).getTime() - new Date(a.dutyDate).getTime()));
+      setSavedLogs(logs.sort((a: any, b: any) => {
+        const dateA = a.dutyDate ? (new Date(a.dutyDate).getTime() || 0) : 0;
+        const dateB = b.dutyDate ? (new Date(b.dutyDate).getTime() || 0) : 0;
+        return dateB - dateA;
+      }));
     } catch (error) {
-      console.error("Error loading logs:", error);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error("Error loading logs:", error);
+      }
     }
   };
 
   // 폼 데이터 업데이트 (최고 성능 업데이트)
-  const updateFormData = useCallback((field, value) => {
+  const updateFormData = useCallback((field: string, value: any) => {
     setFormData(prev => {
       // 값이 같으면 업데이트하지 않음
-      if (prev[field] === value) return prev;
+      if ((prev as any)[field] === value) return prev;
       return { ...prev, [field]: value };
     });
   }, []);
@@ -415,7 +452,7 @@ function PatientLogSystem() {
   }, []);
 
   // 환자 행 삭제 (useCallback 최적화)
-  const removePatientRow = useCallback((id) => {
+  const removePatientRow = useCallback((id: number) => {
     setPatientRows(prevRows => {
       if (prevRows.length > 1) {
         return prevRows.filter(row => row.id !== id);
@@ -425,7 +462,7 @@ function PatientLogSystem() {
   }, []);
 
   // 환자 행 업데이트 (최고 성능 업데이트)
-  const updatePatientRow = useCallback((id, field, value) => {
+  const updatePatientRow = useCallback((id: number, field: string, value: any) => {
     setPatientRows(prevRows => {
       const rowIndex = prevRows.findIndex(row => row.id === id);
       
@@ -436,7 +473,7 @@ function PatientLogSystem() {
       const row = prevRows[rowIndex];
       
       // 값이 같으면 업데이트하지 않음
-      if (row[field] === value) {
+      if ((row as any)[field] === value) {
         return prevRows;
       }
       
@@ -511,8 +548,9 @@ function PatientLogSystem() {
         timestamp: new Date().toISOString()
       };
 
-      const docId = generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo);
-      await setDoc(doc(db, "patient-logs", docId), dataToSave);
+      const docId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
+      const safeDataToSave = sanitizeFirebaseDataClient(dataToSave);
+      await setDoc(doc(db, "patient-logs", docId), safeDataToSave);
 
       // 2. API로 PDF 생성
       setSubmitStatus('Generating PDF...');
@@ -574,8 +612,11 @@ function PatientLogSystem() {
       }
 
     } catch (error) {
-      console.error('Submit 오류:', error);
-      setSubmitStatus('❌ Submission failed: ' + error.message);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Submit 오류:', error);
+      }
+      setSubmitStatus('❌ Submission failed: ' + ((error as any).message || 'Unknown error'));
       setProgress(0);
       setTimeout(() => {
         setLoading(false);
@@ -586,14 +627,14 @@ function PatientLogSystem() {
 
   // 제출 중 브라우저 네비게이션 방지
   useEffect(() => {
-    const handleBeforeUnload = (e) => {
+    const handleBeforeUnload = (e: any) => {
       if (loading) {
         e.preventDefault();
         e.returnValue = '';
       }
     };
 
-    const handlePopState = (e) => {
+    const handlePopState = (e: any) => {
       if (loading) {
         e.preventDefault();
         window.history.pushState(null, '', window.location.href);
@@ -791,7 +832,14 @@ function PatientLogSystem() {
         <div style={containerStyle}>
         {/* 헤더 */}
         <div style={{ position: 'relative' }}>
-        <h1 style={headerStyle}>🌴 Patient Log</h1>
+        <h1 style={{ 
+          color: '#0077B6', 
+          textAlign: 'center', 
+          marginBottom: '20px', 
+          fontSize: '2.5rem', 
+          fontWeight: 'bold',
+          textShadow: '2px 2px 4px rgba(0,0,0,0.1)'
+        }}>🌴 Patient Log</h1>
           {autoSaveStatus && (
             <div style={{
               position: 'absolute',
@@ -1019,7 +1067,7 @@ function PatientLogSystem() {
           ) : (
             <>
             <div style={{ overflowX: 'auto' }}>
-              <table style={tableStyle}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', margin: '10px 0' }}>
               <thead style={{ backgroundColor: '#0077B6', color: 'white' }}>
                 <tr>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '60px' }}>#</th>

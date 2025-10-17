@@ -153,6 +153,65 @@ export const decryptData = (encrypted: string): string => {
 };
 
 /**
+ * Firebase 데이터 검증 (클라이언트 측)
+ * @param data - 검증할 데이터
+ * @returns 안전한 데이터
+ */
+export const sanitizeFirebaseDataClient = (data: any): any => {
+  if (!data || typeof data !== 'object') {
+    return {};
+  }
+  
+  const sanitized: any = {};
+  
+  for (const [key, value] of Object.entries(data)) {
+    // 키 검증
+    const safeKey = String(key).replace(/[^a-zA-Z0-9_]/g, '');
+    
+    if (safeKey && safeKey.length <= 100) {
+      if (typeof value === 'string') {
+        // 문자열 길이 제한 및 특수문자 제거
+        sanitized[safeKey] = value.substring(0, 1000).replace(/[<>]/g, '');
+      } else if (typeof value === 'number') {
+        // 숫자 범위 검증
+        if (value >= -1e10 && value <= 1e10 && !isNaN(value)) {
+          sanitized[safeKey] = value;
+        }
+      } else if (typeof value === 'boolean') {
+        sanitized[safeKey] = value;
+      } else if (value instanceof Date) {
+        sanitized[safeKey] = value;
+      } else if (Array.isArray(value)) {
+        // 배열 검증 (최대 100개 요소)
+        sanitized[safeKey] = value.slice(0, 100);
+      } else if (value && typeof value === 'object') {
+        // 중첩 객체 검증
+        sanitized[safeKey] = sanitizeFirebaseDataClient(value);
+      }
+    }
+  }
+  
+  return sanitized;
+};
+
+/**
+ * Firebase Document ID 검증 (클라이언트 측)
+ * @param docId - 검증할 문서 ID
+ * @returns 안전한 문서 ID
+ */
+export const sanitizeFirebaseDocIdClient = (docId: string): string => {
+  // 영문자, 숫자, 하이픈, 언더스코어만 허용
+  const sanitized = docId.replace(/[^a-zA-Z0-9_-]/g, '');
+  
+  // 길이 제한
+  if (sanitized.length > 1500) {
+    throw new Error('Document ID too long');
+  }
+  
+  return sanitized;
+};
+
+/**
  * 모든 보안 조치 활성화
  */
 export const enableAllSecurityMeasures = (options?: {

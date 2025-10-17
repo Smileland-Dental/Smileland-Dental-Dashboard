@@ -1,26 +1,61 @@
 import { NextRequest, NextResponse } from 'next/server';
 import puppeteer from 'puppeteer';
+import { Buffer } from 'buffer';
+import { escapeHtml, sanitizeString, safeLog, logError, sanitizePdfFilename, getSecurePuppeteerOptions, validatePdfGeneration, sanitizeArrayForPdf } from '@/lib/security-server';
 
 export async function POST(request: NextRequest) {
-  console.log('✅ PDF API POST 요청 받음!');
+  safeLog('✅ PDF API POST 요청 받음!');
   
   try {
     const { patientData } = await request.json();
-    console.log('📋 받은 데이터:', patientData);
+    safeLog('📋 받은 데이터:', { hasData: !!patientData });
     
-    // patientLogs 또는 patientRows 둘 다 처리하고 빈 행 필터링
+    // PDF 생성 데이터 크기 검증
+    const dataSize = JSON.stringify(patientData).length;
+    if (!validatePdfGeneration(dataSize)) {
+      throw new Error('Data size too large for PDF generation');
+    }
+    
+    // patientLogs 또는 patientRows 둘 다 처리하고 빈 행 필터링 (보안 강화)
     const allPatients = patientData.patientLogs || patientData.patientRows || [];
-    const patientList = allPatients.filter(row => 
-      row.name || row.office || row.appt_date || row.apptDate || row.visit_type || row.visitType || 
-      row.call_in || row.callIn || row.call_out || row.callOut || row.time || row.remark || 
-      row.other_duty || row.otherDuty
+    const safePatients = sanitizeArrayForPdf(allPatients, 1000); // 최대 1000개 행으로 제한
+    const patientList = safePatients.filter((row: any) => 
+      row && (
+        row.name || row.office || row.appt_date || row.apptDate || row.visit_type || row.visitType || 
+        row.call_in || row.callIn || row.call_out || row.callOut || row.time || row.remark || 
+        row.other_duty || row.otherDuty
+      )
     );
     
+    // 데이터 안전성 검증 및 이스케이프
+    const safeDutyDate = sanitizeString(patientData.dutyDate, 50);
+    const safeUserName = sanitizeString(patientData.userName, 100);
+    const safeWorkOffice = sanitizeString(patientData.workOffice, 100);
+    const safeWorkHoursFrom = sanitizeString(patientData.workHoursFrom, 20);
+    const safeWorkHoursTo = sanitizeString(patientData.workHoursTo, 20);
+    
+    // 시간을 12시간 형식으로 변환하는 함수
+    const convertTo12Hour = (timeStr: string): string => {
+      if (!timeStr || timeStr === '-') return '-';
+      try {
+        const [hours, minutes] = timeStr.split(':');
+        const hour = parseInt(hours);
+        const min = minutes || '00';
+        if (hour === 0) return `12:${min} AM`;
+        if (hour < 12) return `${hour}:${min} AM`;
+        if (hour === 12) return `12:${min} PM`;
+        return `${hour - 12}:${min} PM`;
+      } catch {
+        return timeStr;
+      }
+    };
+    const safeDailyWorkReport = sanitizeString(patientData.dailyWorkReport, 2000);
+
     const htmlContent = `
       <!DOCTYPE html>
       <html>
       <head>
-        <title>${patientData.dutyDate}_${patientData.userName}_${patientData.workOffice}_Patient Log</title>
+        <title>${escapeHtml(safeDutyDate)}_${escapeHtml(safeUserName)}_${escapeHtml(safeWorkOffice)}_Patient Log</title>
         <style>
           body { 
             font-family: Arial, sans-serif; 
@@ -278,21 +313,21 @@ export async function POST(request: NextRequest) {
           <div class="info-column">
             <div class="info-item">
               <span class="info-label">Duty Date:</span>
-            <span class="info-value">${patientData.dutyDate || '-'}</span>
+            <span class="info-value">${escapeHtml(safeDutyDate) || '-'}</span>
           </div>
             <div class="info-item">
               <span class="info-label">Name:</span>
-            <span class="info-value">${patientData.userName || '-'}</span>
+            <span class="info-value">${escapeHtml(safeUserName) || '-'}</span>
           </div>
           </div>
           <div class="info-column">
             <div class="info-item">
               <span class="info-label">Work Office:</span>
-              <span class="info-value">${patientData.workOffice || '-'}</span>
+              <span class="info-value">${escapeHtml(safeWorkOffice) || '-'}</span>
             </div>
             <div class="info-item">
               <span class="info-label">Work Hours:</span>
-              <span class="info-value">${patientData.workHoursFrom || '-'} - ${patientData.workHoursTo || '-'}</span>
+              <span class="info-value">${escapeHtml(convertTo12Hour(safeWorkHoursFrom))} - ${escapeHtml(convertTo12Hour(safeWorkHoursTo))}</span>
             </div>
           </div>
         </div>
@@ -305,7 +340,7 @@ export async function POST(request: NextRequest) {
             <div class="count-number">
               ${(() => {
                 const allPatients = patientData.patientLogs || patientData.patientRows || [];
-                return allPatients.filter(row => row.appt_date && row.name).length;
+                return allPatients.filter((row: any) => row.appt_date && row.name).length;
               })()}
             </div>
           </div>
@@ -314,7 +349,7 @@ export async function POST(request: NextRequest) {
             <div class="count-number">
               ${(() => {
                 const allPatients = patientData.patientLogs || patientData.patientRows || [];
-                return allPatients.filter(row => row.call_in).length;
+                return allPatients.filter((row: any) => row.call_in).length;
               })()}
             </div>
           </div>
@@ -323,7 +358,7 @@ export async function POST(request: NextRequest) {
             <div class="count-number">
               ${(() => {
                 const allPatients = patientData.patientLogs || patientData.patientRows || [];
-                return allPatients.filter(row => row.call_out).length;
+                return allPatients.filter((row: any) => row.call_out).length;
               })()}
             </div>
           </div>
@@ -348,20 +383,35 @@ export async function POST(request: NextRequest) {
             </tr>
           </thead>
           <tbody>
-              ${patientList.map((row, index) => `
+              ${patientList.map((row: any, index: number) => {
+                // 안전한 데이터 검증 및 정제
+                const safeName = sanitizeString(row?.name, 50);
+                const safeOffice = sanitizeString(row?.office, 50);
+                const safeApptDate = sanitizeString(row?.appt_date || row?.apptDate, 20);
+                const safeVisitType = sanitizeString(row?.visit_type || row?.visitType, 50);
+                const safeTime = sanitizeString(row?.time, 20);
+                const safeRemark = sanitizeString(row?.remark, 100);
+                const safeOtherDuty = sanitizeString(row?.other_duty || row?.otherDuty, 100);
+                
+                // 체크박스 값 안전하게 처리
+                const callIn = Boolean(row?.call_in || row?.callIn);
+                const callOut = Boolean(row?.call_out || row?.callOut);
+                
+                return `
                 <tr>
                   <td class="number-cell">${index + 1}</td>
-                  <td>${(row.name || '-').length > 12 ? (row.name || '-').substring(0, 12) : (row.name || '-')}</td>
-                  <td>${row.office || '-'}</td>
-                  <td style="text-align: center;">${row.appt_date || row.apptDate || '-'}</td>
-                  <td>${(row.visit_type || row.visitType || '-').length > 8 ? (row.visit_type || row.visitType || '-').substring(0, 8) : (row.visit_type || row.visitType || '-')}</td>
-                  <td class="checkbox-cell">${row.call_in || row.callIn ? '✓' : ''}</td>
-                  <td class="checkbox-cell">${row.call_out || row.callOut ? '✓' : ''}</td>
-                  <td style="text-align: center;">${row.time || '-'}</td>
-                  <td>${(row.remark || '-').length > 15 ? (row.remark || '-').substring(0, 15) : (row.remark || '-')}</td>
-                  <td>${(row.other_duty || row.otherDuty || '-').length > 15 ? (row.other_duty || row.otherDuty || '-').substring(0, 15) : (row.other_duty || row.otherDuty || '-')}</td>
+                  <td>${escapeHtml(safeName).length > 12 ? escapeHtml(safeName).substring(0, 12) : escapeHtml(safeName) || '-'}</td>
+                  <td>${escapeHtml(safeOffice) || '-'}</td>
+                  <td style="text-align: center;">${escapeHtml(safeApptDate) || '-'}</td>
+                  <td>${escapeHtml(safeVisitType).length > 8 ? escapeHtml(safeVisitType).substring(0, 8) : escapeHtml(safeVisitType) || '-'}</td>
+                  <td class="checkbox-cell">${callIn ? '✓' : ''}</td>
+                  <td class="checkbox-cell">${callOut ? '✓' : ''}</td>
+                  <td style="text-align: center;">${escapeHtml(convertTo12Hour(safeTime))}</td>
+                  <td>${escapeHtml(safeRemark).length > 15 ? escapeHtml(safeRemark).substring(0, 15) : escapeHtml(safeRemark) || '-'}</td>
+                  <td>${escapeHtml(safeOtherDuty).length > 15 ? escapeHtml(safeOtherDuty).substring(0, 15) : escapeHtml(safeOtherDuty) || '-'}</td>
               </tr>
-            `).join('')}
+            `;
+              }).join('')}
           </tbody>
         </table>
         ` : `
@@ -370,11 +420,11 @@ export async function POST(request: NextRequest) {
           </p>
         `}
 
-        ${patientData.dailyWorkReport ? `
+        ${safeDailyWorkReport ? `
           <div class="daily-report">
             <h3>Daily Work Report</h3>
             <div class="daily-report-content">
-              ${patientData.dailyWorkReport.replace(/\n/g, '<br>')}
+              ${escapeHtml(safeDailyWorkReport).replace(/\n/g, '<br>')}
             </div>
           </div>
         ` : ''}
@@ -387,22 +437,20 @@ export async function POST(request: NextRequest) {
             day: 'numeric',
             weekday: 'long',
             hour: '2-digit',
-            minute: '2-digit'
+            minute: '2-digit',
+            hour12: true
           })}</div>
         </div>
       </body>
       </html>
     `;
 
-    const filename = `${patientData.dutyDate}_${patientData.userName}_${patientData.workOffice}_Patient_Log`;
+    const filename = sanitizePdfFilename(`${safeDutyDate}_${safeUserName}_${safeWorkOffice}_Patient_Log`);
     
-    console.log('🎯 PDF HTML 생성 완료');
+    safeLog('🎯 PDF HTML 생성 완료');
     
-    // Puppeteer로 PDF 생성
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
-    });
+    // Puppeteer로 PDF 생성 (보안 옵션 적용)
+    const browser = await puppeteer.launch(getSecurePuppeteerOptions());
     
     const page = await browser.newPage();
     await page.setContent(htmlContent);
@@ -423,25 +471,31 @@ export async function POST(request: NextRequest) {
       displayHeaderFooter: false
     });
     
+    // 브라우저 안전하게 종료
     await browser.close();
     
-    // 파일명 생성
-    const pdfFilename = `${filename}.pdf`;
+    // 파일명 생성 (이미 sanitizePdfFilename에서 .pdf 추가됨)
+    const pdfFilename = filename;
     
-    return new NextResponse(pdf, {
+    // PDF 응답 생성 (보안 헤더 추가)
+    return new NextResponse(Buffer.from(pdf), {
       headers: {
         'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${pdfFilename}"`
+        'Content-Disposition': `attachment; filename="${pdfFilename}"`,
+        'X-Content-Type-Options': 'nosniff',
+        'X-Frame-Options': 'DENY',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
       }
     });
 
   } catch (error) {
-    console.error('❌ PDF 생성 오류:', error);
+    logError(error, 'generate-pdf');
     return NextResponse.json(
       { 
         success: false, 
-        error: `PDF 생성 실패: ${error.message}`,
-        details: error.stack 
+        error: 'PDF 생성 중 오류가 발생했습니다.' 
       },
       { status: 500 }
     );

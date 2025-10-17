@@ -3,8 +3,21 @@
 import React, { useState, useEffect } from "react";
 import { doc, setDoc, collection, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
+import { enableAllSecurityMeasures, sanitizeFirebaseDataClient, sanitizeFirebaseDocIdClient } from "@/lib/security-client";
 
 export default function ShowCheckSystem() {
+  // 보안 조치 활성화
+  useEffect(() => {
+    enableAllSecurityMeasures({
+      disableConsole: true,
+      disableRightClick: true,
+      disableShortcuts: true,
+      disableCopy: false,
+      disableSelection: false,
+      monitorDevTools: false
+    });
+  }, []);
+
   // 상태 관리
   const [loading, setLoading] = useState(false);
   const [appointments, setAppointments] = useState<any[]>([]);
@@ -32,14 +45,14 @@ export default function ShowCheckSystem() {
 
   // 제출 중 브라우저 네비게이션 방지
   useEffect(() => {
-    const handleBeforeUnload = (e) => {
+    const handleBeforeUnload = (e: any) => {
       if (pdfLoading) {
         e.preventDefault();
         e.returnValue = '';
       }
     };
 
-    const handlePopState = (e) => {
+    const handlePopState = (e: any) => {
       if (pdfLoading) {
         e.preventDefault();
         window.history.pushState(null, '', window.location.href);
@@ -88,7 +101,10 @@ export default function ShowCheckSystem() {
       
       setAppointments(allAppointments);
     } catch (error) {
-      console.error("Error loading appointments:", error);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error("Error loading appointments:", error);
+      }
       alert('❌ 데이터 로드 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
@@ -121,7 +137,8 @@ export default function ShowCheckSystem() {
   const updateShowStatus = async (appointment: any, newStatus: string) => {
     try {
       // 해당 document를 다시 가져와서 patientRows 업데이트
-      const docRef = doc(db, "patient-logs", appointment.docId);
+      const safeDocId = sanitizeFirebaseDocIdClient(appointment.docId);
+      const docRef = doc(db, "patient-logs", safeDocId);
       const querySnapshot = await getDocs(collection(db, "patient-logs"));
       let currentData: any = null;
       
@@ -140,25 +157,32 @@ export default function ShowCheckSystem() {
       return row;
         });
         
-        // Firebase 업데이트
-        await updateDoc(docRef, {
+        // Firebase 업데이트 (보안 검증 적용)
+        const safeUpdateData = sanitizeFirebaseDataClient({
           patientRows: updatedPatientRows,
           lastUpdated: new Date().toISOString()
         });
+        await updateDoc(docRef, safeUpdateData);
         
         // 로컬 상태 업데이트
         setAppointments(prev => 
-          prev.map(apt => 
+          prev.map((apt: any) => 
             apt.docId === appointment.docId && apt.rowIndex === appointment.rowIndex
               ? { ...apt, showStatus: newStatus }
               : apt
           )
         );
         
-        console.log(`✅ ${appointment.name}의 상태가 ${newStatus}로 업데이트되었습니다.`);
+        // Production에서는 로깅 비활성화
+        if (process.env.NODE_ENV !== 'production') {
+          console.log(`✅ ${appointment.name}의 상태가 ${newStatus}로 업데이트되었습니다.`);
+        }
       }
     } catch (error) {
-      console.error("Error updating show status:", error);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error("Error updating show status:", error);
+      }
       alert('❌ 상태 업데이트 중 오류가 발생했습니다.');
     }
   };
@@ -216,7 +240,10 @@ export default function ShowCheckSystem() {
         try {
           await deleteProcessedAppointments();
         } catch (deleteError) {
-          console.error('Error deleting processed data:', deleteError);
+          // Production에서는 에러 로깅 비활성화
+          if (process.env.NODE_ENV !== 'production') {
+            console.error('Error deleting processed data:', deleteError);
+          }
         }
         
         setSubmitStatus('Complete!');
@@ -244,8 +271,11 @@ export default function ShowCheckSystem() {
       }
 
     } catch (error) {
-      console.error('PDF generation error:', error);
-      setSubmitStatus('❌ PDF generation failed: ' + error.message);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('PDF generation error:', error);
+      }
+      setSubmitStatus('❌ PDF generation failed: ' + ((error as any).message || 'Unknown error'));
       setProgress(0);
       setTimeout(() => {
         setPdfLoading(false);
@@ -273,11 +303,12 @@ export default function ShowCheckSystem() {
 
       // 각 document 확인 및 처리
       for (const [docId, processedRowIndices] of documentsToCheck) {
-        const docRef = doc(db, "patient-logs", docId);
+        const safeDocId = sanitizeFirebaseDocIdClient(docId);
+        const docRef = doc(db, "patient-logs", safeDocId);
         
         // 현재 document 데이터 가져오기
         const querySnapshot = await getDocs(collection(db, "patient-logs"));
-        let currentData = null;
+        let currentData: any = null;
         
         querySnapshot.forEach((document) => {
           if (document.id === docId) {
@@ -300,10 +331,15 @@ export default function ShowCheckSystem() {
             // 약속이 있었고 모든 약속이 처리됨 → 전체 document 삭제 (빈 row들도 함께)
             await deleteDoc(docRef);
             deletedDocuments.push(docId);
-            console.log(`🗑️ Document ${docId} completely deleted (all ${allAppointmentRows.length} appointments processed, including empty rows)`);
+            // Production에서는 로깅 비활성화
+            if (process.env.NODE_ENV !== 'production') {
+              console.log(`🗑️ Document ${docId} completely deleted (all ${allAppointmentRows.length} appointments processed, including empty rows)`);
+            }
           } else if (allAppointmentRows.length === 0) {
             // 애초에 약속이 없는 document → 삭제하지 않음
-            console.log(`📋 Document ${docId} has no appointments, keeping as is`);
+            if (process.env.NODE_ENV !== 'production') {
+              console.log(`📋 Document ${docId} has no appointments, keeping as is`);
+            }
           } else {
             // 아직 처리 안 된 약속이 있음 → 처리된 것들만 빈 상태로 초기화
             const updatedPatientRows = currentData.patientRows.map((row: any, index: number) => {
@@ -325,12 +361,15 @@ export default function ShowCheckSystem() {
               return row;
             });
 
-            await updateDoc(docRef, {
+            const safeUpdateData = sanitizeFirebaseDataClient({
               patientRows: updatedPatientRows,
               lastUpdated: new Date().toISOString()
             });
+            await updateDoc(docRef, safeUpdateData);
             updatedDocuments.push(docId);
-            console.log(`📝 Document ${docId} updated (${unprocessedAppointments.length} appointments remaining)`);
+            if (process.env.NODE_ENV !== 'production') {
+              console.log(`📝 Document ${docId} updated (${unprocessedAppointments.length} appointments remaining)`);
+            }
           }
         }
       }
@@ -344,10 +383,15 @@ export default function ShowCheckSystem() {
       
       setFilteredAppointments([]);
       
-      console.log(`✅ Processing complete: ${deletedDocuments.length} documents deleted, ${updatedDocuments.length} documents updated`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`✅ Processing complete: ${deletedDocuments.length} documents deleted, ${updatedDocuments.length} documents updated`);
+      }
 
     } catch (error) {
-      console.error('Error deleting processed appointments:', error);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Error deleting processed appointments:', error);
+      }
       throw error;
     }
   };
@@ -439,7 +483,7 @@ export default function ShowCheckSystem() {
     boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)'
   };
 
-  const getStatusColor = (status, index) => {
+  const getStatusColor = (status: string, index: number): string => {
     switch (status) {
       case 'show': return '#d4edda'; // 초록색 배경
       case 'no-show': return '#f8d7da'; // 빨간색 배경
@@ -448,7 +492,7 @@ export default function ShowCheckSystem() {
     }
   };
 
-  const getStatusText = (status) => {
+  const getStatusText = (status: string): string => {
     switch (status) {
       case 'show': return 'Show ✅';
       case 'no-show': return 'No Show ❌';
@@ -564,7 +608,14 @@ export default function ShowCheckSystem() {
 
         <div style={containerStyle}>
         {/* 헤더 */}
-        <h1 style={headerStyle}>📋 Appointment Show/No Show Check</h1>
+        <h1 style={{ 
+          color: '#0077B6', 
+          textAlign: 'center', 
+          marginBottom: '20px', 
+          fontSize: '2.5rem', 
+          fontWeight: 'bold',
+          textShadow: '2px 2px 4px rgba(0,0,0,0.1)'
+        }}>📋 Appointment Show/No Show Check</h1>
 
         {/* Name 입력 섹션 */}
         <div style={sectionStyle}>
@@ -623,7 +674,7 @@ export default function ShowCheckSystem() {
                 onChange={(e) => setSelectedOffice(e.target.value)}
                 style={inputStyle}
               >
-                {officeOptions.map(office => (
+                {officeOptions.map((office: string) => (
                   <option key={office} value={office}>{office}</option>
                 ))}
               </select>
@@ -673,7 +724,7 @@ export default function ShowCheckSystem() {
             </div>
           ) : (
           <div style={{ overflowX: 'auto' }}>
-            <table style={tableStyle}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', margin: '10px 0' }}>
               <thead style={{ backgroundColor: '#0077B6', color: 'white' }}>
                 <tr>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Patient Name</th>
@@ -685,7 +736,7 @@ export default function ShowCheckSystem() {
                 </tr>
               </thead>
               <tbody>
-                  {filteredAppointments.map((appointment, index) => (
+                  {filteredAppointments.map((appointment: any, index: number) => (
                     <tr 
                       key={`${appointment.docId}-${appointment.rowIndex}`} 
                       style={{ 

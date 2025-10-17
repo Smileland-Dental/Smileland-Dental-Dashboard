@@ -137,3 +137,266 @@ export function sanitizeCSVCell(text: string | number | null | undefined): strin
   return str;
 }
 
+/**
+ * Firebase Collection 이름 검증 (NoSQL Injection 방지)
+ * @param collectionName - 검증할 컬렉션 이름
+ * @returns 안전한 컬렉션 이름
+ */
+export function sanitizeFirebaseCollection(collectionName: string): string {
+  // 허용된 컬렉션 이름만 사용
+  const allowedCollections = [
+    'patient-logs',
+    'fee-reduction-requests',
+    'credit-card-receipts',
+    'email-notifications'
+  ];
+  
+  if (!allowedCollections.includes(collectionName)) {
+    throw new Error('Invalid collection name');
+  }
+  
+  return collectionName;
+}
+
+/**
+ * Firebase Document ID 검증
+ * @param docId - 검증할 문서 ID
+ * @returns 안전한 문서 ID
+ */
+export function sanitizeFirebaseDocId(docId: string): string {
+  // Firebase 문서 ID는 영문자, 숫자, 하이픈, 언더스코어만 허용
+  const sanitized = docId.replace(/[^a-zA-Z0-9_-]/g, '');
+  
+  // 길이 제한 (Firebase 문서 ID 최대 길이)
+  if (sanitized.length > 1500) {
+    throw new Error('Document ID too long');
+  }
+  
+  return sanitized;
+}
+
+/**
+ * Firebase 데이터 검증 및 정제
+ * @param data - 검증할 데이터 객체
+ * @returns 안전한 데이터 객체
+ */
+export function sanitizeFirebaseData(data: any): any {
+  if (!data || typeof data !== 'object') {
+    return {};
+  }
+  
+  const sanitized: any = {};
+  
+  for (const [key, value] of Object.entries(data)) {
+    // 키 검증 (영문자, 숫자, 언더스코어만 허용)
+    const safeKey = String(key).replace(/[^a-zA-Z0-9_]/g, '');
+    
+    if (safeKey && safeKey.length <= 100) {
+      if (typeof value === 'string') {
+        sanitized[safeKey] = sanitizeString(value, 1000);
+      } else if (typeof value === 'number') {
+        // 숫자 범위 검증
+        if (value >= -1e10 && value <= 1e10 && !isNaN(value)) {
+          sanitized[safeKey] = value;
+        }
+      } else if (typeof value === 'boolean') {
+        sanitized[safeKey] = value;
+      } else if (value instanceof Date) {
+        sanitized[safeKey] = value;
+      } else if (Array.isArray(value)) {
+        // 배열 검증 (최대 100개 요소)
+        sanitized[safeKey] = value.slice(0, 100).map(item => 
+          typeof item === 'string' ? sanitizeString(item, 500) : item
+        );
+      } else if (value && typeof value === 'object') {
+        // 중첩 객체 검증 (최대 2단계)
+        sanitized[safeKey] = sanitizeFirebaseData(value);
+      }
+    }
+  }
+  
+  return sanitized;
+}
+
+/**
+ * Firebase 쿼리 제한 (DoS 방지)
+ * @param limit - 쿼리 제한 수
+ * @returns 안전한 제한 수
+ */
+export function sanitizeFirebaseLimit(limit: number): number {
+  const maxLimit = 1000; // 최대 1000개 문서
+  const minLimit = 1;    // 최소 1개 문서
+  
+  if (typeof limit !== 'number' || isNaN(limit)) {
+    return 50; // 기본값
+  }
+  
+  return Math.max(minLimit, Math.min(maxLimit, Math.floor(limit)));
+}
+
+/**
+ * PDF 파일명 검증 및 정제
+ * @param filename - 검증할 파일명
+ * @returns 안전한 파일명
+ */
+export function sanitizePdfFilename(filename: string): string {
+  if (!filename || typeof filename !== 'string') {
+    return 'document.pdf';
+  }
+  
+  // 특수문자 제거 (영문자, 숫자, 하이픈, 언더스코어, 점만 허용)
+  const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+  
+  // 길이 제한 (최대 100자)
+  const limited = sanitized.substring(0, 100);
+  
+  // .pdf 확장자 추가 (없는 경우)
+  if (!limited.toLowerCase().endsWith('.pdf')) {
+    return `${limited}.pdf`;
+  }
+  
+  return limited;
+}
+
+/**
+ * HTML 콘텐츠 보안 검증
+ * @param html - 검증할 HTML 문자열
+ * @returns 안전한 HTML 문자열
+ */
+export function sanitizeHtmlContent(html: string): string {
+  if (!html || typeof html !== 'string') {
+    return '';
+  }
+  
+  // HTML 크기 제한 (최대 1MB)
+  if (html.length > 1024 * 1024) {
+    throw new Error('HTML content too large');
+  }
+  
+  // 위험한 태그 및 속성 제거
+  const dangerousTags = [
+    'script', 'iframe', 'object', 'embed', 'applet', 'form', 'input', 'button',
+    'link', 'meta', 'style', 'base', 'frame', 'frameset'
+  ];
+  
+  let sanitized = html;
+  
+  // 위험한 태그 제거
+  dangerousTags.forEach(tag => {
+    const regex = new RegExp(`<${tag}[^>]*>.*?</${tag}>`, 'gi');
+    sanitized = sanitized.replace(regex, '');
+    
+    const selfClosingRegex = new RegExp(`<${tag}[^>]*/?>`, 'gi');
+    sanitized = sanitized.replace(selfClosingRegex, '');
+  });
+  
+  // 위험한 속성 제거
+  const dangerousAttributes = [
+    'onload', 'onerror', 'onclick', 'onmouseover', 'onfocus', 'onblur',
+    'onchange', 'onsubmit', 'onreset', 'onselect', 'onkeydown', 'onkeyup',
+    'onkeypress', 'onmousedown', 'onmouseup', 'onmousemove', 'onmouseout',
+    'javascript:', 'vbscript:', 'data:', 'file:'
+  ];
+  
+  dangerousAttributes.forEach(attr => {
+    const regex = new RegExp(`${attr}\\s*=\\s*["'][^"']*["']`, 'gi');
+    sanitized = sanitized.replace(regex, '');
+  });
+  
+  return sanitized;
+}
+
+/**
+ * Puppeteer 보안 옵션 생성
+ * @returns 안전한 Puppeteer 실행 옵션
+ */
+export function getSecurePuppeteerOptions(): any {
+  return {
+    headless: true,
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--disable-gpu',
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+      '--disable-features=TranslateUI',
+      '--disable-ipc-flooding-protection',
+      '--disable-extensions',
+      '--disable-plugins',
+      '--disable-images',
+      '--disable-javascript',
+      '--disable-web-security',
+      '--disable-features=VizDisplayCompositor',
+      '--memory-pressure-off',
+      '--max_old_space_size=4096'
+    ],
+    timeout: 30000, // 30초 타임아웃
+    protocolTimeout: 30000
+  };
+}
+
+/**
+ * PDF 생성 제한 (DoS 방지)
+ * @param dataSize - 데이터 크기
+ * @returns 허용 여부
+ */
+export function validatePdfGeneration(dataSize: number): boolean {
+  const maxDataSize = 10 * 1024 * 1024; // 10MB 제한
+  
+  if (dataSize > maxDataSize) {
+    return false;
+  }
+  
+  return true;
+}
+
+/**
+ * 안전한 배열 처리 (PDF 생성용)
+ * @param array - 처리할 배열
+ * @param maxLength - 최대 길이
+ * @returns 안전한 배열
+ */
+export function sanitizeArrayForPdf(array: any[], maxLength: number = 1000): any[] {
+  if (!Array.isArray(array)) {
+    return [];
+  }
+  
+  // 배열 길이 제한
+  const limitedArray = array.slice(0, maxLength);
+  
+  // 각 요소 검증
+  return limitedArray.map((item, index) => {
+    if (!item || typeof item !== 'object') {
+      return null;
+    }
+    
+    // 기본적인 객체 검증
+    const safeItem: any = {};
+    
+    // 허용된 필드만 추출
+    const allowedFields = [
+      'name', 'office', 'appt_date', 'apptDate', 'visit_type', 'visitType',
+      'call_in', 'callIn', 'call_out', 'callOut', 'time', 'remark', 'other_duty', 'otherDuty'
+    ];
+    
+    allowedFields.forEach(field => {
+      if (item[field] !== undefined && item[field] !== null) {
+        if (typeof item[field] === 'string') {
+          safeItem[field] = sanitizeString(item[field], 500);
+        } else if (typeof item[field] === 'boolean') {
+          safeItem[field] = Boolean(item[field]);
+        } else if (typeof item[field] === 'number') {
+          safeItem[field] = isNaN(item[field]) ? 0 : item[field];
+        }
+      }
+    });
+    
+    return safeItem;
+  }).filter(item => item !== null);
+}
+

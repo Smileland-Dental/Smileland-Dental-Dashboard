@@ -3,8 +3,14 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
+import { enableAllSecurityMeasures, sanitizeFirebaseDataClient, sanitizeFirebaseDocIdClient } from "@/lib/security-client";
 
 export default function AddOnTreatment() {
+  // 보안 조치 활성화
+  useEffect(() => {
+    enableAllSecurityMeasures();
+  }, []);
+
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [submitStatus, setSubmitStatus] = useState('');
@@ -53,6 +59,22 @@ export default function AddOnTreatment() {
     return `${hours}:${minutes.toString().padStart(2, '0')} ${ampm}`;
   };
 
+  // 시간을 12시간 형식으로 변환하는 함수
+  const convertTo12Hour = (timeStr: string): string => {
+    if (!timeStr || timeStr === '-') return '-';
+    try {
+      const [hours, minutes] = timeStr.split(':');
+      const hour = parseInt(hours);
+      const min = minutes || '00';
+      if (hour === 0) return `12:${min} AM`;
+      if (hour < 12) return `${hour}:${min} AM`;
+      if (hour === 12) return `12:${min} PM`;
+      return `${hour - 12}:${min} PM`;
+    } catch {
+      return timeStr;
+    }
+  };
+
   // 행 추가 함수
   const addRow = () => {
     setRowCount(prev => prev + 1);
@@ -89,14 +111,18 @@ export default function AddOnTreatment() {
         lastUpdatedBy: userSessionId
       };
 
-      const docId = `${dutyDate}_${selectedOffice}_addon_treatment`;
-      await setDoc(doc(db, "addon-treatment", docId), dataToSave);
+      const docId = sanitizeFirebaseDocIdClient(`${dutyDate}_${selectedOffice}_addon_treatment`);
+      const safeDataToSave = sanitizeFirebaseDataClient(dataToSave);
+      await setDoc(doc(db, "addon-treatment", docId), safeDataToSave);
       
       // 저장 성공 시 마지막 저장된 데이터 업데이트
       setLastSavedData(currentData);
       
     } catch (error) {
-      console.error("Auto-save error:", error);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error("Auto-save error:", error);
+      }
     }
   }, [dutyDate, selectedOffice, patientData, rowCount, lastSavedData, isUpdatingFromFirebase, userSessionId]);
 
@@ -113,18 +139,36 @@ export default function AddOnTreatment() {
     if (!dutyDate || !selectedOffice) return;
 
     try {
-      console.log("Loading data for date:", dutyDate, "office:", selectedOffice);
+      // Production에서는 로그 출력 안 함
+      if (process.env.NODE_ENV !== 'production') {
+        console.log("Loading data for date:", dutyDate, "office:", selectedOffice);
+      }
       setSubmitStatus('Loading data...');
       
-      const docId = `${dutyDate}_${selectedOffice}_addon_treatment`;
+      const docId = sanitizeFirebaseDocIdClient(`${dutyDate}_${selectedOffice}_addon_treatment`);
       const docSnap = await getDocs(collection(db, "addon-treatment")).then(snapshot => {
         const foundDoc = snapshot.docs.find(d => d.id === docId);
-        return foundDoc ? { exists: () => true, data: () => foundDoc.data() } : { exists: () => false };
+        return foundDoc ? { 
+          exists: (): boolean => true, 
+          data: (): any => foundDoc.data() 
+        } : { 
+          exists: (): boolean => false,
+          data: (): any => undefined
+        };
       });
       
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Data loaded from Firebase:", data);
+        if (!data) {
+          setSubmitStatus('No data found - initialized empty form');
+          setTimeout(() => setSubmitStatus(''), 2000);
+          return;
+        }
+        
+        // Production에서는 로그 출력 안 함
+        if (process.env.NODE_ENV !== 'production') {
+          console.log("Data loaded from Firebase:", data);
+        }
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
@@ -160,8 +204,11 @@ export default function AddOnTreatment() {
       }
       
     } catch (error) {
-      console.error("Error loading data:", error);
-      setSubmitStatus('Error loading data: ' + error.message);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error("Error loading data:", error);
+      }
+      setSubmitStatus('Error loading data: ' + ((error as any).message || 'Unknown error'));
       setTimeout(() => setSubmitStatus(''), 3000);
     }
   };
@@ -175,20 +222,29 @@ export default function AddOnTreatment() {
   useEffect(() => {
     if (!dutyDate || !selectedOffice) return;
 
-    console.log("Setting up real-time listener for date:", dutyDate, "office:", selectedOffice);
-    const docId = `${dutyDate}_${selectedOffice}_addon_treatment`;
+    // Production에서는 로그 출력 안 함
+    if (process.env.NODE_ENV !== 'production') {
+      console.log("Setting up real-time listener for date:", dutyDate, "office:", selectedOffice);
+    }
+    const docId = sanitizeFirebaseDocIdClient(`${dutyDate}_${selectedOffice}_addon_treatment`);
     const docRef = doc(db, "addon-treatment", docId);
     
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Real-time data received:", data);
+        // Production에서는 로그 출력 안 함
+        if (process.env.NODE_ENV !== 'production') {
+          console.log("Real-time data received:", data);
+        }
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
         
         setPatientData(prevData => {
-          console.log("Updating patientData from:", prevData, "to:", { ...prevData, ...data });
+          // Production에서는 로그 출력 안 함
+          if (process.env.NODE_ENV !== 'production') {
+            console.log("Updating patientData from:", prevData, "to:", { ...prevData, ...data });
+          }
           return {
             ...prevData,
             ...data
@@ -217,16 +273,25 @@ export default function AddOnTreatment() {
           setTimeout(() => setAutoSaveStatus(''), 2000);
         }
       } else {
-        console.log("Real-time listener: No document exists for date:", dutyDate);
+        // Production에서는 로그 출력 안 함
+        if (process.env.NODE_ENV !== 'production') {
+          console.log("Real-time listener: No document exists for date:", dutyDate);
+        }
       }
     }, (error) => {
-      console.error("Real-time listener error:", error);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error("Real-time listener error:", error);
+      }
       setAutoSaveStatus('❌ Connection error');
       setTimeout(() => setAutoSaveStatus(''), 3000);
     });
 
     return () => {
-      console.log("Cleaning up real-time listener for date:", dutyDate, "office:", selectedOffice);
+      // Production에서는 로그 출력 안 함
+      if (process.env.NODE_ENV !== 'production') {
+        console.log("Cleaning up real-time listener for date:", dutyDate, "office:", selectedOffice);
+      }
       unsubscribe();
     };
   }, [dutyDate, selectedOffice]);
@@ -320,7 +385,7 @@ export default function AddOnTreatment() {
         // 2. 데이터 삭제
         setSubmitStatus('Cleaning up...');
         setProgress(80);
-        const docId = `${dutyDate}_${selectedOffice}_addon_treatment`;
+        const docId = sanitizeFirebaseDocIdClient(`${dutyDate}_${selectedOffice}_addon_treatment`);
         await deleteDoc(doc(db, "addon-treatment", docId));
         
         // 3. 폼 초기화
@@ -352,8 +417,11 @@ export default function AddOnTreatment() {
       }
 
     } catch (error) {
-      console.error('Submit error:', error);
-      setSubmitStatus('❌ Submission failed: ' + error.message);
+      // Production에서는 에러 로깅 비활성화
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('Submit error:', error);
+      }
+      setSubmitStatus('❌ Submission failed: ' + ((error as any).message || 'Unknown error'));
       setProgress(0);
       setTimeout(() => {
         setLoading(false);
@@ -376,7 +444,7 @@ export default function AddOnTreatment() {
       color: '#2c3e50',
       lineHeight: '1.6',
       minHeight: '100vh',
-      position: 'relative'
+      position: 'relative' as const
     },
     container: {
       maxWidth: '1200px',
@@ -386,7 +454,7 @@ export default function AddOnTreatment() {
       borderRadius: '12px',
       boxShadow: '0 4px 20px rgba(0, 0, 0, 0.1)',
       border: '1px solid #e9ecef',
-      position: 'relative',
+      position: 'relative' as const,
       overflow: 'hidden'
     },
     header: {
@@ -399,7 +467,7 @@ export default function AddOnTreatment() {
       fontSize: '2.2em',
       fontWeight: '600',
       letterSpacing: '-0.5px',
-      position: 'relative'
+      position: 'relative' as const
     },
     formGroup: {
       marginBottom: '25px'
@@ -490,14 +558,14 @@ export default function AddOnTreatment() {
 
   // 제출 중 브라우저 네비게이션 방지
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+    const handleBeforeUnload = (e: any) => {
       if (loading) {
         e.preventDefault();
         e.returnValue = '';
       }
     };
 
-    const handlePopState = (e: PopStateEvent) => {
+    const handlePopState = (e: any) => {
       if (loading) {
         e.preventDefault();
         window.history.pushState(null, '', window.location.href);
@@ -528,7 +596,7 @@ export default function AddOnTreatment() {
         {/* 로딩 모달 */}
         {loading && (
           <div style={{
-            position: "fixed",
+            position: "fixed" as const,
             top: 0,
             left: 0,
             right: 0,
@@ -713,7 +781,7 @@ export default function AddOnTreatment() {
                     <td style={styles.td}>
                       <input
                         type="text"
-                        value={patientData[`Row${rowNumber}_Time`] || ''}
+                        value={convertTo12Hour(patientData[`Row${rowNumber}_Time`] || '')}
                         onChange={(e) => updatePatientData(`Row${rowNumber}_Time`, e.target.value)}
                         style={{ ...styles.input, margin: 0, fontSize: '14px', padding: '8px' }}
                       />
