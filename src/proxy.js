@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 
-export function middleware(request) {
+export function proxy(request) {
   const authToken = request.cookies.get('firebaseAuthToken')?.value;
 
   const { pathname } = request.nextUrl;

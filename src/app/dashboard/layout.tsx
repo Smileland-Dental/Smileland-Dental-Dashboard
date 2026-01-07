@@ -13,12 +13,14 @@ export const metadata: Metadata = {
 // If you need to adjust how the sidebar is positioned, adjust here.
 export default function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <SidebarProvider>
+    <div  className="relative min-h-screen">
+    <SidebarProvider className="relative min-h-screen">
       <AppSidebar />
       <SidebarTrigger/>
-      <main className='w-full'>
+      <main className='w-full relative min-h-screen'>
         {children}
       </main>
     </SidebarProvider>
+    </div>
   )
 }
