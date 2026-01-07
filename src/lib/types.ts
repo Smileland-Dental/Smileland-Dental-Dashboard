@@ -28,11 +28,6 @@ export interface Employee {
   office: string;
   imageURL: string;
   bio: string;
-  department: string;
-  phone: string;
-  email: string;
-  startDate: string;
-  payRate: string;
 }
 
 export type GroupedEmployees = {

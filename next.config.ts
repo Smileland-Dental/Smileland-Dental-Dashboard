@@ -11,16 +11,6 @@ const nextConfig: NextConfig = {
      },
     ]
   },*/
-  images: {
-    remotePatterns: [
-      {
-        protocol: 'https',
-        hostname: 'firebasestorage.googleapis.com',
-        port: '',
-        pathname: '/v0/b/smileland-dental-dashboard.firebasestorage.app/o/**'
-      }
-    ]
-  },
-}
+};
 
 export default nextConfig;

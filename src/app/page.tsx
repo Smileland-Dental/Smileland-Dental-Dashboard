@@ -3,7 +3,6 @@ import { LoginForm } from "@/components/login-form"
 import background from '../../public/background.jpg';
 import dashboard from '../../public/dashboard.png';
 
-
 // Main page for the dashboard login
 export default function LoginPage() {
   return (

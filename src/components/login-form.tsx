@@ -97,8 +97,7 @@ import { Button } from "@/components/ui/button"
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { GoogleAuthProvider, onAuthStateChanged, signInWithPopup } from 'firebase/auth';
-import { auth, db } from '@/lib/firebase.config'; // Adjust the import path as needed
-import { doc, getDoc, setDoc } from "firebase/firestore";
+import { auth } from '@/lib/firebase.config'; // Adjust the import path as needed
 
 export function LoginForm({
   className,
@@ -129,21 +128,7 @@ export function LoginForm({
       prompt: 'select_account' // Ensures the user selects an account
     })
     try {
-      const result = await signInWithPopup(auth, provider); 
-      const user = result.user;
-
-      const userDocRef = doc(db, "users", user.uid);
-      const docSnap = await getDoc(userDocRef);
-      if (!docSnap.exists()) {
-        await setDoc(userDocRef, {
-          user_name: user.displayName,
-          email: user.email,
-          role: "User",
-          offices: [], // Default to no offices, can be updated later
-          createdAt: new Date() // Good practice to store creation time
-        });
-        console.log("New user document created in Firestore.");
-      }
+      await signInWithPopup(auth, provider); 
     } catch (error) {
       console.error('Error during Google sign-in:', error); 
     }
