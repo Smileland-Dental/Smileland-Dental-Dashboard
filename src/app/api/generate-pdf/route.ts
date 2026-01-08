@@ -1,9 +1,16 @@
+// Original patient log  
+// p_route.ts
+
 import { NextRequest, NextResponse } from 'next/server';
+import puppeteer from 'puppeteer';
+import { Buffer } from 'buffer';
 import { 
   escapeHtml, 
   sanitizeString, 
   safeLog, 
   logError, 
+  sanitizePdfFilename, 
+  getSecurePuppeteerOptions, 
   validatePdfGeneration, 
   sanitizeArrayForPdf,
   validateRequest,
@@ -560,13 +567,48 @@ export async function POST(request: NextRequest) {
       </html>
     `;
 
+    const filename = sanitizePdfFilename(`${safeDutyDate}_${safeUserName}_${safeWorkOffice}_Patient_Log`);
+    
     safeLog('🎯 PDF HTML 생성 완료');
     
-    // HTML만 반환 (cc_route.ts와 동일한 방식)
-    return NextResponse.json({
-      success: true,
-      html: htmlContent,
-      message: 'PDF HTML generated successfully'
+    // Puppeteer로 PDF 생성 (보안 옵션 적용)
+    const browser = await puppeteer.launch(getSecurePuppeteerOptions());
+    
+    const page = await browser.newPage();
+    await page.setContent(htmlContent);
+    
+    // 페이지 로딩 대기
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    const pdf = await page.pdf({
+      format: 'A4',
+      printBackground: true,
+      margin: {
+        top: '10mm',
+        right: '10mm',
+        bottom: '10mm',
+        left: '10mm'
+      },
+      preferCSSPageSize: false,
+      displayHeaderFooter: false
+    });
+    
+    // 브라우저 안전하게 종료
+    await browser.close();
+    
+    // 파일명 생성 (이미 sanitizePdfFilename에서 .pdf 추가됨)
+    const pdfFilename = filename;
+    
+    // PDF 응답 생성 (보안 헤더 추가)
+    return new NextResponse(Buffer.from(pdf), {
+      headers: {
+        'Content-Type': 'application/pdf',
+        'Content-Disposition': `attachment; filename="${pdfFilename}"`,
+        ...getSecurityHeaders(),
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      }
     });
 
   } catch (error) {
