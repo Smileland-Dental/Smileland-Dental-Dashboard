@@ -836,7 +836,9 @@ function PatientLogSystem(): React.ReactElement {
         try {
           const contentType = response.headers.get('content-type');
           if (contentType && contentType.includes('application/json')) {
-            const errorData = await response.json();
+            // response를 복제하여 읽기 (한 번만 읽을 수 있으므로)
+            const responseClone = response.clone();
+            const errorData = await responseClone.json();
             errorMessage = errorData.error || errorMessage;
             
             // 인증 관련 에러 메시지인지 확인
@@ -951,7 +953,9 @@ function PatientLogSystem(): React.ReactElement {
                 const contentType = retryResponse.headers.get('content-type');
                 if (contentType && contentType.includes('application/json')) {
                   try {
-                    const errorData = await retryResponse.json();
+                    // response를 복제하여 읽기
+                    const retryResponseClone = retryResponse.clone();
+                    const errorData = await retryResponseClone.json();
                     errorMessage = errorData.error || errorMessage;
                   } catch {
                     errorMessage = 'PDF 생성 중 오류가 발생했습니다.';
@@ -980,8 +984,23 @@ function PatientLogSystem(): React.ReactElement {
           try {
             const contentType = response.headers.get('content-type');
             if (contentType && contentType.includes('application/json')) {
-              const errorData = await response.json();
-              errorMessage = errorData.error || errorMessage;
+              // response를 복제하여 읽기 (이미 위에서 읽었을 수 있으므로)
+              try {
+                const responseClone = response.clone();
+                const errorData = await responseClone.json();
+                errorMessage = errorData.error || errorMessage;
+              } catch (cloneError) {
+                // 복제 실패 시 원본 response를 텍스트로 읽기 시도
+                try {
+                  const text = await response.text();
+                  if (text) {
+                    const errorData = JSON.parse(text);
+                    errorMessage = errorData.error || errorMessage;
+                  }
+                } catch {
+                  // 파싱 실패 시 기본 메시지 사용
+                }
+              }
             } else {
               if (response.status === 403) {
                 errorMessage = '권한이 없습니다. 접근이 거부되었습니다.';
@@ -1004,16 +1023,20 @@ function PatientLogSystem(): React.ReactElement {
       }
 
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('Submit 오류:', error);
-      }
-      setSubmitStatus('❌ Submission failed: ' + ((error as any).message || 'Unknown error'));
+      // 에러 메시지 추출
+      const errorMessage = (error as any).message || '알 수 없는 오류가 발생했습니다.';
+      
+      // 화면에 에러 메시지 표시
+      setSubmitStatus('❌ Submission failed: ' + errorMessage);
       setProgress(0);
+      
+      // 사용자에게 alert로도 표시 (콘솔이 막혀있으므로)
+      alert('❌ 제출 실패\n\n' + errorMessage + '\n\n자세한 내용은 로딩 화면의 메시지를 확인해주세요.');
+      
       setTimeout(() => {
         setLoading(false);
         setSubmitStatus('');
-      }, 3000);
+      }, 5000); // 5초로 연장하여 사용자가 메시지를 읽을 수 있도록
     }
   };
 
