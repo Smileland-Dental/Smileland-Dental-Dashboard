@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { doc, setDoc, deleteDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
 import { getStorage, ref as storageRef, uploadBytes, getDownloadURL } from "firebase/storage";
+import { validateSignatureDataUrlClient, sanitizeSignatureDataUrlClient } from "@/lib/security-client";
 
 export default function OrthodonticContract() {
   const [loading, setLoading] = useState(false);
@@ -31,7 +32,7 @@ export default function OrthodonticContract() {
     firstOption: {
       treatment: '',
       appliance: '',
-      deposit: '',
+      deposit: '800',
       subtotal: '',
       estimatedInsurance: '',
       netBalance: '',
@@ -75,6 +76,27 @@ export default function OrthodonticContract() {
   const termsCanvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawingTerms, setIsDrawingTerms] = useState(false);
   const [termsSignatureData, setTermsSignatureData] = useState<string>('');
+
+  // Treatment 옵션 배열
+  const treatmentOptions = [
+    { label: 'Cash', price: '5400' },
+    { label: 'Dltappo', price: '4051' },
+    { label: 'Dltapre', price: '5116' },
+    { label: 'Metlife', price: '4700' },
+    { label: 'Cigna', price: '4499' },
+    { label: 'Aetna', price: '4121' },
+    { label: 'Guard', price: '4080' },
+    { label: 'FDH', price: '5183' },
+    { label: 'Dentmax', price: '5213.89' },
+    { label: 'Amerits', price: '4792' },
+    { label: 'PremAcc', price: '2635' },
+    { label: 'UntdCon', price: '4284' },
+    { label: 'Connect', price: '3800' },
+    { label: 'AnthmBC', price: '4000' },
+    { label: 'BS of CA', price: '3971' },
+    { label: 'UntdHlt', price: '5028' },
+    { label: 'DHA', price: '4121' }
+  ];
 
   // 데이터 업데이트 함수
   const updateFormData = (field: string, value: string) => {
@@ -138,7 +160,14 @@ export default function OrthodonticContract() {
       const canvas = canvasRef.current;
       if (canvas) {
         const dataUrl = canvas.toDataURL();
-        setSignatureData(dataUrl);
+        // 보안 검증: 서명 데이터 URL 검증
+        const validatedDataUrl = sanitizeSignatureDataUrlClient(dataUrl);
+        if (validatedDataUrl) {
+          setSignatureData(validatedDataUrl);
+        } else {
+          alert('Invalid signature data. Please try signing again.');
+          clearSignature();
+        }
       }
     }
     setIsDrawing(false);
@@ -154,6 +183,66 @@ export default function OrthodonticContract() {
 
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     setSignatureData('');
+  };
+
+  // 터치 이벤트: 서명 그리기 시작
+  const startDrawingTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // 스크롤 방지
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const touch = e.touches[0];
+    if (!touch) return;
+
+    // 스케일 팩터 계산
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    setIsDrawing(true);
+    ctx.beginPath();
+    ctx.moveTo((touch.clientX - rect.left) * scaleX, (touch.clientY - rect.top) * scaleY);
+  };
+
+  // 터치 이벤트: 서명 그리기
+  const drawTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // 스크롤 방지
+    if (!isDrawing) return;
+    
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const touch = e.touches[0];
+    if (!touch) return;
+
+    // 스케일 팩터 계산
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    ctx.lineTo((touch.clientX - rect.left) * scaleX, (touch.clientY - rect.top) * scaleY);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  };
+
+  // 터치 이벤트: 서명 그리기 종료
+  const stopDrawingTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // 스크롤 방지
+    stopDrawing();
+  };
+
+  // 터치 이벤트: 서명 그리기 취소 (터치가 중단될 때)
+  const cancelDrawingTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    setIsDrawing(false);
   };
 
   // 약관 서명 그리기 시작
@@ -202,7 +291,14 @@ export default function OrthodonticContract() {
       const canvas = termsCanvasRef.current;
       if (canvas) {
         const dataUrl = canvas.toDataURL();
-        setTermsSignatureData(dataUrl);
+        // 보안 검증: 서명 데이터 URL 검증
+        const validatedDataUrl = sanitizeSignatureDataUrlClient(dataUrl);
+        if (validatedDataUrl) {
+          setTermsSignatureData(validatedDataUrl);
+        } else {
+          alert('Invalid signature data. Please try signing again.');
+          clearTermsSignature();
+        }
       }
     }
     setIsDrawingTerms(false);
@@ -220,12 +316,92 @@ export default function OrthodonticContract() {
     setTermsSignatureData('');
   };
 
+  // 터치 이벤트: 약관 서명 그리기 시작
+  const startDrawingTermsTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // 스크롤 방지
+    const canvas = termsCanvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const touch = e.touches[0];
+    if (!touch) return;
+
+    // 스케일 팩터 계산
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    setIsDrawingTerms(true);
+    ctx.beginPath();
+    ctx.moveTo((touch.clientX - rect.left) * scaleX, (touch.clientY - rect.top) * scaleY);
+  };
+
+  // 터치 이벤트: 약관 서명 그리기
+  const drawTermsTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // 스크롤 방지
+    if (!isDrawingTerms) return;
+    
+    const canvas = termsCanvasRef.current;
+    if (!canvas) return;
+    
+    const rect = canvas.getBoundingClientRect();
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const touch = e.touches[0];
+    if (!touch) return;
+
+    // 스케일 팩터 계산
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    ctx.lineTo((touch.clientX - rect.left) * scaleX, (touch.clientY - rect.top) * scaleY);
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  };
+
+  // 터치 이벤트: 약관 서명 그리기 종료
+  const stopDrawingTermsTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault(); // 스크롤 방지
+    stopDrawingTerms();
+  };
+
+  // 터치 이벤트: 약관 서명 그리기 취소 (터치가 중단될 때)
+  const cancelDrawingTermsTouch = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    setIsDrawingTerms(false);
+  };
+
   // 제출 처리
   const handleSubmit = async () => {
     // 필수 필드 확인
     if (!formData.patientName || !formData.dob) {
       alert("Patient's Name and DOB are required fields.");
       return;
+    }
+
+    // 보안 검증: 서명 데이터 검증
+    let validatedSignatureData = '';
+    let validatedTermsSignatureData = '';
+    
+    if (signatureData) {
+      validatedSignatureData = sanitizeSignatureDataUrlClient(signatureData);
+      if (!validatedSignatureData) {
+        alert('Invalid signature data. Please sign again.');
+        return;
+      }
+    }
+    
+    if (termsSignatureData) {
+      validatedTermsSignatureData = sanitizeSignatureDataUrlClient(termsSignatureData);
+      if (!validatedTermsSignatureData) {
+        alert('Invalid terms signature data. Please sign again.');
+        return;
+      }
     }
 
     const confirmSubmit = window.confirm("Are you sure you want to submit this contract? This will save the data and generate a PDF.");
@@ -245,8 +421,8 @@ export default function OrthodonticContract() {
         body: JSON.stringify({
           contractDate,
           formData: formData,
-          signatureData: signatureData,
-          termsSignatureData: termsSignatureData
+          signatureData: validatedSignatureData,
+          termsSignatureData: validatedTermsSignatureData
         }),
       });
 
@@ -260,7 +436,7 @@ export default function OrthodonticContract() {
       setSubmitStatus('Saving to Firebase...');
       setProgress(40);
 
-      // 2. Firestore에 데이터 저장
+      // 2. Firestore에 데이터 저장 (서명 데이터는 제외 - PDF에만 포함됨)
       const timestamp = Date.now();
       const docId = `contract_${contractDate}_${timestamp}`;
       
@@ -269,9 +445,8 @@ export default function OrthodonticContract() {
         contractDate,
         timestamp: new Date().toISOString(),
         submitted: true,
-        approved: true,
-        signatureData: signatureData,
-        termsSignatureData: termsSignatureData
+        approved: true
+        // signatureData와 termsSignatureData는 PDF 생성에만 사용하고 Firestore에는 저장하지 않음
       };
 
       await setDoc(doc(db, "orthodontic-contracts", docId), dataToSave);
@@ -311,7 +486,7 @@ export default function OrthodonticContract() {
         firstOption: {
           treatment: '',
           appliance: '',
-          deposit: '',
+          deposit: '800',
           subtotal: '',
           estimatedInsurance: '',
           netBalance: '',
@@ -508,6 +683,170 @@ export default function OrthodonticContract() {
       color: '#6c757d'
     }
   };
+
+  // Additional Appliance 선택 시 가격 합산하여 First Option의 Appliance 필드에 자동 입력
+  useEffect(() => {
+    const additionalApplianceOptions = [
+      { label: 'Nance', price: 250 },
+      { label: 'Quad helix', price: 250 },
+      { label: 'LLA', price: 100 }
+    ];
+
+    const totalPrice = formData.additionalAppliances.reduce((sum, selectedValue) => {
+      // selectedValue 형식: "Label|$Price"
+      const priceMatch = selectedValue.match(/\$(\d+)/);
+      if (priceMatch) {
+        return sum + parseInt(priceMatch[1], 10);
+      }
+      return sum;
+    }, 0);
+
+    setFormData(prev => ({
+      ...prev,
+      firstOption: {
+        ...(prev.firstOption || {}),
+        appliance: totalPrice > 0 ? totalPrice.toString() : '',
+        deposit: '800' // Deposit은 항상 800으로 유지
+      }
+    }));
+  }, [formData.additionalAppliances]);
+
+  // Deposit이 항상 800으로 유지되도록 보장
+  useEffect(() => {
+    if (formData.firstOption?.deposit !== '800') {
+      setFormData(prev => ({
+        ...prev,
+        firstOption: {
+          ...(prev.firstOption || {}),
+          deposit: '800'
+        }
+      }));
+    }
+  }, [formData.firstOption?.deposit]);
+
+  // Subtotal 자동 계산: Treatment + Appliance - Deposit
+  useEffect(() => {
+    const treatment = parseFloat(formData.firstOption?.treatment || '0') || 0;
+    const appliance = parseFloat(formData.firstOption?.appliance || '0') || 0;
+    const deposit = parseFloat(formData.firstOption?.deposit || '800') || 800;
+    
+    const subtotal = treatment + appliance - deposit;
+    
+    setFormData(prev => ({
+      ...prev,
+      firstOption: {
+        ...(prev.firstOption || {}),
+        subtotal: subtotal > 0 ? subtotal.toString() : '0'
+      }
+    }));
+  }, [formData.firstOption?.treatment, formData.firstOption?.appliance, formData.firstOption?.deposit]);
+
+  // Net Balance 자동 계산: Treatment + Appliance - Deposit - Estimated Insurance
+  useEffect(() => {
+    const treatment = parseFloat(formData.firstOption?.treatment || '0') || 0;
+    const appliance = parseFloat(formData.firstOption?.appliance || '0') || 0;
+    const deposit = parseFloat(formData.firstOption?.deposit || '800') || 800;
+    const estimatedInsurance = parseFloat(formData.firstOption?.estimatedInsurance || '0') || 0;
+    
+    const netBalance = treatment + appliance - deposit - estimatedInsurance;
+    
+    setFormData(prev => ({
+      ...prev,
+      firstOption: {
+        ...(prev.firstOption || {}),
+        netBalance: netBalance > 0 ? netBalance.toString() : '0'
+      }
+    }));
+  }, [formData.firstOption?.treatment, formData.firstOption?.appliance, formData.firstOption?.deposit, formData.firstOption?.estimatedInsurance]);
+
+  // Monthly Payment 자동 계산: Net Balance / Estimated Treatment Period (24 months 초과 시 24로 나눔, 소수점 올림)
+  useEffect(() => {
+    const netBalance = parseFloat(formData.firstOption?.netBalance || '0') || 0;
+    const estimatedTreatmentPeriod = parseFloat(formData.firstOption?.estimatedTreatmentPeriod || '0') || 0;
+    
+    if (netBalance > 0 && estimatedTreatmentPeriod > 0) {
+      const divisor = estimatedTreatmentPeriod > 24 ? 24 : estimatedTreatmentPeriod;
+      const monthlyPayment = Math.ceil(netBalance / divisor);
+      
+      setFormData(prev => ({
+        ...prev,
+        firstOption: {
+          ...(prev.firstOption || {}),
+          monthlyPayment: monthlyPayment.toString()
+        }
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        firstOption: {
+          ...(prev.firstOption || {}),
+          monthlyPayment: '0'
+        }
+      }));
+    }
+  }, [formData.firstOption?.netBalance, formData.firstOption?.estimatedTreatmentPeriod]);
+
+  // Second Option - Subtotal 자동 계산: Treatment + Appliance - Deposit
+  useEffect(() => {
+    const treatment = parseFloat(formData.secondOption?.treatment || '0') || 0;
+    const appliance = parseFloat(formData.secondOption?.appliance || '0') || 0;
+    const deposit = parseFloat(formData.secondOption?.deposit || '0') || 0;
+    
+    const subtotal = treatment + appliance - deposit;
+    
+    setFormData(prev => ({
+      ...prev,
+      secondOption: {
+        ...(prev.secondOption || {}),
+        subtotal: subtotal > 0 ? subtotal.toString() : '0'
+      }
+    }));
+  }, [formData.secondOption?.treatment, formData.secondOption?.appliance, formData.secondOption?.deposit]);
+
+  // Second Option - Net Balance 자동 계산: Treatment + Appliance - Deposit - Estimated Insurance
+  useEffect(() => {
+    const treatment = parseFloat(formData.secondOption?.treatment || '0') || 0;
+    const appliance = parseFloat(formData.secondOption?.appliance || '0') || 0;
+    const deposit = parseFloat(formData.secondOption?.deposit || '0') || 0;
+    const estimatedInsurance = parseFloat(formData.secondOption?.estimatedInsurance || '0') || 0;
+    
+    const netBalance = treatment + appliance - deposit - estimatedInsurance;
+    
+    setFormData(prev => ({
+      ...prev,
+      secondOption: {
+        ...(prev.secondOption || {}),
+        netBalance: netBalance > 0 ? netBalance.toString() : '0'
+      }
+    }));
+  }, [formData.secondOption?.treatment, formData.secondOption?.appliance, formData.secondOption?.deposit, formData.secondOption?.estimatedInsurance]);
+
+  // Second Option - Monthly Payment 자동 계산: Net Balance / Estimated Treatment Period (24 months 초과 시 24로 나눔, 소수점 올림)
+  useEffect(() => {
+    const netBalance = parseFloat(formData.secondOption?.netBalance || '0') || 0;
+    const estimatedTreatmentPeriod = parseFloat(formData.secondOption?.estimatedTreatmentPeriod || '0') || 0;
+    
+    if (netBalance > 0 && estimatedTreatmentPeriod > 0) {
+      const divisor = estimatedTreatmentPeriod > 24 ? 24 : estimatedTreatmentPeriod;
+      const monthlyPayment = Math.ceil(netBalance / divisor);
+      
+      setFormData(prev => ({
+        ...prev,
+        secondOption: {
+          ...(prev.secondOption || {}),
+          monthlyPayment: monthlyPayment.toString()
+        }
+      }));
+    } else {
+      setFormData(prev => ({
+        ...prev,
+        secondOption: {
+          ...(prev.secondOption || {}),
+          monthlyPayment: '0'
+        }
+      }));
+    }
+  }, [formData.secondOption?.netBalance, formData.secondOption?.estimatedTreatmentPeriod]);
 
   // 제출 중 브라우저 네비게이션 방지
   useEffect(() => {
@@ -789,6 +1128,17 @@ export default function OrthodonticContract() {
               <input
                 type="radio"
                 name="typeOfTreatment"
+                value="Comprehensive"
+                checked={formData.typeOfTreatment === 'Comprehensive'}
+                onChange={(e) => updateFormData('typeOfTreatment', e.target.value)}
+                style={{ cursor: 'pointer' }}
+              />
+              <span>Comprehensive</span>
+            </label>
+            <label style={styles.radioOption}>
+              <input
+                type="radio"
+                name="typeOfTreatment"
                 value="Limited"
                 checked={formData.typeOfTreatment === 'Limited'}
                 onChange={(e) => updateFormData('typeOfTreatment', e.target.value)}
@@ -826,14 +1176,13 @@ export default function OrthodonticContract() {
           <div style={styles.sectionTitle}>Services Required</div>
           <div className="services-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', marginTop: '15px' }}>
             {[
-              { label: 'Panoramic film', price: 120 },
-              { label: 'Cephalometric film', price: 145 },
-              { label: 'Diagnostic casts', price: 120 },
-              { label: 'Oral/Facial image', price: 80 },
-              { label: 'Periodic orthodontic treatment', price: 4235 },
-              { label: 'Orthodontic retention(U/L)', price: 700 }
+              { label: 'Panoramic film' },
+              { label: 'Cephalometric film' },
+              { label: 'Diagnostic casts' },
+              { label: 'Oral/Facial image' },
+              { label: 'Orthodontic retention(U/L)' }
             ].map((service) => {
-              const value = `${service.label}|$${service.price}`;
+              const value = service.label;
               const isChecked = formData.servicesRequired.includes(value);
               return (
                 <label
@@ -851,7 +1200,6 @@ export default function OrthodonticContract() {
                     style={{ cursor: 'pointer', width: '18px', height: '18px' }}
                   />
                   <span style={{ flex: 1 }}>{service.label}</span>
-                  <span style={styles.servicePrice}>${service.price.toLocaleString()}</span>
                 </label>
               );
             })}
@@ -900,19 +1248,39 @@ export default function OrthodonticContract() {
             
             <div style={styles.formGroup}>
               <label style={styles.label}>Treatment:</label>
-              <div style={{ display: 'flex', alignItems: 'center', border: '2px solid #e0e0e0', borderRadius: '6px', backgroundColor: 'white', padding: '0 15px' }}>
-                <span style={{ color: '#666', marginRight: '5px' }}>$</span>
-                <input
-                  type="text"
-                  placeholder="0.00"
-                  value={formData.firstOption?.treatment || ''}
-                  onChange={(e) => setFormData({
+              <select
+                value={formData.firstOption?.treatment || ''}
+                onChange={(e) => {
+                  setFormData({
                     ...formData,
                     firstOption: { ...(formData.firstOption || {}), treatment: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
-                />
-              </div>
+                  });
+                }}
+                style={{
+                  ...styles.input,
+                  padding: '12px 15px',
+                  cursor: 'pointer',
+                  appearance: 'auto'
+                }}
+              >
+                <option value="">Select treatment option</option>
+                {treatmentOptions.map((option, index) => (
+                  <option key={index} value={option.price}>
+                    {option.label} - ${option.price}
+                  </option>
+                ))}
+              </select>
+              {formData.firstOption?.treatment && (
+                <div style={{ display: 'flex', alignItems: 'center', border: '2px solid #e0e0e0', borderRadius: '6px', backgroundColor: 'white', padding: '0 15px', marginTop: '10px' }}>
+                  <span style={{ color: '#666', marginRight: '5px' }}>$</span>
+                  <input
+                    type="text"
+                    value={formData.firstOption.treatment}
+                    readOnly
+                    style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: 'transparent' }}
+                  />
+                </div>
+              )}
             </div>
 
             <div style={styles.formGroup}>
@@ -923,11 +1291,8 @@ export default function OrthodonticContract() {
                   type="text"
                   placeholder="0.00"
                   value={formData.firstOption?.appliance || ''}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    firstOption: { ...(formData.firstOption || {}), appliance: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
+                  readOnly
+                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
                 />
               </div>
             </div>
@@ -938,13 +1303,9 @@ export default function OrthodonticContract() {
                 <span style={{ color: '#666', marginRight: '5px' }}>$</span>
                 <input
                   type="text"
-                  placeholder="0.00"
-                  value={formData.firstOption?.deposit}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    firstOption: { ...(formData.firstOption || {}), deposit: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
+                  value={formData.firstOption?.deposit || '800'}
+                  readOnly
+                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
                 />
               </div>
             </div>
@@ -956,12 +1317,9 @@ export default function OrthodonticContract() {
                 <input
                   type="text"
                   placeholder="0.00"
-                  value={formData.firstOption?.subtotal}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    firstOption: { ...(formData.firstOption || {}), subtotal: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
+                  value={formData.firstOption?.subtotal || ''}
+                  readOnly
+                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
                 />
               </div>
             </div>
@@ -990,12 +1348,9 @@ export default function OrthodonticContract() {
                 <input
                   type="text"
                   placeholder="0.00"
-                  value={formData.firstOption?.netBalance}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    firstOption: { ...(formData.firstOption || {}), netBalance: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
+                  value={formData.firstOption?.netBalance || ''}
+                  readOnly
+                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
                 />
               </div>
             </div>
@@ -1003,11 +1358,10 @@ export default function OrthodonticContract() {
             <div style={styles.formGroup}>
               <label style={styles.label}>Estimated Treatment Period:</label>
               <div style={{ display: 'flex', alignItems: 'center', border: '2px solid #e0e0e0', borderRadius: '6px', backgroundColor: 'white', padding: '0 15px' }}>
-                <span style={{ color: '#666', marginRight: '5px' }}>$</span>
                 <input
                   type="text"
-                  placeholder="0.00"
-                  value={formData.firstOption?.estimatedTreatmentPeriod}
+                  placeholder="0"
+                  value={formData.firstOption?.estimatedTreatmentPeriod || ''}
                   onChange={(e) => setFormData({
                     ...formData,
                     firstOption: { ...(formData.firstOption || {}), estimatedTreatmentPeriod: e.target.value }
@@ -1025,12 +1379,9 @@ export default function OrthodonticContract() {
                 <input
                   type="text"
                   placeholder="0.00"
-                  value={formData.firstOption?.monthlyPayment}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    firstOption: { ...(formData.firstOption || {}), monthlyPayment: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
+                  value={formData.firstOption?.monthlyPayment || ''}
+                  readOnly
+                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
                 />
               </div>
             </div>
@@ -1098,12 +1449,9 @@ export default function OrthodonticContract() {
                 <input
                   type="text"
                   placeholder="0.00"
-                  value={formData.secondOption?.subtotal}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    secondOption: { ...(formData.secondOption || {}), subtotal: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
+                  value={formData.secondOption?.subtotal || ''}
+                  readOnly
+                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
                 />
               </div>
             </div>
@@ -1132,12 +1480,9 @@ export default function OrthodonticContract() {
                 <input
                   type="text"
                   placeholder="0.00"
-                  value={formData.secondOption?.netBalance}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    secondOption: { ...(formData.secondOption || {}), netBalance: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
+                  value={formData.secondOption?.netBalance || ''}
+                  readOnly
+                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
                 />
               </div>
             </div>
@@ -1145,11 +1490,10 @@ export default function OrthodonticContract() {
             <div style={styles.formGroup}>
               <label style={styles.label}>Estimated Treatment Period:</label>
               <div style={{ display: 'flex', alignItems: 'center', border: '2px solid #e0e0e0', borderRadius: '6px', backgroundColor: 'white', padding: '0 15px' }}>
-                <span style={{ color: '#666', marginRight: '5px' }}>$</span>
                 <input
                   type="text"
-                  placeholder="0.00"
-                  value={formData.secondOption?.estimatedTreatmentPeriod}
+                  placeholder="0"
+                  value={formData.secondOption?.estimatedTreatmentPeriod || ''}
                   onChange={(e) => setFormData({
                     ...formData,
                     secondOption: { ...(formData.secondOption || {}), estimatedTreatmentPeriod: e.target.value }
@@ -1167,12 +1511,9 @@ export default function OrthodonticContract() {
                 <input
                   type="text"
                   placeholder="0.00"
-                  value={formData.secondOption?.monthlyPayment}
-                  onChange={(e) => setFormData({
-                    ...formData,
-                    secondOption: { ...(formData.secondOption || {}), monthlyPayment: e.target.value }
-                  })}
-                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%' }}
+                  value={formData.secondOption?.monthlyPayment || ''}
+                  readOnly
+                  style={{ ...styles.input, border: 'none', padding: '12px 0', width: '100%', backgroundColor: '#f5f5f5', cursor: 'not-allowed' }}
                 />
               </div>
             </div>
@@ -1232,13 +1573,18 @@ export default function OrthodonticContract() {
                   onMouseMove={draw}
                   onMouseUp={stopDrawing}
                   onMouseLeave={stopDrawing}
+                  onTouchStart={startDrawingTouch}
+                  onTouchMove={drawTouch}
+                  onTouchEnd={stopDrawingTouch}
+                  onTouchCancel={cancelDrawingTouch}
                   style={{
                     border: '2px solid #e0e0e0',
                     borderRadius: '6px',
                     cursor: 'crosshair',
                     backgroundColor: 'white',
                     width: '100%',
-                    height: '150px'
+                    height: '150px',
+                    touchAction: 'none' // 터치 스크롤 방지
                   }}
                 />
                 <button
@@ -1459,13 +1805,18 @@ export default function OrthodonticContract() {
                   onMouseMove={drawTerms}
                   onMouseUp={stopDrawingTerms}
                   onMouseLeave={stopDrawingTerms}
+                  onTouchStart={startDrawingTermsTouch}
+                  onTouchMove={drawTermsTouch}
+                  onTouchEnd={stopDrawingTermsTouch}
+                  onTouchCancel={cancelDrawingTermsTouch}
                   style={{
                     border: '2px solid #e0e0e0',
                     borderRadius: '6px',
                     cursor: 'crosshair',
                     backgroundColor: 'white',
                     width: '100%',
-                    height: '150px'
+                    height: '150px',
+                    touchAction: 'none' // 터치 스크롤 방지
                   }}
                 />
                 <button
@@ -1548,7 +1899,7 @@ export default function OrthodonticContract() {
 
         {/* Footer */}
         <div style={styles.footer}>
-          <p style={{ marginBottom: '5px', fontWeight: '600' }}>Smileland Dental</p>
+          <p style={{ marginBottom: '5px', fontWeight: '600' }}>안녕</p>
         </div>
       </div>
     </div>
