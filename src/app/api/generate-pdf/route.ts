@@ -1,16 +1,9 @@
-// Original patient log  
-// p_route.ts
-
 import { NextRequest, NextResponse } from 'next/server';
-import puppeteer from 'puppeteer';
-import { Buffer } from 'buffer';
 import { 
   escapeHtml, 
   sanitizeString, 
   safeLog, 
   logError, 
-  sanitizePdfFilename, 
-  getSecurePuppeteerOptions, 
   validatePdfGeneration, 
   sanitizeArrayForPdf,
   validateRequest,
@@ -158,6 +151,23 @@ export async function POST(request: NextRequest) {
       }
     };
     const safeDailyWorkReport = sanitizeString(patientData.dailyWorkReport, 2000);
+
+    // 통계 계산 (HTML 템플릿 리터럴 안에서 실행하지 않고 미리 계산)
+    const allPatientsForStats = patientData.patientLogs || patientData.patientRows || [];
+    const totalAppointments = allPatientsForStats.filter((row: any) => row.appt_date && row.name).length;
+    const incomingCalls = allPatientsForStats.filter((row: any) => row.call_in).length;
+    const outgoingCalls = allPatientsForStats.filter((row: any) => row.call_out).length;
+    
+    // 날짜 포맷팅 미리 계산
+    const generatedDate = new Date().toLocaleDateString('en-US', { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric',
+      weekday: 'long',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: true
+    });
 
     const htmlContent = `
       <!DOCTYPE html>
@@ -460,30 +470,15 @@ export async function POST(request: NextRequest) {
         <div class="count-summary">
           <div class="count-item">
             <div class="count-label">Total Appointments</div>
-            <div class="count-number">
-              ${(() => {
-                const allPatients = patientData.patientLogs || patientData.patientRows || [];
-                return allPatients.filter((row: any) => row.appt_date && row.name).length;
-              })()}
-            </div>
+            <div class="count-number">${totalAppointments}</div>
           </div>
           <div class="count-item">
             <div class="count-label">Incoming Calls</div>
-            <div class="count-number">
-              ${(() => {
-                const allPatients = patientData.patientLogs || patientData.patientRows || [];
-                return allPatients.filter((row: any) => row.call_in).length;
-              })()}
-            </div>
+            <div class="count-number">${incomingCalls}</div>
           </div>
           <div class="count-item">
             <div class="count-label">Outgoing Calls</div>
-            <div class="count-number">
-              ${(() => {
-                const allPatients = patientData.patientLogs || patientData.patientRows || [];
-                return allPatients.filter((row: any) => row.call_out).length;
-              })()}
-            </div>
+            <div class="count-number">${outgoingCalls}</div>
           </div>
         </div>
 
@@ -553,62 +548,19 @@ export async function POST(request: NextRequest) {
         ` : ''}
 
         <div class="footer">
-          <div class="date">Generated: ${new Date().toLocaleDateString('en-US', { 
-            year: 'numeric', 
-            month: 'long', 
-            day: 'numeric',
-            weekday: 'long',
-            hour: '2-digit',
-            minute: '2-digit',
-            hour12: true
-          })}</div>
+          <div class="date">Generated: ${generatedDate}</div>
         </div>
       </body>
       </html>
     `;
 
-    const filename = sanitizePdfFilename(`${safeDutyDate}_${safeUserName}_${safeWorkOffice}_Patient_Log`);
-    
     safeLog('🎯 PDF HTML 생성 완료');
     
-    // Puppeteer로 PDF 생성 (보안 옵션 적용)
-    const browser = await puppeteer.launch(getSecurePuppeteerOptions());
-    
-    const page = await browser.newPage();
-    await page.setContent(htmlContent);
-    
-    // 페이지 로딩 대기
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: {
-        top: '10mm',
-        right: '10mm',
-        bottom: '10mm',
-        left: '10mm'
-      },
-      preferCSSPageSize: false,
-      displayHeaderFooter: false
-    });
-    
-    // 브라우저 안전하게 종료
-    await browser.close();
-    
-    // 파일명 생성 (이미 sanitizePdfFilename에서 .pdf 추가됨)
-    const pdfFilename = filename;
-    
-    // PDF 응답 생성 (보안 헤더 추가)
-    return new NextResponse(Buffer.from(pdf), {
-      headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${pdfFilename}"`,
-        ...getSecurityHeaders(),
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0'
-      }
+    // HTML만 반환 (cc_route.ts와 동일한 방식)
+    return NextResponse.json({
+      success: true,
+      html: htmlContent,
+      message: 'PDF HTML generated successfully'
     });
 
   } catch (error) {
