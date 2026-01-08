@@ -204,6 +204,20 @@ const CreditCardReceipts = () => {
       return;
     }
 
+    // Filter out PDF files - only allow image files
+    const imageFiles = Array.from(files).filter(file => {
+      const isImage = file.type.startsWith('image/');
+      if (!isImage) {
+        alert(`❌ PDF files are not allowed. Please upload image files only. File "${file.name}" was rejected.`);
+      }
+      return isImage;
+    });
+
+    if (imageFiles.length === 0) {
+      alert('❌ No valid image files selected. Please upload image files only (PDF files are not allowed).');
+      return;
+    }
+
     // Generate submission ID if not already set - use immediately
     let currentSubmissionId = submissionId;
     if (!currentSubmissionId) {
@@ -215,7 +229,7 @@ const CreditCardReceipts = () => {
     }
 
     console.log('Starting file upload process...');
-    const uploadPromises = Array.from(files).map(async (file: File, fileIndex: number) => {
+    const uploadPromises = imageFiles.map(async (file: File, fileIndex: number) => {
       console.log(`Processing file ${fileIndex + 1}:`, { name: file.name, size: file.size, type: file.type });
       
       // Use the current submission ID for all files in this upload
@@ -670,7 +684,7 @@ const CreditCardReceipts = () => {
                     <label style={styles.label}>Receipt Images</label>
                     <input
                       type="file"
-                      accept="image/*,.pdf"
+                      accept="image/*"
                       multiple
                       onChange={(e) => {
                         const files = e.target.files;
