@@ -301,6 +301,10 @@ export async function POST(request: NextRequest) {
           <div class="treatment-label">TYPE OF TREATMENT</div>
           <div class="treatment-options">
             <div class="treatment-option">
+              <span class="checkbox ${formData.typeOfTreatment === 'Comprehensive' ? 'checked' : ''}"></span>
+              <span class="${formData.typeOfTreatment === 'Comprehensive' ? 'selected' : ''}">Comprehensive</span>
+            </div>
+            <div class="treatment-option">
               <span class="checkbox ${formData.typeOfTreatment === 'Limited' ? 'checked' : ''}"></span>
               <span class="${formData.typeOfTreatment === 'Limited' ? 'selected' : ''}">Limited</span>
             </div>
@@ -320,10 +324,8 @@ export async function POST(request: NextRequest) {
           <div class="section-header">Services Required</div>
           <ul class="services-list">
             ${formData.servicesRequired.map((service: string) => {
-              const [name, price] = service.split('|');
               return `<li>
-                <span class="service-name">✓ ${name}</span>
-                <span class="service-price">${price}</span>
+                <span class="service-name">✓ ${service}</span>
               </li>`;
             }).join('')}
           </ul>
@@ -611,7 +613,7 @@ export async function POST(request: NextRequest) {
         
         <!-- Footer -->
         <div style="margin-top: 20px; padding: 8px 0; text-align: center; border-top: 2px solid #333; background: #f5f5f5;">
-          <div style="font-size: 8px; font-weight: 700; color: #1a1a1a; margin-bottom: 3px; letter-spacing: 0.3px; text-transform: uppercase;">SMILELAND DENTAL</div>
+          <div style="font-size: 8px; font-weight: 700; color: #1a1a1a; margin-bottom: 3px; letter-spacing: 0.3px; text-transform: uppercase;">Smileland Dental</div>
           <div style="margin-top: 5px; padding-top: 5px; border-top: 1px solid #ccc;">
             <div style="font-size: 6px; color: #999; font-style: italic;">
               Contract Generated: ${new Date().toLocaleDateString('en-US', {
