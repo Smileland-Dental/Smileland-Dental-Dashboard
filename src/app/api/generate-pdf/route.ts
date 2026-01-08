@@ -774,7 +774,7 @@ export async function POST(request: NextRequest) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     const errorStack = error instanceof Error ? error.stack : undefined;
     
-    // 개발 환경에서는 상세한 에러 정보 제공
+    // 개발 환경에서는 상세한 에러 정보 로깅
     if (process.env.NODE_ENV !== 'production') {
       safeLog('❌ PDF 생성 에러:', errorMessage);
       if (errorStack) {
@@ -782,12 +782,20 @@ export async function POST(request: NextRequest) {
       }
     }
     
+    // 사용자에게 표시할 에러 메시지 (보안상 민감한 정보는 제외)
+    let userErrorMessage = 'PDF 생성 중 오류가 발생했습니다.';
+    
+    // 에러 메시지에서 민감하지 않은 정보만 포함
+    if (errorMessage && !errorMessage.includes('password') && !errorMessage.includes('token') && !errorMessage.includes('secret')) {
+      // 에러 메시지가 너무 길면 자르기
+      const shortMessage = errorMessage.length > 200 ? errorMessage.substring(0, 200) + '...' : errorMessage;
+      userErrorMessage = `PDF 생성 중 오류가 발생했습니다: ${shortMessage}`;
+    }
+    
     return NextResponse.json(
       { 
         success: false, 
-        error: process.env.NODE_ENV !== 'production' 
-          ? `PDF 생성 중 오류가 발생했습니다: ${errorMessage}`
-          : 'PDF 생성 중 오류가 발생했습니다.' 
+        error: userErrorMessage
       },
       { 
         status: 500,
