@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { collection, getDocs, addDoc, doc, setDoc, deleteDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
@@ -139,7 +139,7 @@ const ItemRow = React.memo(({
   );
 });
 
-function SupplyViewSystem() {
+function SupplyViewSystemContent() {
   const searchParams = useSearchParams();
   
   // Supply type 상태
@@ -1428,5 +1428,39 @@ function SupplyViewSystem() {
 }
 
 export default function SupplyViewPage() {
-  return <SupplyViewSystem />;
+  return (
+    <>
+      <style>{`
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+      `}</style>
+      <Suspense fallback={
+        <div style={{ 
+          display: 'flex', 
+          justifyContent: 'center', 
+          alignItems: 'center', 
+          minHeight: '100vh',
+          fontFamily: 'Segoe UI, Tahoma, Geneva, Verdana, sans-serif',
+          backgroundColor: '#f8f9fa'
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{
+              border: '4px solid #f3f3f3',
+              borderTop: '4px solid #0077B6',
+              borderRadius: '50%',
+              width: '50px',
+              height: '50px',
+              animation: 'spin 1s linear infinite',
+              margin: '0 auto 20px'
+            }}></div>
+            <p style={{ color: '#666' }}>Loading...</p>
+          </div>
+        </div>
+      }>
+        <SupplyViewSystemContent />
+      </Suspense>
+    </>
+  );
 }
