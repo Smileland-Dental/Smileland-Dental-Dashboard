@@ -1899,7 +1899,7 @@ export default function OrthodonticContract() {
 
         {/* Footer */}
         <div style={styles.footer}>
-          <p style={{ marginBottom: '5px', fontWeight: '600' }}>안녕</p>
+          <p style={{ marginBottom: '5px', fontWeight: '600' }}>Smileland Dental</p>
         </div>
       </div>
     </div>
