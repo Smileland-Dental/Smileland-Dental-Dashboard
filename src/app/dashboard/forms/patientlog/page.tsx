@@ -772,13 +772,22 @@ function PatientLogSystem() {
         
         const htmlContent = responseData.html;
         
+        // 디버깅: 서버에서 받은 HTML 확인
+        console.log('📥 서버에서 받은 HTML:');
+        console.log('- 타입:', typeof htmlContent);
+        console.log('- 길이:', htmlContent?.length);
+        console.log('- 시작 부분:', htmlContent?.substring(0, 100));
+        
         // 🔒 보안: HTML 검증 (서버에서 생성된 HTML만 허용)
         if (typeof htmlContent !== 'string') {
+          console.error('❌ Invalid HTML type:', typeof htmlContent);
           throw new Error('Invalid HTML format received from server');
         }
         
         // HTML이 올바른 형식인지 확인 (최소한의 검증)
-        if (!htmlContent.trim().startsWith('<!DOCTYPE') && !htmlContent.trim().startsWith('<html')) {
+        const trimmedHtml = htmlContent.trim();
+        if (!trimmedHtml.startsWith('<!DOCTYPE') && !trimmedHtml.startsWith('<html')) {
+          console.error('❌ Invalid HTML format. First 200 chars:', trimmedHtml.substring(0, 200));
           throw new Error('Invalid HTML format: HTML must start with <!DOCTYPE or <html');
         }
         
@@ -787,6 +796,8 @@ function PatientLogSystem() {
         if (htmlContent.length > MAX_HTML_SIZE) {
           throw new Error('HTML content is too large');
         }
+        
+        console.log('✅ HTML 검증 완료, Firestore에 저장 중...');
         
         // 파일명 생성
         const date = formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
@@ -799,14 +810,32 @@ function PatientLogSystem() {
         setProgress(70);
         try {
           // 🔒 보안: Firestore에 HTML과 메타데이터 저장 (검증된 HTML만)
-          await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
+          // HTML 필드는 sanitize하지 않음 (서버에서 이미 검증된 HTML이므로)
+          const pdfDocumentData = {
             filename,
             office: office,
             date: date,
             name: name,
             type: 'Patient Log',
-            html: htmlContent, // 검증된 HTML 저장
+            html: htmlContent, // 검증된 HTML 저장 (sanitize하지 않음)
             source: 'p_route', // 출처 표시 (보안 강화)
+            createdAt: new Date(),
+          };
+          
+          // 다른 필드만 sanitize (html 필드는 제외)
+          const safeMetadata = sanitizeFirebaseDataClient({
+            filename,
+            office: office,
+            date: date,
+            name: name,
+            type: 'Patient Log',
+            source: 'p_route',
+          });
+          
+          // HTML은 별도로 추가 (sanitize하지 않음)
+          await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
+            ...safeMetadata,
+            html: htmlContent, // HTML은 sanitize하지 않고 직접 저장
             createdAt: new Date(),
           });
           
