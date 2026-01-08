@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { collection, getDocs, query, orderBy, deleteDoc, doc } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
 import { getStorage, ref as storageRef, deleteObject } from "firebase/storage";
@@ -32,6 +32,7 @@ export default function AdminOrthodonticContracts() {
   const [searchTerm, setSearchTerm] = useState('');
   const [filterLanguage, setFilterLanguage] = useState<'all' | 'english' | 'spanish'>('all');
   const [downloadingExcel, setDownloadingExcel] = useState(false);
+  const [selectedMonths, setSelectedMonths] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     fetchContracts();
@@ -237,6 +238,48 @@ export default function AdminOrthodonticContracts() {
     }
   };
 
+  // 사용 가능한 월 목록 추출
+  const availableMonths = useMemo(() => {
+    const monthsSet = new Set<string>();
+    contracts.forEach(contract => {
+      if (contract.timestamp) {
+        const date = new Date(contract.timestamp);
+        const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+        monthsSet.add(monthKey);
+      }
+    });
+    return Array.from(monthsSet).sort().reverse(); // 최신순으로 정렬
+  }, [contracts]);
+
+  // 월 표시 형식 변환 (YYYY-MM -> "MMM YYYY")
+  const formatMonth = (monthKey: string) => {
+    const [year, month] = monthKey.split('-');
+    const date = new Date(parseInt(year), parseInt(month) - 1);
+    return date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' });
+  };
+
+  // 월 선택 토글
+  const toggleMonth = (monthKey: string) => {
+    setSelectedMonths(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(monthKey)) {
+        newSet.delete(monthKey);
+      } else {
+        newSet.add(monthKey);
+      }
+      return newSet;
+    });
+  };
+
+  // 모든 월 선택/해제
+  const toggleAllMonths = () => {
+    if (selectedMonths.size === availableMonths.length) {
+      setSelectedMonths(new Set());
+    } else {
+      setSelectedMonths(new Set(availableMonths));
+    }
+  };
+
   const filteredContracts = contracts.filter(contract => {
     const matchesSearch = contract.patientName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                          contract.responsibleParty.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -246,7 +289,15 @@ export default function AdminOrthodonticContracts() {
                            (filterLanguage === 'spanish' && contract.language === 'spanish') ||
                            (filterLanguage === 'english' && (!contract.language || contract.language === 'english'));
     
-    return matchesSearch && matchesLanguage;
+    // 날짜 필터링: 선택된 월이 없으면 모든 계약서 표시, 있으면 선택된 월만 표시
+    let matchesDate = true;
+    if (selectedMonths.size > 0 && contract.timestamp) {
+      const date = new Date(contract.timestamp);
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      matchesDate = selectedMonths.has(monthKey);
+    }
+    
+    return matchesSearch && matchesLanguage && matchesDate;
   });
 
   const styles = {
@@ -424,6 +475,79 @@ export default function AdminOrthodonticContracts() {
           </div>
         </div>
 
+        {/* Month Filter */}
+        {availableMonths.length > 0 && (
+          <div style={{
+            marginBottom: '15px',
+            padding: '8px 12px',
+            backgroundColor: 'white',
+            borderRadius: '6px',
+            boxShadow: '0 1px 4px rgba(0,0,0,0.1)'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px', gap: '8px', flexWrap: 'wrap' }}>
+              <strong style={{ color: '#333', fontSize: '0.85rem' }}>📅 Filter by Month:</strong>
+              <button
+                onClick={toggleAllMonths}
+                style={{
+                  padding: '4px 8px',
+                  fontSize: '0.75rem',
+                  backgroundColor: selectedMonths.size === availableMonths.length ? '#1976d2' : 'white',
+                  color: selectedMonths.size === availableMonths.length ? 'white' : '#666',
+                  border: '1px solid #e0e0e0',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontWeight: '500'
+                }}
+              >
+                {selectedMonths.size === availableMonths.length ? 'Clear All' : 'Select All'}
+              </button>
+              {selectedMonths.size > 0 && (
+                <span style={{ color: '#666', fontSize: '0.8rem' }}>
+                  ({selectedMonths.size} selected)
+                </span>
+              )}
+            </div>
+            <div style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: '6px'
+            }}>
+              {availableMonths.map(monthKey => (
+                <label
+                  key={monthKey}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    padding: '4px 10px',
+                    backgroundColor: selectedMonths.has(monthKey) ? '#e3f2fd' : '#f5f5f5',
+                    border: `1px solid ${selectedMonths.has(monthKey) ? '#1976d2' : '#e0e0e0'}`,
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s',
+                    fontWeight: selectedMonths.has(monthKey) ? '600' : 'normal',
+                    fontSize: '0.8rem'
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedMonths.has(monthKey)}
+                    onChange={() => toggleMonth(monthKey)}
+                    style={{
+                      marginRight: '6px',
+                      cursor: 'pointer',
+                      width: '14px',
+                      height: '14px'
+                    }}
+                  />
+                  <span style={{ color: selectedMonths.has(monthKey) ? '#1976d2' : '#666' }}>
+                    {formatMonth(monthKey)}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Loading */}
         {loading && (
           <div style={{ textAlign: 'center', padding: '50px' }}>
@@ -493,12 +617,6 @@ export default function AdminOrthodonticContracts() {
                       </span>
                     </td>
                     <td style={styles.td}>
-                      <button
-                        onClick={() => setSelectedContract(contract)}
-                        style={{ ...styles.button, ...styles.viewButton }}
-                      >
-                        👁️ View
-                      </button>
                       {contract.pdfUrl && (
                         <a
                           href={contract.pdfUrl}
