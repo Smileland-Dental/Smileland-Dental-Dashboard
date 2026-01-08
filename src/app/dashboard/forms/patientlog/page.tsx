@@ -760,69 +760,33 @@ function PatientLogSystem() {
       }
 
       if (response.ok) {
-        // p_route.ts에서 HTML 받기 (JSON 응답)
+        // p_route.ts에서 PDF blob 받기
         setSubmitStatus('Processing PDF...');
         setProgress(60);
-        const responseData = await response.json();
         
-        // HTML이 있는지 확인
-        if (!responseData.success || !responseData.html) {
-          throw new Error('PDF HTML을 받을 수 없습니다.');
-        }
-        
-        const htmlContent = responseData.html;
-        
-        // 디버깅: 서버에서 받은 HTML 확인
-        console.log('📥 서버에서 받은 HTML:');
-        console.log('- 타입:', typeof htmlContent);
-        console.log('- 길이:', htmlContent?.length);
-        console.log('- 시작 부분:', htmlContent?.substring(0, 100));
-        
-        // 🔒 보안: HTML 검증 (서버에서 생성된 HTML만 허용)
-        if (typeof htmlContent !== 'string') {
-          console.error('❌ Invalid HTML type:', typeof htmlContent);
-          throw new Error('Invalid HTML format received from server');
-        }
-        
-        // HTML이 올바른 형식인지 확인 (최소한의 검증)
-        const trimmedHtml = htmlContent.trim();
-        if (!trimmedHtml.startsWith('<!DOCTYPE') && !trimmedHtml.startsWith('<html')) {
-          console.error('❌ Invalid HTML format. First 200 chars:', trimmedHtml.substring(0, 200));
-          throw new Error('Invalid HTML format: HTML must start with <!DOCTYPE or <html');
-        }
-        
-        // HTML 크기 제한 (10MB)
-        const MAX_HTML_SIZE = 10 * 1024 * 1024; // 10MB
-        if (htmlContent.length > MAX_HTML_SIZE) {
-          throw new Error('HTML content is too large');
-        }
-        
-        console.log('✅ HTML 검증 완료, Firestore에 저장 중...');
+        // PDF blob 받기
+        const pdfBlob = await response.blob();
         
         // 파일명 생성
         const date = formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
         const name = formData.userName || 'Unknown';
         const office = formData.workOffice || 'Unknown';
         const filename = `7) ${date}_${office}_${name}_Patient Log.pdf`;
-        
-        // Firestore에 HTML 저장 (PDF Storage 대신 HTML 저장)
-        setSubmitStatus('Saving PDF to archive...');
-        setProgress(70);
-        try {
-          // 🔒 보안: Firestore에 HTML과 메타데이터 저장 (검증된 HTML만)
-          // HTML 필드는 sanitize하지 않음 (서버에서 이미 검증된 HTML이므로)
-          const pdfDocumentData = {
-            filename,
-            office: office,
-            date: date,
-            name: name,
-            type: 'Patient Log',
-            html: htmlContent, // 검증된 HTML 저장 (sanitize하지 않음)
-            source: 'p_route', // 출처 표시 (보안 강화)
-            createdAt: new Date(),
-          };
           
-          // 다른 필드만 sanitize (html 필드는 제외)
+          // PDF를 Firebase Storage에 저장
+          setSubmitStatus('Saving PDF to archive...');
+          setProgress(70);
+          
+          const storage = getStorage();
+          const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
+          
+          // PDF 업로드
+          await uploadBytes(storageRef, pdfBlob);
+          
+          // 다운로드 URL 가져오기
+          const downloadUrl = await getDownloadURL(storageRef);
+          
+          // Firestore에 메타데이터 저장
           const safeMetadata = sanitizeFirebaseDataClient({
             filename,
             office: office,
@@ -832,14 +796,14 @@ function PatientLogSystem() {
             source: 'p_route',
           });
           
-          // HTML은 별도로 추가 (sanitize하지 않음)
           await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
             ...safeMetadata,
-            html: htmlContent, // HTML은 sanitize하지 않고 직접 저장
+            url: downloadUrl, // PDF 파일 URL
+            storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
             createdAt: new Date(),
           });
           
-          console.log('PDF HTML saved successfully to Firestore');
+          console.log('PDF saved successfully to Firebase Storage');
         } catch (storageError: any) {
           console.error('Storage error:', storageError);
           // 저장 실패 시 사용자에게 알림
@@ -927,31 +891,43 @@ function PatientLogSystem() {
               
               if (retryResponse.ok) {
                 retrySuccess = true;
-                const retryResponseData = await retryResponse.json();
                 
-                // HTML이 있는지 확인
-                if (!retryResponseData.success || !retryResponseData.html) {
-                  throw new Error('PDF HTML을 받을 수 없습니다.');
-                }
+                // PDF blob 받기
+                const pdfBlob = await retryResponse.blob();
                 
-                const htmlContent = retryResponseData.html;
                 const date = formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
                 const name = formData.userName || 'Unknown';
                 const office = formData.workOffice || 'Unknown';
                 const filename = `7) ${date}_${office}_${name}_Patient Log.pdf`;
                 
+                // PDF를 Firebase Storage에 저장
                 setSubmitStatus('Saving PDF to archive...');
                 setProgress(70);
                 
                 try {
-                  // Firestore에 HTML과 메타데이터 저장
-                  await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
+                  const storage = getStorage();
+                  const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
+                  
+                  // PDF 업로드
+                  await uploadBytes(storageRef, pdfBlob);
+                  
+                  // 다운로드 URL 가져오기
+                  const downloadUrl = await getDownloadURL(storageRef);
+                  
+                  // Firestore에 메타데이터 저장
+                  const safeMetadata = sanitizeFirebaseDataClient({
                     filename,
                     office: office,
                     date: date,
                     name: name,
                     type: 'Patient Log',
-                    html: htmlContent, // HTML 저장
+                    source: 'p_route',
+                  });
+                  
+                  await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
+                    ...safeMetadata,
+                    url: downloadUrl,
+                    storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
                     createdAt: new Date(),
                   });
                 } catch (storageError: any) {
