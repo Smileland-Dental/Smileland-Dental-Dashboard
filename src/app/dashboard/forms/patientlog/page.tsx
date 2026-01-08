@@ -174,7 +174,7 @@ const PatientRow = React.memo(({
   );
 });
 
-function PatientLogSystem() {
+function PatientLogSystem(): React.ReactElement {
   // 보안 조치 활성화
   useEffect(() => {
     enableAllSecurityMeasures({
@@ -772,11 +772,12 @@ function PatientLogSystem() {
         const name = formData.userName || 'Unknown';
         const office = formData.workOffice || 'Unknown';
         const filename = `7) ${date}_${office}_${name}_Patient Log.pdf`;
-          
-          // PDF를 Firebase Storage에 저장
-          setSubmitStatus('Saving PDF to archive...');
-          setProgress(70);
-          
+        
+        // PDF를 Firebase Storage에 저장
+        setSubmitStatus('Saving PDF to archive...');
+        setProgress(70);
+        
+        try {
           const storage = getStorage();
           const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
           
