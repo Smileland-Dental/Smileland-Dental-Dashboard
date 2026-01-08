@@ -83,7 +83,23 @@ export async function POST(request: NextRequest) {
     
     // validateRequest에서 이미 파싱한 본문 사용
     const body = validation.body;
-    const { patientData } = body.data || body; // 보안 래퍼에서 데이터 추출
+    // 보안 래퍼에서 데이터 추출: body.data.patientData 또는 body.patientData
+    const patientData = body.data?.patientData || body.data || body.patientData || body;
+    
+    // patientData가 없으면 에러 반환
+    if (!patientData) {
+      logError(new Error('patientData is missing from request'), 'generate-pdf');
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: '요청 데이터가 올바르지 않습니다. patientData가 필요합니다.' 
+        },
+        { 
+          status: 400,
+          headers: getSecurityHeaders()
+        }
+      );
+    }
     
     // 인증된 사용자가 있으면 데이터 소유권 검증 및 강제 적용
     if (authenticatedUser && patientData) {
