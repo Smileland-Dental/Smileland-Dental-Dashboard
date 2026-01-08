@@ -83,16 +83,69 @@ export async function POST(request: NextRequest) {
     
     // validateRequest에서 이미 파싱한 본문 사용
     const body = validation.body;
-    // 보안 래퍼에서 데이터 추출: body.data.patientData 또는 body.patientData
-    const patientData = body.data?.patientData || body.data || body.patientData || body;
+    
+    // 디버깅을 위한 로깅 (개발 환경)
+    if (process.env.NODE_ENV !== 'production') {
+      safeLog('📦 Request body structure:', {
+        hasBody: !!body,
+        bodyKeys: body ? Object.keys(body) : [],
+        hasData: !!(body?.data),
+        dataKeys: body?.data ? Object.keys(body.data) : [],
+        hasPatientData: !!(body?.patientData),
+        hasDataPatientData: !!(body?.data?.patientData)
+      });
+    }
+    
+    // 보안 래퍼에서 데이터 추출: 
+    // 1. body.data.patientData (보안 래퍼 안에 patientData가 있는 경우)
+    // 2. body.patientData (직접 patientData가 있는 경우)
+    // 3. body.data (보안 래퍼 자체가 patientData인 경우 - 이건 제외)
+    let patientData: any = body.data?.patientData || body.patientData;
+    
+    // patientData를 찾지 못한 경우, body.data가 patientData 객체인지 확인
+    if (!patientData && body.data && typeof body.data === 'object' && !Array.isArray(body.data)) {
+      // body.data가 patientData 객체인지 확인 (dutyDate, userName 등의 필드가 있는지)
+      if (body.data.dutyDate || body.data.userName || body.data.workOffice) {
+        patientData = body.data;
+      }
+    }
+    
+    // 여전히 찾지 못한 경우, body 자체가 patientData인지 확인
+    if (!patientData && body && typeof body === 'object' && !Array.isArray(body)) {
+      if (body.dutyDate || body.userName || body.workOffice) {
+        patientData = body;
+      }
+    }
     
     // patientData가 없으면 에러 반환
     if (!patientData) {
       logError(new Error('patientData is missing from request'), 'generate-pdf');
+      if (process.env.NODE_ENV !== 'production') {
+        safeLog('❌ Request body structure:', JSON.stringify(body, null, 2));
+      }
       return NextResponse.json(
         { 
           success: false, 
           error: '요청 데이터가 올바르지 않습니다. patientData가 필요합니다.' 
+        },
+        { 
+          status: 400,
+          headers: getSecurityHeaders()
+        }
+      );
+    }
+    
+    // patientData가 객체가 아닌 경우 처리
+    if (typeof patientData !== 'object' || Array.isArray(patientData)) {
+      logError(new Error('patientData is not an object'), 'generate-pdf');
+      if (process.env.NODE_ENV !== 'production') {
+        safeLog('❌ patientData type:', typeof patientData);
+        safeLog('❌ patientData value:', JSON.stringify(patientData));
+      }
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: '요청 데이터 형식이 올바르지 않습니다.' 
         },
         { 
           status: 400,
@@ -126,7 +179,12 @@ export async function POST(request: NextRequest) {
     }
     
     if (process.env.NODE_ENV !== 'production') {
-      safeLog('📋 받은 데이터:', { hasData: !!patientData });
+      safeLog('📋 받은 데이터:', { 
+        hasData: !!patientData,
+        hasPatientLogs: !!(patientData.patientLogs),
+        hasPatientRows: !!(patientData.patientRows),
+        keys: Object.keys(patientData || {})
+      });
     }
     
     // PDF 생성 데이터 크기 검증
@@ -713,10 +771,23 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     logError(error, 'generate-pdf');
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    
+    // 개발 환경에서는 상세한 에러 정보 제공
+    if (process.env.NODE_ENV !== 'production') {
+      safeLog('❌ PDF 생성 에러:', errorMessage);
+      if (errorStack) {
+        safeLog('❌ 에러 스택:', errorStack);
+      }
+    }
+    
     return NextResponse.json(
       { 
         success: false, 
-        error: 'PDF 생성 중 오류가 발생했습니다.' 
+        error: process.env.NODE_ENV !== 'production' 
+          ? `PDF 생성 중 오류가 발생했습니다: ${errorMessage}`
+          : 'PDF 생성 중 오류가 발생했습니다.' 
       },
       { 
         status: 500,
