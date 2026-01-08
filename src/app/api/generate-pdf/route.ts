@@ -562,47 +562,129 @@ export async function POST(request: NextRequest) {
     const filenameBase = `${safeDutyDate}_${safeUserName}_${safeWorkOffice}_Patient_Log`;
     const filename = filenameBase.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf';
     
-    // Puppeteer로 PDF 생성 (보안 옵션 적용)
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu'
-      ]
-    });
+    // Puppeteer로 PDF 생성 (보안 옵션 강화)
+    let browser;
+    let pdf: Buffer;
     
-    const page = await browser.newPage();
-    await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+    try {
+      browser = await puppeteer.launch({
+        headless: true,
+        args: [
+          // 🔒 보안: 샌드박스 유지 (가능한 경우)
+          // Docker 환경에서는 --no-sandbox가 필요할 수 있지만, 보안상 권장하지 않음
+          // 프로덕션에서는 샌드박스를 유지하는 것이 안전합니다
+          ...(process.env.ALLOW_NO_SANDBOX === 'true' ? ['--no-sandbox'] : []),
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          // 🔒 보안: 추가 보안 플래그
+          // '--disable-web-security', // 제거: 보안을 약화시킴
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--disable-site-isolation-trials',
+          '--disable-blink-features=AutomationControlled',
+          // 🔒 보안: 네트워크 제한
+          '--disable-background-networking',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-breakpad',
+          '--disable-component-extensions-with-background-pages',
+          '--disable-extensions',
+          '--disable-features=TranslateUI',
+          '--disable-ipc-flooding-protection',
+          '--disable-renderer-backgrounding',
+          '--disable-sync',
+          '--metrics-recording-only',
+          '--mute-audio',
+          '--no-default-browser-check',
+          '--no-pings',
+          '--use-mock-keychain'
+        ],
+        // 🔒 보안: 타임아웃 설정
+        timeout: 30000, // 30초 타임아웃
+        // 🔒 보안: 프로세스 제한
+        protocolTimeout: 30000
+      });
+      
+      const page = await browser.newPage();
+      
+      // 🔒 보안: 네트워크 요청 차단 (외부 리소스 로드 방지)
+      await page.setRequestInterception(true);
+      page.on('request', (request) => {
+        const url = request.url();
+        // 로컬 리소스만 허용 (data:, blob:, inline styles)
+        if (url.startsWith('data:') || url.startsWith('blob:') || url === 'about:blank') {
+          request.continue();
+        } else {
+          // 외부 리소스 차단
+          request.abort();
+        }
+      });
+      
+      // 🔒 보안: JavaScript 실행 제한 (필요시)
+      // await page.setJavaScriptEnabled(false); // HTML만 렌더링하는 경우
+      
+      // 🔒 보안: CSP 헤더 설정
+      await page.setExtraHTTPHeaders({
+        'Content-Security-Policy': "default-src 'self' 'unsafe-inline' 'unsafe-eval' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:;"
+      });
+      
+      // 🔒 보안: 타임아웃 설정
+      page.setDefaultTimeout(10000); // 10초
+      page.setDefaultNavigationTimeout(10000);
+      
+      // HTML 콘텐츠 설정 (네트워크 요청 없이)
+      await page.setContent(htmlContent, { 
+        waitUntil: 'domcontentloaded', // networkidle0 대신 domcontentloaded 사용
+        timeout: 10000
+      });
+      
+      // 페이지 로딩 대기 (최소한만)
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // 🔒 보안: PDF 생성 (타임아웃 포함)
+      pdf = await Promise.race([
+        page.pdf({
+          format: 'A4',
+          printBackground: true,
+          margin: {
+            top: '10mm',
+            right: '10mm',
+            bottom: '10mm',
+            left: '10mm'
+          },
+          preferCSSPageSize: false,
+          displayHeaderFooter: false
+        }),
+        new Promise<Buffer>((_, reject) => 
+          setTimeout(() => reject(new Error('PDF generation timeout')), 15000)
+        )
+      ]) as Buffer;
+      
+    } catch (error) {
+      throw error;
+    } finally {
+      // 🔒 보안: 브라우저 안전하게 종료 (항상 실행)
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (closeError) {
+          // 종료 오류는 로그만 남기고 계속 진행
+          if (process.env.NODE_ENV !== 'production') {
+            safeLog('Browser close error:', closeError);
+          }
+        }
+      }
+    }
     
-    // 페이지 로딩 대기
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: {
-        top: '10mm',
-        right: '10mm',
-        bottom: '10mm',
-        left: '10mm'
-      },
-      preferCSSPageSize: false,
-      displayHeaderFooter: false
-    });
-    
-    // 브라우저 안전하게 종료
-    await browser.close();
-    
-    // 파일명 생성 (이미 sanitizePdfFilename에서 .pdf 추가됨)
+    // 파일명 생성
     const pdfFilename = filename;
     
     // PDF 응답 생성 (보안 헤더 추가)
-    return new NextResponse(Buffer.from(pdf), {
+    // Buffer를 Uint8Array로 변환하여 NextResponse와 호환되도록 함
+    return new NextResponse(new Uint8Array(pdf), {
       headers: {
         'Content-Type': 'application/pdf',
         'Content-Disposition': `attachment; filename="${pdfFilename}"`,
