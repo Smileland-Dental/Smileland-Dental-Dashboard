@@ -189,12 +189,24 @@ export async function POST(request: NextRequest) {
     
     // PDF 생성 데이터 크기 검증
     const dataSize = JSON.stringify(patientData).length;
+    if (process.env.NODE_ENV !== 'production') {
+      safeLog('📊 데이터 크기:', `${dataSize} bytes`);
+    }
     if (!validatePdfGeneration(dataSize)) {
-      throw new Error('Data size too large for PDF generation');
+      throw new Error(`데이터 크기가 너무 큽니다: ${dataSize} bytes (최대 허용 크기 초과)`);
     }
     
     // patientLogs 또는 patientRows 둘 다 처리하고 빈 행 필터링 (보안 강화)
     const allPatients = patientData.patientLogs || patientData.patientRows || [];
+    
+    if (process.env.NODE_ENV !== 'production') {
+      safeLog('👥 환자 데이터:', {
+        totalPatients: allPatients.length,
+        hasPatientLogs: !!(patientData.patientLogs),
+        hasPatientRows: !!(patientData.patientRows)
+      });
+    }
+    
     const safePatients = sanitizeArrayForPdf(allPatients, 1000); // 최대 1000개 행으로 제한
     const patientList = safePatients.filter((row: any) => 
       row && (
@@ -203,6 +215,10 @@ export async function POST(request: NextRequest) {
         row.other_duty || row.otherDuty
       )
     );
+    
+    if (process.env.NODE_ENV !== 'production') {
+      safeLog('✅ 필터링된 환자 데이터:', `${patientList.length} 행`);
+    }
     
     // 데이터 안전성 검증 및 이스케이프
     const safeDutyDate = sanitizeString(patientData.dutyDate, 50);
@@ -641,6 +657,10 @@ export async function POST(request: NextRequest) {
     let pdf: Buffer;
     
     try {
+      if (process.env.NODE_ENV !== 'production') {
+        safeLog('🚀 Puppeteer 시작 중...');
+      }
+      
       browser = await puppeteer.launch({
         headless: true,
         args: [
@@ -682,6 +702,10 @@ export async function POST(request: NextRequest) {
         protocolTimeout: 30000
       });
       
+      if (process.env.NODE_ENV !== 'production') {
+        safeLog('📄 새 페이지 생성 중...');
+      }
+      
       const page = await browser.newPage();
       
       // 🔒 보안: 네트워크 요청 차단 (외부 리소스 로드 방지)
@@ -710,6 +734,10 @@ export async function POST(request: NextRequest) {
       page.setDefaultNavigationTimeout(10000);
       
       // HTML 콘텐츠 설정 (네트워크 요청 없이)
+      if (process.env.NODE_ENV !== 'production') {
+        safeLog('📝 HTML 콘텐츠 설정 중...');
+      }
+      
       await page.setContent(htmlContent, { 
         waitUntil: 'domcontentloaded', // networkidle0 대신 domcontentloaded 사용
         timeout: 10000
@@ -719,6 +747,10 @@ export async function POST(request: NextRequest) {
       await new Promise(resolve => setTimeout(resolve, 500));
       
       // 🔒 보안: PDF 생성 (타임아웃 포함)
+      if (process.env.NODE_ENV !== 'production') {
+        safeLog('📄 PDF 생성 중...');
+      }
+      
       pdf = await Promise.race([
         page.pdf({
           format: 'A4',
@@ -737,13 +769,35 @@ export async function POST(request: NextRequest) {
         )
       ]) as Buffer;
       
-    } catch (error) {
-      throw error;
+      if (process.env.NODE_ENV !== 'production') {
+        safeLog('✅ PDF 생성 완료, 크기:', `${pdf.length} bytes`);
+      }
+    } catch (puppeteerError: any) {
+      // Puppeteer 관련 에러를 더 자세히 로깅
+      const puppeteerErrorMessage = puppeteerError?.message || 'Unknown puppeteer error';
+      if (process.env.NODE_ENV !== 'production') {
+        safeLog('❌ Puppeteer 에러:', puppeteerErrorMessage);
+        if (puppeteerError?.stack) {
+          safeLog('❌ 에러 스택:', puppeteerError.stack);
+        }
+      }
+      
+      // Windows 환경에서 자주 발생하는 에러 처리
+      if (puppeteerErrorMessage.includes('Browser') || 
+          puppeteerErrorMessage.includes('launch') ||
+          puppeteerErrorMessage.includes('executable')) {
+        throw new Error(`브라우저 실행 실패: ${puppeteerErrorMessage}. Puppeteer가 제대로 설치되어 있는지 확인해주세요.`);
+      }
+      
+      throw new Error(`PDF 생성 실패: ${puppeteerErrorMessage}`);
     } finally {
       // 🔒 보안: 브라우저 안전하게 종료 (항상 실행)
       if (browser) {
         try {
           await browser.close();
+          if (process.env.NODE_ENV !== 'production') {
+            safeLog('🔒 브라우저 종료 완료');
+          }
         } catch (closeError) {
           // 종료 오류는 로그만 남기고 계속 진행
           if (process.env.NODE_ENV !== 'production') {
