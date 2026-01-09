@@ -281,12 +281,10 @@ function PatientLogSystem(): React.ReactElement {
     }
 
     try {
+      // 모든 row 저장 (빈 row도 포함하여 나중에 로드할 때 정확히 복원)
       const dataToSave = {
         ...formData,
-        patientRows: patientRows.filter(row => 
-          row.name || row.office || row.appt_date || row.visit_type || 
-          row.call_in || row.call_out || row.time || row.remark || row.other_duty
-        ),
+        patientRows: patientRows, // 필터링하지 않고 모든 row 저장
         timestamp: new Date().toISOString(),
         autoSaved: true
       };
@@ -676,12 +674,10 @@ function PatientLogSystem(): React.ReactElement {
       setProgress(10);
 
       // 1. Firebase에 데이터 저장 (보안 강화)
+      // 모든 row 저장 (빈 row도 포함하여 나중에 로드할 때 정확히 복원)
       const dataToSave = {
         ...formData,
-        patientRows: patientRows.filter(row => 
-          row.name || row.office || row.appt_date || row.visit_type || 
-          row.call_in || row.call_out || row.time || row.remark || row.other_duty
-        ),
+        patientRows: patientRows, // 필터링하지 않고 모든 row 저장
         timestamp: new Date().toISOString(),
         // 보안 강화: 사용자 정보 강제 추가 (항상 현재 사용자로 설정)
         userId: currentUser.uid, // 항상 현재 사용자 ID로 설정 (보안 강화)
