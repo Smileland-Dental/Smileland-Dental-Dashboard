@@ -206,7 +206,7 @@ export async function POST(request: NextRequest) {
       });
     }
     
-    const safePatients = sanitizeArrayForPdf(allPatients, 200); // 최대 200개 행으로 제한
+    const safePatients = sanitizeArrayForPdf(allPatients, 1000); // 최대 1000개 행으로 제한
     const patientList = safePatients.filter((row: any) => 
       row && (
         row.name || row.office || row.appt_date || row.apptDate || row.visit_type || row.visitType || 
