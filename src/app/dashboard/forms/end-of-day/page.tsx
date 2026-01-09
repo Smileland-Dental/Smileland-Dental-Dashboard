@@ -570,12 +570,31 @@ export default function EndOfDay() {
                 <div
                   key={pdf.id}
                   style={styles.pdfCard}
-                  onClick={() => {
-                    // p_route.ts에서 반환한 HTML이 있는 경우
-                    if (pdf.html) {
-                      try {
-                        let htmlContent = pdf.html;
-                        
+                  onClick={async () => {
+                    try {
+                      let htmlContent: string | null = null;
+                      
+                      // 1. Firestore에 HTML이 저장되어 있는 경우
+                      if (pdf.html) {
+                        htmlContent = pdf.html;
+                      } 
+                      // 2. HTML이 없고 URL이 있는 경우, URL에서 HTML 가져오기
+                      else if (pdf.url && pdf.url.startsWith('http')) {
+                        // HTML 파일인 경우 (확장자가 .html이거나 type이 text/html)
+                        if (pdf.filename?.endsWith('.html') || pdf.url.includes('.html')) {
+                          try {
+                            const response = await fetch(pdf.url);
+                            if (response.ok) {
+                              htmlContent = await response.text();
+                            }
+                          } catch (fetchError) {
+                            console.error('Error fetching HTML from URL:', fetchError);
+                          }
+                        }
+                      }
+                      
+                      // HTML이 있으면 새 창에서 표시
+                      if (htmlContent) {
                         // 🔒 보안: HTML 검증
                         if (typeof htmlContent !== 'string') {
                           alert('Invalid HTML format');
@@ -583,9 +602,7 @@ export default function EndOfDay() {
                         }
                         
                         // HTML이 이스케이프되어 있는 경우 디코딩 시도
-                        // &lt; -> <, &gt; -> > 등
                         if (htmlContent.includes('&lt;') || htmlContent.includes('&gt;')) {
-                          // HTML 엔티티 디코딩
                           const textarea = document.createElement('textarea');
                           textarea.innerHTML = htmlContent;
                           htmlContent = textarea.value;
@@ -615,20 +632,22 @@ export default function EndOfDay() {
                         // 새 창 생성 및 HTML 직접 작성
                         const newWindow = window.open('', '_blank');
                         if (newWindow) {
-                          // HTML을 직접 작성 (이스케이프하지 않음)
                           newWindow.document.open();
                           newWindow.document.write(htmlContent);
                           newWindow.document.close();
                         } else {
                           alert('팝업이 차단되었습니다. 팝업 차단을 해제해주세요.');
                         }
-  } catch (error) {
-                        console.error('Error opening PDF:', error);
-                        alert('PDF를 열 수 없습니다.');
+                      } 
+                      // HTML이 없고 일반 URL인 경우 (PDF 등)
+                      else if (pdf.url && pdf.url.startsWith('http')) {
+                        window.open(pdf.url, '_blank');
+                      } else {
+                        alert('PDF를 열 수 없습니다. URL이 없습니다.');
                       }
-                    } else if (pdf.url && pdf.url.startsWith('http')) {
-                      // 기존 URL 방식
-                      window.open(pdf.url, '_blank');
+                    } catch (error) {
+                      console.error('Error opening PDF:', error);
+                      alert('PDF를 열 수 없습니다.');
                     }
                   }}
                   onMouseEnter={(e) => {
