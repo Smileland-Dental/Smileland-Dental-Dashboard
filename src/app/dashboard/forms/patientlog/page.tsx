@@ -371,8 +371,9 @@ function PatientLogSystem(): React.ReactElement {
             id: index + 1
           }));
           
-          // 30개 행을 유지하되, 저장된 데이터로 채움
-          const newRows = Array.from({ length: 30 }, (_, index) => {
+          // 저장된 row 개수와 30 중 더 큰 값으로 배열 생성 (30개 이상도 유지)
+          const minRows = Math.max(loadedRows.length, 30);
+          const newRows = Array.from({ length: minRows }, (_, index) => {
             if (index < loadedRows.length) {
               return loadedRows[index];
             }
