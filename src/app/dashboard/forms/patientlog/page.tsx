@@ -807,7 +807,7 @@ function PatientLogSystem(): React.ReactElement {
             // 다운로드 URL 가져오기
             const downloadUrl = await getDownloadURL(storageRef);
             
-            // Firestore에 메타데이터 저장
+            // Firestore에 메타데이터 저장 (HTML도 함께 저장)
             const safeMetadata = sanitizeFirebaseDataClient({
               filename: filename.replace('.pdf', '.html'),
               office: office,
@@ -817,10 +817,17 @@ function PatientLogSystem(): React.ReactElement {
               source: 'p_route',
             });
             
+            // HTML이 너무 크면 Firestore 제한(1MB)을 고려하여 저장
+            // HTML이 900KB 이하인 경우에만 직접 저장 (안전 마진)
+            const htmlSize = new Blob([htmlContent]).size;
+            const maxHtmlSize = 900 * 1024; // 900KB
+            
             await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
               ...safeMetadata,
               url: downloadUrl,
               storagePath: `endofday-pdfs/${office}/${date}/${filename.replace('.pdf', '.html')}`,
+              // HTML이 작으면 Firestore에 직접 저장, 크면 URL만 저장
+              ...(htmlSize <= maxHtmlSize ? { html: htmlContent } : {}),
               createdAt: new Date(),
             });
             
