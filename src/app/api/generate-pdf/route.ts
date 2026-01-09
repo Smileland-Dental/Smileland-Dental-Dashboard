@@ -1,8 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import puppeteer from 'puppeteer';
 import { Buffer } from 'buffer';
-import { existsSync } from 'fs';
-import { join } from 'path';
 import { 
   escapeHtml, 
   sanitizeString, 
@@ -648,166 +645,40 @@ export async function POST(request: NextRequest) {
       </html>
     `;
 
-    safeLog('🎯 PDF HTML 생성 완료');
-    
-    // 파일명 생성 (안전하게)
-    const filenameBase = `${safeDutyDate}_${safeUserName}_${safeWorkOffice}_Patient_Log`;
-    const filename = filenameBase.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf';
-    
-    // Puppeteer로 PDF 생성 (보안 옵션 강화)
-    let browser;
-    let pdf: Buffer | Uint8Array;
-    
-    // 브라우저 실행 파일 경로 찾기 (Edge 우선, 없으면 Chromium)
-    const findBrowserPath = (): string | undefined => {
-      // 환경 변수에서 브라우저 경로 확인
-      if (process.env.BROWSER_PATH && existsSync(process.env.BROWSER_PATH)) {
-        return process.env.BROWSER_PATH;
-      }
-      
-      // Windows에서 Microsoft Edge 경로 확인
-      const edgePaths = [
-        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-        process.env.PROGRAMFILES ? join(process.env.PROGRAMFILES, 'Microsoft', 'Edge', 'Application', 'msedge.exe') : '',
-        process.env['PROGRAMFILES(X86)'] ? join(process.env['PROGRAMFILES(X86)'], 'Microsoft', 'Edge', 'Application', 'msedge.exe') : ''
-      ].filter(path => path && existsSync(path));
-      
-      if (edgePaths.length > 0) {
-        if (process.env.NODE_ENV !== 'production') {
-          safeLog('✅ Microsoft Edge 경로 발견:', edgePaths[0]);
-        }
-        return edgePaths[0];
-      }
-      
-      // Edge를 찾지 못한 경우 Puppeteer의 Chromium 사용
-      try {
-        const chromiumPath = puppeteer.executablePath();
-        if (process.env.NODE_ENV !== 'production') {
-          safeLog('✅ Puppeteer Chromium 경로:', chromiumPath);
-        }
-        return chromiumPath;
-      } catch (error) {
-        if (process.env.NODE_ENV !== 'production') {
-          safeLog('⚠️ Chromium 경로를 찾을 수 없습니다.');
-        }
-        return undefined;
-      }
-    };
-    
-    try {
-      if (process.env.NODE_ENV !== 'production') {
-        safeLog('🚀 Puppeteer 시작 중...');
-      }
-      
-      const browserPath = findBrowserPath();
-      const launchOptions: any = {
-        headless: true,
-        args: [
-          // 보안: --no-sandbox는 보안상 위험하므로 환경 변수로 제어
-          // Docker나 특정 서버 환경에서만 필요할 수 있음
-          ...(process.env.ALLOW_NO_SANDBOX === 'true' ? ['--no-sandbox'] : []),
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage', // 메모리 문제 방지
-          '--disable-gpu', // GPU 비활성화 (서버 환경)
-          // 보안: 추가 보안 플래그
-          '--disable-extensions', // 확장 프로그램 비활성화
-          '--disable-plugins', // 플러그인 비활성화
-          '--disable-background-networking', // 백그라운드 네트워크 비활성화
-          '--no-first-run', // 첫 실행 설정 건너뛰기
-          '--no-default-browser-check' // 기본 브라우저 확인 건너뛰기
-        ],
-        timeout: 30000
-      };
-      
-      // 브라우저 경로가 있으면 사용
-      if (browserPath) {
-        launchOptions.executablePath = browserPath;
-      }
-      
-      browser = await puppeteer.launch(launchOptions);
-      
-      if (process.env.NODE_ENV !== 'production') {
-        safeLog('📄 새 페이지 생성 중...');
-      }
-      
-      const page = await browser.newPage();
-      
-      // 외부 리소스 로드 차단 (보안)
-      await page.setRequestInterception(true);
-      page.on('request', (request) => {
-        const url = request.url();
-        // 로컬 리소스만 허용
-        if (url.startsWith('data:') || url.startsWith('blob:') || url === 'about:blank') {
-          request.continue();
-        } else {
-          request.abort();
-        }
-      });
-      
-      page.setDefaultTimeout(10000);
-      
-      // HTML 콘텐츠 설정
-      await page.setContent(htmlContent, { 
-        waitUntil: 'domcontentloaded',
-        timeout: 10000
-      });
-      
-      // 페이지 렌더링 대기
-      await new Promise(resolve => setTimeout(resolve, 500));
-      
-      // PDF 생성
-      pdf = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: {
-          top: '10mm',
-          right: '10mm',
-          bottom: '10mm',
-          left: '10mm'
-        }
-      });
-      
-    } catch (puppeteerError: any) {
-      const errorMessage = puppeteerError?.message || 'Unknown error';
-      
-      // Chromium 경로를 찾지 못한 경우
-      if (errorMessage.includes('Could not find Chrome') || 
-          errorMessage.includes('did not perform an installation') ||
-          errorMessage.includes('executable doesn\'t exist')) {
-        if (process.env.NODE_ENV !== 'production') {
-          safeLog('❌ Chromium이 설치되지 않았습니다. 다음 명령어를 실행하세요:');
-          safeLog('   npx puppeteer browsers install chrome');
-        }
-        throw new Error(`PDF 생성 실패: Chromium이 설치되지 않았습니다. 'npx puppeteer browsers install chrome' 명령어를 실행해주세요.`);
-      }
-      
-      if (process.env.NODE_ENV !== 'production') {
-        safeLog('❌ Puppeteer 에러:', errorMessage);
-      }
-      throw new Error(`PDF 생성 실패: ${errorMessage}`);
-    } finally {
-      // 브라우저 종료
-      if (browser) {
-        try {
-          await browser.close();
-        } catch (closeError) {
-          // 종료 오류는 무시
-        }
-      }
+    // HTML을 반환하고 클라이언트에서 브라우저 인쇄 기능으로 PDF 생성
+    // 추가 패키지 설치 불필요 - 브라우저의 내장 기능 사용
+    if (process.env.NODE_ENV !== 'production') {
+      safeLog('📄 HTML 반환 (클라이언트에서 PDF 생성)...');
     }
     
-    // 파일명 생성
-    const pdfFilename = filename;
+    // HTML에 인쇄 스타일 추가 (인쇄 시에만 적용)
+    const htmlWithPrintStyles = htmlContent.replace(
+      '</head>',
+      `
+      <style>
+        @media print {
+          body {
+            margin: 0;
+            padding: 20px;
+          }
+          .no-print {
+            display: none;
+          }
+          table {
+            page-break-inside: avoid;
+          }
+          tr {
+            page-break-inside: avoid;
+          }
+        }
+      </style>
+      </head>`
+    );
     
-    // PDF 응답 생성 (보안 헤더 추가)
-    // Buffer 또는 Uint8Array를 NextResponse와 호환되는 형식으로 변환
-    // NextResponse는 Buffer와 Uint8Array 모두 받을 수 있음
-    const pdfData = pdf instanceof Buffer ? pdf : Buffer.from(pdf);
-    return new NextResponse(pdfData, {
+    // HTML을 반환 (클라이언트에서 브라우저 인쇄 기능 사용)
+    return new NextResponse(htmlWithPrintStyles, {
       headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${pdfFilename}"`,
+        'Content-Type': 'text/html',
         ...getSecurityHeaders(),
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
