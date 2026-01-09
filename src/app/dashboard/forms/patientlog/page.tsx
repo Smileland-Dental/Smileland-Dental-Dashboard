@@ -760,12 +760,26 @@ function PatientLogSystem(): React.ReactElement {
       }
 
       if (response.ok) {
-        // p_route.ts에서 PDF blob 받기
-        setSubmitStatus('Processing PDF...');
+        // HTML 응답 받기
+        setSubmitStatus('Generating PDF...');
         setProgress(60);
         
-        // PDF blob 받기
-        const pdfBlob = await response.blob();
+        // HTML 텍스트 받기
+        const htmlContent = await response.text();
+        
+        // 새 창에서 HTML 열기
+        const printWindow = window.open('', '_blank');
+        if (!printWindow) {
+          throw new Error('팝업이 차단되었습니다. 팝업 차단을 해제해주세요.');
+        }
+        
+        printWindow.document.write(htmlContent);
+        printWindow.document.close();
+        
+        // 브라우저 인쇄 대화상자 열기 (사용자가 PDF로 저장 가능)
+        printWindow.addEventListener('load', () => {
+          printWindow.print();
+        });
         
         // 파일명 생성
         const date = formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
@@ -773,60 +787,70 @@ function PatientLogSystem(): React.ReactElement {
         const office = formData.workOffice || 'Unknown';
         const filename = `7) ${date}_${office}_${name}_Patient Log.pdf`;
         
-        // PDF를 Firebase Storage에 저장
-        setSubmitStatus('Saving PDF to archive...');
-        setProgress(70);
+        // 사용자에게 PDF 저장 안내
+        const saveConfirmed = confirm('인쇄 대화상자에서 "PDF로 저장"을 선택하여 PDF를 저장하세요.\n\n저장 후 "확인"을 눌러 Firebase에 저장하시겠습니까?');
         
-        try {
-          const storage = getStorage();
-          const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
+        if (saveConfirmed) {
+          // HTML을 Blob으로 변환하여 Firebase에 저장
+          setSubmitStatus('Saving to archive...');
+          setProgress(70);
           
-          // PDF 업로드
-          await uploadBytes(storageRef, pdfBlob);
-          
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // Firestore에 메타데이터 저장
-          const safeMetadata = sanitizeFirebaseDataClient({
-            filename,
-            office: office,
-            date: date,
-            name: name,
-            type: 'Patient Log',
-            source: 'p_route',
-          });
-          
-          await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
-            ...safeMetadata,
-            url: downloadUrl, // PDF 파일 URL
-            storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
-            createdAt: new Date(),
-          });
-          
-          console.log('PDF saved successfully to Firebase Storage');
-        } catch (storageError: any) {
-          console.error('Storage error:', storageError);
-          // 저장 실패 시 사용자에게 알림
-          const errorMsg = storageError?.message || '알 수 없는 오류';
-          alert(`PDF 저장 중 오류가 발생했습니다: ${errorMsg}`);
-        }
-        
-        setSubmitStatus('✅ Submitted Successfully! PDF saved to archive.');
-        setProgress(100);
-        
-        // 미제출 경고 메시지 업데이트
-        await checkUnsubmittedData();
-        
-        // 폼 초기화 (제출 완료 느낌)
-        resetForm();
-        
-        // 2초 후 모달 닫기
-        setTimeout(() => {
+          try {
+            // HTML을 텍스트 파일로 저장 (또는 나중에 PDF로 변환 가능)
+            const htmlBlob = new Blob([htmlContent], { type: 'text/html' });
+            const storage = getStorage();
+            const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename.replace('.pdf', '.html')}`);
+            
+            // HTML 업로드
+            await uploadBytes(storageRef, htmlBlob);
+            
+            // 다운로드 URL 가져오기
+            const downloadUrl = await getDownloadURL(storageRef);
+            
+            // Firestore에 메타데이터 저장
+            const safeMetadata = sanitizeFirebaseDataClient({
+              filename: filename.replace('.pdf', '.html'),
+              office: office,
+              date: date,
+              name: name,
+              type: 'Patient Log',
+              source: 'p_route',
+            });
+            
+            await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
+              ...safeMetadata,
+              url: downloadUrl,
+              storagePath: `endofday-pdfs/${office}/${date}/${filename.replace('.pdf', '.html')}`,
+              createdAt: new Date(),
+            });
+            
+            setSubmitStatus('✅ Submitted Successfully!');
+            setProgress(100);
+            
+            // 미제출 경고 메시지 업데이트
+            await checkUnsubmittedData();
+            
+            // 폼 초기화
+            resetForm();
+            
+            setTimeout(() => {
+              setLoading(false);
+              setSubmitStatus('');
+              setProgress(0);
+            }, 2000);
+          } catch (storageError: any) {
+            const errorMsg = storageError?.message || '알 수 없는 오류';
+            alert(`저장 중 오류가 발생했습니다: ${errorMsg}`);
+            setLoading(false);
+            setSubmitStatus('');
+            setProgress(0);
+          }
+        } else {
+          // 사용자가 취소한 경우
           setLoading(false);
           setSubmitStatus('');
           setProgress(0);
-        }, 2000);
+        }
       } else {
         // 에러 응답 처리 (보안 강화)
         let errorMessage = 'PDF 생성 중 오류가 발생했습니다.';
