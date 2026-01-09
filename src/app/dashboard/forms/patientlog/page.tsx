@@ -767,93 +767,70 @@ function PatientLogSystem(): React.ReactElement {
         // HTML 텍스트 받기
         const htmlContent = await response.text();
         
-        // 새 창에서 HTML 열기
-        const printWindow = window.open('', '_blank');
-        if (!printWindow) {
-          throw new Error('팝업이 차단되었습니다. 팝업 차단을 해제해주세요.');
-        }
-        
-        printWindow.document.write(htmlContent);
-        printWindow.document.close();
-        
-        // 브라우저 인쇄 대화상자 열기 (사용자가 PDF로 저장 가능)
-        printWindow.addEventListener('load', () => {
-          printWindow.print();
-        });
-        
         // 파일명 생성
         const date = formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
         const name = formData.userName || 'Unknown';
         const office = formData.workOffice || 'Unknown';
         const filename = `7) ${date}_${office}_${name}_Patient Log.pdf`;
         
-        // 사용자에게 PDF 저장 안내
-        const saveConfirmed = confirm('인쇄 대화상자에서 "PDF로 저장"을 선택하여 PDF를 저장하세요.\n\n저장 후 "확인"을 눌러 Firebase에 저장하시겠습니까?');
+        // Firebase에 자동 저장 (e.tsx에서 확인 가능)
+        setSubmitStatus('Saving to archive...');
+        setProgress(70);
         
-        if (saveConfirmed) {
+        try {
           // HTML을 Blob으로 변환하여 Firebase에 저장
-          setSubmitStatus('Saving to archive...');
-          setProgress(70);
+          const htmlBlob = new Blob([htmlContent], { type: 'text/html' });
+          const storage = getStorage();
+          // 파일명은 .pdf로 유지 (확장자는 실제로는 HTML이지만 표시는 PDF로)
+          const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
           
-          try {
-            // HTML을 텍스트 파일로 저장 (또는 나중에 PDF로 변환 가능)
-            const htmlBlob = new Blob([htmlContent], { type: 'text/html' });
-            const storage = getStorage();
-            const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename.replace('.pdf', '.html')}`);
-            
-            // HTML 업로드
-            await uploadBytes(storageRef, htmlBlob);
-            
-            // 다운로드 URL 가져오기
-            const downloadUrl = await getDownloadURL(storageRef);
-            
-            // Firestore에 메타데이터 저장 (HTML도 함께 저장)
-            const safeMetadata = sanitizeFirebaseDataClient({
-              filename: filename.replace('.pdf', '.html'),
-              office: office,
-              date: date,
-              name: name,
-              type: 'Patient Log',
-              source: 'p_route',
-            });
-            
-            // HTML이 너무 크면 Firestore 제한(1MB)을 고려하여 저장
-            // HTML이 900KB 이하인 경우에만 직접 저장 (안전 마진)
-            const htmlSize = new Blob([htmlContent]).size;
-            const maxHtmlSize = 900 * 1024; // 900KB
-            
-            await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
-              ...safeMetadata,
-              url: downloadUrl,
-              storagePath: `endofday-pdfs/${office}/${date}/${filename.replace('.pdf', '.html')}`,
-              // HTML이 작으면 Firestore에 직접 저장, 크면 URL만 저장
-              ...(htmlSize <= maxHtmlSize ? { html: htmlContent } : {}),
-              createdAt: new Date(),
-            });
-            
-            setSubmitStatus('✅ Submitted Successfully!');
-            setProgress(100);
-            
-            // 미제출 경고 메시지 업데이트
-            await checkUnsubmittedData();
-            
-            // 폼 초기화
-            resetForm();
-            
-            setTimeout(() => {
-              setLoading(false);
-              setSubmitStatus('');
-              setProgress(0);
-            }, 2000);
-          } catch (storageError: any) {
-            const errorMsg = storageError?.message || '알 수 없는 오류';
-            alert(`저장 중 오류가 발생했습니다: ${errorMsg}`);
+          // HTML 업로드
+          await uploadBytes(storageRef, htmlBlob);
+          
+          // 다운로드 URL 가져오기
+          const downloadUrl = await getDownloadURL(storageRef);
+          
+          // Firestore에 메타데이터 저장 (HTML도 함께 저장)
+          const safeMetadata = sanitizeFirebaseDataClient({
+            filename: filename, // .pdf 확장자 유지
+            office: office,
+            date: date,
+            name: name,
+            type: 'Patient Log',
+            source: 'p_route',
+          });
+          
+          // HTML이 너무 크면 Firestore 제한(1MB)을 고려하여 저장
+          // HTML이 900KB 이하인 경우에만 직접 저장 (안전 마진)
+          const htmlSize = new Blob([htmlContent]).size;
+          const maxHtmlSize = 900 * 1024; // 900KB
+          
+          await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
+            ...safeMetadata,
+            url: downloadUrl,
+            storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
+            // HTML이 작으면 Firestore에 직접 저장, 크면 URL만 저장
+            ...(htmlSize <= maxHtmlSize ? { html: htmlContent } : {}),
+            createdAt: new Date(),
+          });
+          
+          setSubmitStatus('✅ Submitted Successfully!');
+          setProgress(100);
+          
+          // 미제출 경고 메시지 업데이트
+          await checkUnsubmittedData();
+          
+          // 폼 초기화
+          resetForm();
+          
+          setTimeout(() => {
             setLoading(false);
             setSubmitStatus('');
             setProgress(0);
-          }
-        } else {
-          // 사용자가 취소한 경우
+          }, 2000);
+        } catch (storageError: any) {
+          const errorMsg = storageError?.message || '알 수 없는 오류';
+          alert(`저장 중 오류가 발생했습니다: ${errorMsg}`);
           setLoading(false);
           setSubmitStatus('');
           setProgress(0);
