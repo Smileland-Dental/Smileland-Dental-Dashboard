@@ -561,9 +561,15 @@ export default function EndOfDay() {
               Loading PDFs...
         </div>
           ) : !selectedOffice ? (
-            null
+            <div style={styles.emptyState}>
+              <div style={{fontSize: '24px', marginBottom: '10px'}}>🏢</div>
+              Please select an office to view PDFs.
+            </div>
           ) : filteredPdfs.length === 0 ? (
-            null
+            <div style={styles.emptyState}>
+              <div style={{fontSize: '24px', marginBottom: '10px'}}>📭</div>
+              No PDFs found for the selected filters.
+            </div>
           ) : (
             <div style={styles.pdfList}>
               {filteredPdfs.map((pdf, index) => (
