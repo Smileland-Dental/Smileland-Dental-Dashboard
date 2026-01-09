@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useState, useEffect } from "react";
-import { doc, setDoc, collection, getDocs, updateDoc, deleteDoc } from "firebase/firestore";
+import React, { useState, useEffect, useRef } from "react";
+import { doc, setDoc, collection, getDocs, getDoc, updateDoc, deleteDoc, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
 import { 
   enableAllSecurityMeasures, 
@@ -28,6 +28,7 @@ export default function ShowCheckSystem() {
   // 상태 관리
   const [loading, setLoading] = useState(false);
   const [appointments, setAppointments] = useState<any[]>([]);
+  const appointmentsRef = useRef<any[]>([]); // 최신 appointments 추적
   const [filteredAppointments, setFilteredAppointments] = useState<any[]>([]);
   const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -106,6 +107,20 @@ export default function ShowCheckSystem() {
 
       setLoading(true);
       const querySnapshot = await getDocs(collection(db, "patient-logs"));
+      
+      // 제출된 PDF 목록 가져오기 (제출된 것만 필터링하기 위해)
+      const pdfQuerySnapshot = await getDocs(collection(db, "pdf-documents"));
+      const submittedDocs = new Set<string>();
+      
+      pdfQuerySnapshot.forEach((pdfDoc) => {
+        const pdfData = pdfDoc.data();
+        if (pdfData.type === 'Patient Log' && pdfData.date && pdfData.name && pdfData.office) {
+          // 제출된 문서의 키 생성: date_name_office
+          const key = `${pdfData.date}_${pdfData.name}_${pdfData.office}`;
+          submittedDocs.add(key);
+        }
+      });
+      
       const allAppointments: any[] = [];
       
       querySnapshot.forEach((doc) => {
@@ -115,6 +130,15 @@ export default function ShowCheckSystem() {
         if (currentUser && data.userId && data.userId !== currentUser.uid) {
           // 다른 사용자의 데이터는 로드하지 않음 (Security Rules에서도 차단됨)
           return;
+        }
+        
+        // 제출된 데이터만 필터링
+        if (data.dutyDate && data.userName && data.workOffice) {
+          const docKey = `${data.dutyDate}_${data.userName}_${data.workOffice}`;
+          if (!submittedDocs.has(docKey)) {
+            // 제출되지 않은 데이터는 건너뛰기
+            return;
+          }
         }
         
         if (data.patientRows) {
@@ -137,6 +161,7 @@ export default function ShowCheckSystem() {
       });
       
       setAppointments(allAppointments);
+      appointmentsRef.current = allAppointments;
     } catch (error) {
       // Production에서는 에러 로깅 비활성화
       if (process.env.NODE_ENV !== 'production') {
@@ -210,8 +235,8 @@ export default function ShowCheckSystem() {
         const updatedPatientRows = currentData.patientRows.map((row: any, index: number) => {
           if (index === appointment.rowIndex) {
             return { ...row, showStatus: newStatus };
-      }
-      return row;
+          }
+          return row;
         });
         
         // Firebase 업데이트 (보안 검증 적용 + 사용자 정보 강제 추가)
@@ -226,13 +251,40 @@ export default function ShowCheckSystem() {
         await updateDoc(docRef, safeUpdateData);
         
         // 로컬 상태 업데이트
-        setAppointments(prev => 
-          prev.map((apt: any) => 
+        setAppointments(prev => {
+          const updated = prev.map((apt: any) => 
             apt.docId === appointment.docId && apt.rowIndex === appointment.rowIndex
               ? { ...apt, showStatus: newStatus }
               : apt
-          )
-        );
+          );
+          
+          // appointmentsRef도 업데이트 (최신 값 보장)
+          appointmentsRef.current = updated;
+          
+          // filteredAppointments도 즉시 업데이트 (useEffect 대기 없이)
+          // filterAppointments 함수 로직을 재사용
+          let filtered = updated;
+          
+          // 날짜 범위 필터
+          if (startDate && endDate) {
+            filtered = filtered.filter(apt => {
+              const aptDate = new Date(apt.appt_date);
+              const start = new Date(startDate);
+              const end = new Date(endDate);
+              return aptDate >= start && aptDate <= end;
+            });
+          }
+          
+          // 오피스 필터
+          if (selectedOffice && selectedOffice !== 'All') {
+            filtered = filtered.filter(apt => apt.office === selectedOffice);
+          }
+          
+          // 즉시 filteredAppointments 업데이트
+          setFilteredAppointments(filtered);
+          
+          return updated;
+        });
         
         // Production에서는 로깅 비활성화
         if (process.env.NODE_ENV !== 'production') {
@@ -252,6 +304,19 @@ export default function ShowCheckSystem() {
   const handleGeneratePDF = async () => {
     if (filteredAppointments.length === 0) {
       alert('⚠️ No appointments to generate PDF.');
+      return;
+    }
+
+    // pending 상태가 있는지 체크 (actions 또는 showStatus)
+    const hasPendingStatus = filteredAppointments.some(apt => 
+      apt.actions === 'pending' || 
+      apt.showStatus === 'pending' || 
+      (!apt.actions && !apt.showStatus) ||
+      (apt.actions !== 'show' && apt.actions !== 'no-show' && apt.showStatus !== 'show' && apt.showStatus !== 'no-show')
+    );
+    
+    if (hasPendingStatus) {
+      alert('⚠️ Please select Show or No Show for all appointments before submitting.');
       return;
     }
 
@@ -293,11 +358,48 @@ export default function ShowCheckSystem() {
       setSubmitStatus('Generating PDF...');
       setProgress(30);
       
+      // 최신 appointments state를 기반으로 필터링 (클로저 문제 방지)
+      // appointmentsRef.current를 사용하여 최신 상태 보장
+      const latestAppointments = appointmentsRef.current.length > 0 ? appointmentsRef.current : appointments;
+      
+      // 날짜 범위 필터
+      let pdfFilteredAppointments = latestAppointments;
+      if (startDate && endDate) {
+        pdfFilteredAppointments = pdfFilteredAppointments.filter(apt => {
+          const aptDate = new Date(apt.appt_date);
+          const start = new Date(startDate);
+          const end = new Date(endDate);
+          return aptDate >= start && aptDate <= end;
+        });
+      }
+      
+      // 오피스 필터
+      if (selectedOffice && selectedOffice !== 'All') {
+        pdfFilteredAppointments = pdfFilteredAppointments.filter(apt => apt.office === selectedOffice);
+      }
+      
+      // pending 상태의 appointment는 PDF에서 제외
+      pdfFilteredAppointments = pdfFilteredAppointments.filter(apt => 
+        apt.showStatus === 'show' || apt.showStatus === 'no-show'
+      );
+      
+      // PDF 생성에 사용할 데이터 저장 (삭제 시 사용)
+      const appointmentsForPdf = pdfFilteredAppointments;
+      
+      // PDF 생성 전에 데이터가 있는지 확인
+      if (appointmentsForPdf.length === 0) {
+        alert('⚠️ PDF에 포함할 appointment가 없습니다. Show 또는 No Show를 선택한 appointment가 필요합니다.');
+        setPdfLoading(false);
+        setSubmitStatus('');
+        setProgress(0);
+        return;
+      }
+      
       const pdfData = {
         startDate,
         endDate,
         selectedOffice: selectedOffice || 'All Offices',
-        appointments: filteredAppointments,
+        appointments: appointmentsForPdf,
         generatedBy: name || 'Supervisor',
         timestamp: new Date().toISOString(),
         // 보안 강화: 사용자 정보 추가
@@ -354,49 +456,68 @@ export default function ShowCheckSystem() {
       }
 
       if (response.ok) {
-        // PDF blob 받기
-        setSubmitStatus('Processing PDF...');
+        // HTML 받기
+        setSubmitStatus('Opening print view...');
         setProgress(60);
-        const blob = await response.blob();
-        
-        // 파일명 생성
-        const dateRange = startDate === endDate ? startDate : `${startDate}_to_${endDate}`;
-        const office = selectedOffice || 'All';
-        const supervisor = name || 'Supervisor';
-        const filename = `${dateRange}_${office}_${supervisor}_Show_Check_Report.pdf`;
-        
-        setSubmitStatus('Cleaning up...');
-        setProgress(80);
-        
-        // PDF 생성 후 해당 데이터 삭제
-        try {
-          await deleteProcessedAppointments();
-        } catch (deleteError) {
-          // Production에서는 에러 로깅 비활성화
-          if (process.env.NODE_ENV !== 'production') {
-            console.error('Error deleting processed data:', deleteError);
-          }
-        }
+        const htmlContent = await response.text();
         
         setSubmitStatus('Complete!');
         setProgress(100);
         
-        // PDF 다운로드
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        window.URL.revokeObjectURL(url);
-        
-        // 2초 후 모달 닫기
-        setTimeout(() => {
+        // 새 창에서 HTML 열기 (인쇄 대화상자가 자동으로 열림)
+        const printWindow = window.open('', '_blank');
+        if (printWindow) {
+          printWindow.document.write(htmlContent);
+          printWindow.document.close();
+          
+          // 인쇄 완료 메시지 리스너 등록
+          const handlePrintComplete = async (event: MessageEvent) => {
+            if (event.data === 'print-completed') {
+              // 인쇄 완료 후 데이터 삭제
+              setSubmitStatus('Cleaning up...');
+              setProgress(80);
+              
+              try {
+                // PDF 생성에 사용된 데이터를 전달하여 삭제
+                await deleteProcessedAppointments(appointmentsForPdf);
+              } catch (deleteError) {
+                // Production에서는 에러 로깅 비활성화
+                if (process.env.NODE_ENV !== 'production') {
+                  console.error('Error deleting processed data:', deleteError);
+                }
+              }
+              
+              // 리스너 제거
+              window.removeEventListener('message', handlePrintComplete);
+              
+              // 2초 후 모달 닫기
+              setTimeout(() => {
+                setPdfLoading(false);
+                setSubmitStatus('');
+                setProgress(0);
+              }, 2000);
+            }
+          };
+          
+          window.addEventListener('message', handlePrintComplete);
+          
+          // 창이 닫히면 리스너 제거 (인쇄하지 않고 닫은 경우)
+          const checkClosed = setInterval(() => {
+            if (printWindow.closed) {
+              clearInterval(checkClosed);
+              window.removeEventListener('message', handlePrintComplete);
+              // 창이 닫혔지만 인쇄하지 않았을 수 있으므로 데이터는 유지
+              setPdfLoading(false);
+              setSubmitStatus('');
+              setProgress(0);
+            }
+          }, 1000);
+        } else {
+          alert('⚠️ 팝업이 차단되었습니다. 팝업을 허용한 후 다시 시도해주세요.');
           setPdfLoading(false);
           setSubmitStatus('');
           setProgress(0);
-        }, 2000);
+        }
       } else {
         // 에러 응답 처리 (보안 강화)
         let errorMessage = 'PDF 생성 중 오류가 발생했습니다.';
@@ -465,40 +586,62 @@ export default function ShowCheckSystem() {
               if (retryResponse.ok) {
                 // 재시도 성공 - 원래 로직 계속
                 retrySuccess = true;
-                const blob = await retryResponse.blob();
-                const dateRange = startDate === endDate ? startDate : `${startDate}_to_${endDate}`;
-                const office = selectedOffice || 'All';
-                const supervisor = name || 'Supervisor';
-                const filename = `${dateRange}_${office}_${supervisor}_Show_Check_Report.pdf`;
-                
-                setSubmitStatus('Cleaning up...');
-                setProgress(80);
-                
-                try {
-                  await deleteProcessedAppointments();
-                } catch (deleteError) {
-                  if (process.env.NODE_ENV !== 'production') {
-                    console.error('Error deleting processed data:', deleteError);
-                  }
-                }
+                const htmlContent = await retryResponse.text();
                 
                 setSubmitStatus('Complete!');
                 setProgress(100);
                 
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-                
-                setTimeout(() => {
+                // 새 창에서 HTML 열기 (인쇄 대화상자가 자동으로 열림)
+                const printWindow = window.open('', '_blank');
+                if (printWindow) {
+                  printWindow.document.write(htmlContent);
+                  printWindow.document.close();
+                  
+                  // 인쇄 완료 메시지 리스너 등록
+                  const handlePrintComplete = async (event: MessageEvent) => {
+                    if (event.data === 'print-completed') {
+                      // 인쇄 완료 후 데이터 삭제
+                      setSubmitStatus('Cleaning up...');
+                      setProgress(80);
+                      
+                      try {
+                        // PDF 생성에 사용된 데이터를 전달하여 삭제
+                        await deleteProcessedAppointments(appointmentsForPdf);
+                      } catch (deleteError) {
+                        if (process.env.NODE_ENV !== 'production') {
+                          console.error('Error deleting processed data:', deleteError);
+                        }
+                      }
+                      
+                      // 리스너 제거
+                      window.removeEventListener('message', handlePrintComplete);
+                      
+                      setTimeout(() => {
+                        setPdfLoading(false);
+                        setSubmitStatus('');
+                        setProgress(0);
+                      }, 2000);
+                    }
+                  };
+                  
+                  window.addEventListener('message', handlePrintComplete);
+                  
+                  // 창이 닫히면 리스너 제거
+                  const checkClosed = setInterval(() => {
+                    if (printWindow.closed) {
+                      clearInterval(checkClosed);
+                      window.removeEventListener('message', handlePrintComplete);
+                      setPdfLoading(false);
+                      setSubmitStatus('');
+                      setProgress(0);
+                    }
+                  }, 1000);
+                } else {
+                  alert('⚠️ 팝업이 차단되었습니다. 팝업을 허용한 후 다시 시도해주세요.');
                   setPdfLoading(false);
                   setSubmitStatus('');
                   setProgress(0);
-                }, 2000);
+                }
                 return; // 성공적으로 완료
               } else if (retryResponse.status !== 401) {
                 // 401이 아닌 다른 에러면 재시도 중단
@@ -622,40 +765,62 @@ export default function ShowCheckSystem() {
                 
                 if (retryResponse.ok) {
                   retrySuccess = true;
-                  const blob = await retryResponse.blob();
-                  const dateRange = startDate === endDate ? startDate : `${startDate}_to_${endDate}`;
-                  const office = selectedOffice || 'All';
-                  const supervisor = name || 'Supervisor';
-                  const filename = `${dateRange}_${office}_${supervisor}_Show_Check_Report.pdf`;
-                  
-                  setSubmitStatus('Cleaning up...');
-                  setProgress(80);
-                  
-                  try {
-                    await deleteProcessedAppointments();
-                  } catch (deleteError) {
-                    if (process.env.NODE_ENV !== 'production') {
-                      console.error('Error deleting processed data:', deleteError);
-                    }
-                  }
+                  const htmlContent = await retryResponse.text();
                   
                   setSubmitStatus('Complete!');
                   setProgress(100);
                   
-                  const url = window.URL.createObjectURL(blob);
-                  const a = document.createElement('a');
-                  a.href = url;
-                  a.download = filename;
-                  document.body.appendChild(a);
-                  a.click();
-                  document.body.removeChild(a);
-                  window.URL.revokeObjectURL(url);
-                  
-                  setTimeout(() => {
+                  // 새 창에서 HTML 열기 (인쇄 대화상자가 자동으로 열림)
+                  const printWindow = window.open('', '_blank');
+                  if (printWindow) {
+                    printWindow.document.write(htmlContent);
+                    printWindow.document.close();
+                    
+                    // 인쇄 완료 메시지 리스너 등록
+                    const handlePrintComplete = async (event: MessageEvent) => {
+                      if (event.data === 'print-completed') {
+                        // 인쇄 완료 후 데이터 삭제
+                        setSubmitStatus('Cleaning up...');
+                        setProgress(80);
+                        
+                        try {
+                          // PDF 생성에 사용된 데이터를 전달하여 삭제
+                          await deleteProcessedAppointments(appointmentsForPdf);
+                        } catch (deleteError) {
+                          if (process.env.NODE_ENV !== 'production') {
+                            console.error('Error deleting processed data:', deleteError);
+                          }
+                        }
+                        
+                        // 리스너 제거
+                        window.removeEventListener('message', handlePrintComplete);
+                        
+                        setTimeout(() => {
+                          setPdfLoading(false);
+                          setSubmitStatus('');
+                          setProgress(0);
+                        }, 2000);
+                      }
+                    };
+                    
+                    window.addEventListener('message', handlePrintComplete);
+                    
+                    // 창이 닫히면 리스너 제거
+                    const checkClosed = setInterval(() => {
+                      if (printWindow.closed) {
+                        clearInterval(checkClosed);
+                        window.removeEventListener('message', handlePrintComplete);
+                        setPdfLoading(false);
+                        setSubmitStatus('');
+                        setProgress(0);
+                      }
+                    }, 1000);
+                  } else {
+                    alert('⚠️ 팝업이 차단되었습니다. 팝업을 허용한 후 다시 시도해주세요.');
                     setPdfLoading(false);
                     setSubmitStatus('');
                     setProgress(0);
-                  }, 2000);
+                  }
                   return; // 성공적으로 완료
                 } else if (retryResponse.status !== 401) {
                   const contentType = retryResponse.headers.get('content-type');
@@ -706,12 +871,16 @@ export default function ShowCheckSystem() {
   };
 
   // 처리된 약속 데이터 삭제 함수
-  const deleteProcessedAppointments = async () => {
+  // appointmentsToDelete: PDF 생성에 사용된 appointment 배열 (선택적)
+  const deleteProcessedAppointments = async (appointmentsToDelete?: any[]) => {
     try {
+      // PDF 생성에 사용된 appointment가 있으면 그것을 사용, 없으면 현재 filteredAppointments 사용
+      const appointmentsToProcess = appointmentsToDelete || filteredAppointments;
+      
       // 현재 필터링된 약속들의 document ID별로 그룹화
       const documentsToCheck = new Map();
       
-      filteredAppointments.forEach(appointment => {
+      appointmentsToProcess.forEach(appointment => {
         const docId = appointment.docId;
         if (!documentsToCheck.has(docId)) {
           documentsToCheck.set(docId, []);
@@ -749,12 +918,12 @@ export default function ShowCheckSystem() {
           );
 
           if (unprocessedAppointments.length === 0 && allAppointmentRows.length > 0) {
-            // 약속이 있었고 모든 약속이 처리됨 → 전체 document 삭제 (빈 row들도 함께)
+            // 약속이 있었고 모든 약속이 처리됨 → 전체 document 삭제
             await deleteDoc(docRef);
             deletedDocuments.push(docId);
             // Production에서는 로깅 비활성화
             if (process.env.NODE_ENV !== 'production') {
-              console.log(`🗑️ Document ${docId} completely deleted (all ${allAppointmentRows.length} appointments processed, including empty rows)`);
+              console.log(`🗑️ Document ${docId} completely deleted (all ${allAppointmentRows.length} appointments processed)`);
             }
           } else if (allAppointmentRows.length === 0) {
             // 애초에 약속이 없는 document → 삭제하지 않음
@@ -763,6 +932,7 @@ export default function ShowCheckSystem() {
             }
           } else {
             // 아직 처리 안 된 약속이 있음 → 처리된 것들만 빈 상태로 초기화
+            // showStatus를 pending으로 설정하지 않고 필드를 제거하거나 undefined로 설정
             const updatedPatientRows = currentData.patientRows.map((row: any, index: number) => {
               if (processedRowIndices.includes(index)) {
                 return {
@@ -775,8 +945,8 @@ export default function ShowCheckSystem() {
                   call_out: false,
                   time: '',
                   remark: '',
-                  other_duty: '',
-                  showStatus: 'pending'
+                  other_duty: ''
+                  // showStatus 필드를 제거 (pending으로 설정하지 않음)
                 };
               }
               return row;
@@ -796,11 +966,13 @@ export default function ShowCheckSystem() {
       }
 
       // 로컬 상태 업데이트 - 처리된 약속들 제거
-      setAppointments(prevAppointments => 
-        prevAppointments.filter(apt => !filteredAppointments.some(filtered => 
+      setAppointments(prevAppointments => {
+        const updated = prevAppointments.filter(apt => !filteredAppointments.some(filtered => 
           filtered.docId === apt.docId && filtered.rowIndex === apt.rowIndex
-        ))
-      );
+        ));
+        appointmentsRef.current = updated; // appointmentsRef도 업데이트
+        return updated;
+      });
       
       setFilteredAppointments([]);
       
@@ -1280,24 +1452,37 @@ export default function ShowCheckSystem() {
         {/* Submit 버튼 */}
         {filteredAppointments.length > 0 && (
           <div style={{textAlign: 'center', margin: '30px 0'}}>
-          <button 
-              onClick={handleGeneratePDF}
-              disabled={pdfLoading}
-              style={{
-                backgroundColor: pdfLoading ? '#9ca3af' : '#3b82f6',
-                color: 'white',
-                border: 'none',
-                padding: '15px 30px',
-                borderRadius: '8px',
-                fontSize: '16px',
-                fontWeight: 'bold',
-                cursor: pdfLoading ? 'not-allowed' : 'pointer',
-                boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
-                transition: 'all 0.2s ease'
-              }}
-            >
-              {pdfLoading ? '📄 Generating PDF...' : '📄 Submit + Generate PDF'}
-          </button>
+          {(() => {
+            // pending 상태가 있는지 체크 (actions 또는 showStatus)
+            const hasPendingStatus = filteredAppointments.some(apt => 
+              apt.actions === 'pending' || 
+              apt.showStatus === 'pending' || 
+              (!apt.actions && !apt.showStatus) ||
+              (apt.actions !== 'show' && apt.actions !== 'no-show' && apt.showStatus !== 'show' && apt.showStatus !== 'no-show')
+            );
+            
+            return (
+              <button 
+                onClick={handleGeneratePDF}
+                disabled={pdfLoading || hasPendingStatus}
+                style={{
+                  backgroundColor: (pdfLoading || hasPendingStatus) ? '#9ca3af' : '#3b82f6',
+                  color: 'white',
+                  border: 'none',
+                  padding: '15px 30px',
+                  borderRadius: '8px',
+                  fontSize: '16px',
+                  fontWeight: 'bold',
+                  cursor: (pdfLoading || hasPendingStatus) ? 'not-allowed' : 'pointer',
+                  boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
+                  transition: 'all 0.2s ease'
+                }}
+                title={hasPendingStatus ? '⚠️ Please select Show or No Show for all appointments before submitting.' : ''}
+              >
+                {pdfLoading ? '📄 Generating PDF...' : '📄 Submit + Generate PDF'}
+              </button>
+            );
+          })()}
         </div>
         )}
       </div>
