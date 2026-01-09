@@ -1,20 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import puppeteer from 'puppeteer';
-import { Buffer } from 'buffer';
 import { 
   escapeHtml, 
   sanitizeString, 
   safeLog, 
   logError, 
-  sanitizePdfFilename, 
-  getSecurePuppeteerOptions, 
-  validatePdfGeneration,
   validateRequest,
   getSecurityHeaders,
   validateAndParseRequestBody,
   verifyFirebaseAuth,
-  verifyDataOwnership,
-  sanitizeArrayForPdf
+  verifyDataOwnership
 } from '@/lib/security-server';
 
 export async function POST(request: NextRequest) {
@@ -122,8 +116,51 @@ export async function POST(request: NextRequest) {
 
     const { startDate, endDate, selectedOffice, appointments, generatedBy, timestamp } = showCheckData;
     
-    // appointments 배열 검증 및 정제 (보안 강화)
-    const safeAppointments = sanitizeArrayForPdf(Array.isArray(appointments) ? appointments : [], 1000);
+    // appointments 배열 검증 (배열인지 확인)
+    if (!Array.isArray(appointments)) {
+      return NextResponse.json(
+        { success: false, error: 'Appointments must be an array' },
+        { 
+          status: 400,
+          headers: getSecurityHeaders()
+        }
+      );
+    }
+    
+    // appointments 배열이 너무 큰 경우 제한 (보안)
+    if (appointments.length > 1000) {
+      return NextResponse.json(
+        { success: false, error: 'Too many appointments (max 1000)' },
+        { 
+          status: 400,
+          headers: getSecurityHeaders()
+        }
+      );
+    }
+    
+    // 각 appointment의 필수 필드 검증 및 정제 (showStatus 필드 보존)
+    const allAppointments = appointments.map((apt: any) => {
+      if (!apt || typeof apt !== 'object') return null;
+      
+      return {
+        name: sanitizeString(apt.name || '', 100),
+        office: sanitizeString(apt.office || '', 50),
+        appt_date: sanitizeString(apt.appt_date || '', 20),
+        time: sanitizeString(apt.time || '', 20),
+        visit_type: sanitizeString(apt.visit_type || '', 50),
+        showStatus: apt.showStatus === 'show' || apt.showStatus === 'no-show' ? apt.showStatus : null, // showStatus 보존
+        // 추가 필드들도 보존 (필요한 경우)
+        docId: sanitizeString(apt.docId || '', 200),
+        rowIndex: typeof apt.rowIndex === 'number' ? apt.rowIndex : -1
+      };
+    }).filter((apt: any) => apt !== null && apt.showStatus !== null); // null이거나 showStatus가 없는 항목 제거
+    
+    // pending 상태의 appointment는 PDF에서 제외 (이미 위에서 필터링됨)
+    // show.tsx에서 이미 필터링했지만, 서버에서도 다시 확인
+    const safeAppointments = allAppointments.filter((apt: any) => {
+      const status = apt.showStatus;
+      return status === 'show' || status === 'no-show';
+    });
     
     // 시간을 12시간 형식으로 변환하는 함수
     const convertTo12Hour = (timeStr: string): string => {
@@ -141,12 +178,6 @@ export async function POST(request: NextRequest) {
       }
     };
     
-    // PDF 생성 데이터 크기 검증
-    const dataSize = JSON.stringify(showCheckData).length;
-    if (!validatePdfGeneration(dataSize)) {
-      throw new Error('Data size too large for PDF generation');
-    }
-    
     // 데이터 안전성 검증 및 이스케이프
     const safeStartDate = sanitizeString(startDate, 20);
     const safeEndDate = sanitizeString(endDate, 20);
@@ -154,12 +185,13 @@ export async function POST(request: NextRequest) {
     const safeGeneratedBy = sanitizeString(generatedBy, 100);
 
     // 통계 계산 (안전한 배열 사용)
+    // pending은 이미 필터링되어 제외되었으므로 pendingCount는 0
     const showCount = safeAppointments.filter((apt: any) => apt.showStatus === 'show').length;
     const noShowCount = safeAppointments.filter((apt: any) => apt.showStatus === 'no-show').length;
-    const pendingCount = safeAppointments.filter((apt: any) => apt.showStatus === 'pending').length;
+    const pendingCount = 0; // pending은 PDF에서 제외되므로 항상 0
     const showRate = safeAppointments.length > 0 ? ((showCount / (showCount + noShowCount)) * 100).toFixed(1) : 0;
 
-    // HTML 템플릿 생성
+    // HTML 템플릿 생성 (인쇄용)
     const html = `
       <!DOCTYPE html>
       <html lang="en">
@@ -398,10 +430,6 @@ export async function POST(request: NextRequest) {
             <div class="stat-label">No Show</div>
           </div>
           <div class="stat-item">
-            <div class="stat-value">${pendingCount}</div>
-            <div class="stat-label">Pending</div>
-          </div>
-          <div class="stat-item">
             <div class="stat-value">${showRate}%</div>
             <div class="stat-label">Show Rate</div>
           </div>
@@ -427,7 +455,8 @@ export async function POST(request: NextRequest) {
                 const safeApptDate = sanitizeString(apt.appt_date, 20);
                 const safeTime = sanitizeString(apt.time, 20);
                 const safeVisitType = sanitizeString(apt.visit_type, 50);
-                const safeShowStatus = apt.showStatus || 'pending';
+                // safeAppointments는 이미 show/no-show만 포함하므로 pending 체크 불필요
+                const safeShowStatus = apt.showStatus === 'show' ? 'show' : 'no-show';
                 
                 return `
                 <tr>
@@ -438,8 +467,7 @@ export async function POST(request: NextRequest) {
                   <td style="text-align: center;">${escapeHtml(convertTo12Hour(safeTime))}</td>
                   <td>${escapeHtml(safeVisitType) || '-'}</td>
                   <td class="${safeShowStatus}">${
-                    safeShowStatus === 'show' ? 'Show' :
-                    safeShowStatus === 'no-show' ? 'No Show' : 'Pending'
+                    safeShowStatus === 'show' ? 'Show' : 'No Show'
                   }</td>
                 </tr>
               `;
@@ -462,41 +490,30 @@ export async function POST(request: NextRequest) {
             hour12: true
           })}
         </div>
+        <script>
+          // 페이지 로드 후 자동으로 인쇄 대화상자 열기
+          window.onload = function() {
+            // 약간의 지연 후 인쇄 대화상자 열기 (스타일이 완전히 로드되도록)
+            setTimeout(function() {
+              window.print();
+            }, 500);
+          };
+          
+          // 인쇄 대화상자가 닫힌 후 부모 창에 메시지 전송
+          window.addEventListener('afterprint', function() {
+            if (window.opener) {
+              window.opener.postMessage('print-completed', '*');
+            }
+          });
+        </script>
       </body>
       </html>
     `;
 
-    // Puppeteer로 PDF 생성 (보안 옵션 적용)
-    const browser = await puppeteer.launch(getSecurePuppeteerOptions());
-    
-    const page = await browser.newPage();
-    await page.setContent(html);
-    
-    // 페이지 로딩 대기
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    const pdf = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: {
-        top: '10mm',
-        right: '10mm',
-        bottom: '10mm',
-        left: '10mm'
-      },
-      preferCSSPageSize: false,
-      displayHeaderFooter: false
-    });
-    
-    await browser.close();
-    
-    // 파일명 생성 (보안 검증 적용)
-    const filename = sanitizePdfFilename(`${safeStartDate === safeEndDate ? safeStartDate : `${safeStartDate}_to_${safeEndDate}`}_${safeSelectedOffice}_Show_Check_Report`);
-    
-    return new NextResponse(Buffer.from(pdf), {
+    // HTML 반환 (클라이언트에서 인쇄/저장 가능)
+    return new NextResponse(html, {
       headers: {
-        'Content-Type': 'application/pdf',
-        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Type': 'text/html; charset=utf-8',
         ...getSecurityHeaders(),
         'Cache-Control': 'no-cache, no-store, must-revalidate',
         'Pragma': 'no-cache',
