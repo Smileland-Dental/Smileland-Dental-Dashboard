@@ -322,17 +322,31 @@ function PatientLogSystem(): React.ReactElement {
     }
   }, [formData, patientRows]);
 
-  // 데이터 변경 시 자동 저장 (매우 빠른 debounce)
+  // 데이터 변경 시 자동 저장 (입력 완료 후 저장)
   useEffect(() => {
     // 초기 로드 시에는 저장하지 않음
     if (Object.values(formData).some(value => value !== '') || patientRows.length > 0) {
       const timeoutId = setTimeout(() => {
         autoSave();
-      }, 300); // 0.3초 debounce로 매우 빠르게
+      }, 2000); // 2초 debounce - 입력이 완료된 후 저장
 
       return () => clearTimeout(timeoutId);
     }
   }, [formData, patientRows, autoSave]);
+  
+  // 입력 필드에서 포커스를 잃을 때 저장하는 함수
+  const handleFieldBlur = useCallback(() => {
+    // 포커스를 잃을 때 즉시 저장 (debounce 없이)
+    // Basic Information이 완료되었는지 확인
+    const isComplete = formData.dutyDate && 
+                       formData.userName && 
+                       formData.workOffice && 
+                       formData.workHoursFrom && 
+                       formData.workHoursTo;
+    if (isComplete) {
+      autoSave();
+    }
+  }, [formData, autoSave]);
 
   // 저장된 데이터를 현재 환자 로그에 로드하는 함수 (최적화 + 보안 강화)
   const loadExistingData = async () => {
@@ -1315,6 +1329,7 @@ function PatientLogSystem(): React.ReactElement {
                 type="date"
                 value={formData.dutyDate}
                 onChange={(e) => updateFormData('dutyDate', e.target.value)}
+                onBlur={handleFieldBlur}
                 style={inputStyle}
                 required
               />
@@ -1328,6 +1343,7 @@ function PatientLogSystem(): React.ReactElement {
                 type="text"
                 value={formData.userName}
                 onChange={(e) => updateFormData('userName', e.target.value)}
+                onBlur={handleFieldBlur}
                 placeholder="Enter your full name"
                 style={inputStyle}
                 required
@@ -1341,6 +1357,7 @@ function PatientLogSystem(): React.ReactElement {
               <select
                 value={formData.workOffice}
                 onChange={(e) => updateFormData('workOffice', e.target.value)}
+                onBlur={handleFieldBlur}
                 style={inputStyle}
                 required
               >
@@ -1361,6 +1378,7 @@ function PatientLogSystem(): React.ReactElement {
                 type="time"
                 value={formData.workHoursFrom}
                 onChange={(e) => updateFormData('workHoursFrom', e.target.value)}
+                onBlur={handleFieldBlur}
                 style={inputStyle}
                 required
               />
@@ -1374,6 +1392,7 @@ function PatientLogSystem(): React.ReactElement {
                 type="time"
                 value={formData.workHoursTo}
                 onChange={(e) => updateFormData('workHoursTo', e.target.value)}
+                onBlur={handleFieldBlur}
                 style={inputStyle}
                 required
               />
