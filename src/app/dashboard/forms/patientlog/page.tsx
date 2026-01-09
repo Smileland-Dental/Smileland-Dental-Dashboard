@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { doc, setDoc, collection, getDocs, deleteDoc, getDoc, query, where } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
 import { 
@@ -197,6 +197,22 @@ function PatientLogSystem(): React.ReactElement {
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [unsubmittedWarning, setUnsubmittedWarning] = useState<string>(''); // 미제출 경고 메시지
+  const [previousDocId, setPreviousDocId] = useState<string | null>(null); // 이전 document ID 추적
+  const [previousFormData, setPreviousFormData] = useState<{
+    dutyDate: string;
+    userName: string;
+    workOffice: string;
+    workHoursFrom: string;
+    workHoursTo: string;
+  } | null>(null); // 이전 basic information 추적
+  const previousFormDataRef = useRef<{
+    dutyDate: string;
+    userName: string;
+    workOffice: string;
+    workHoursFrom: string;
+    workHoursTo: string;
+  } | null>(null); // 이전 basic information ref (최신 값 추적)
+  const [isUnlocked, setIsUnlocked] = useState(false); // 아래 섹션 lock 상태
 
   // 폼 데이터 상태 (원본과 동일한 구조)
   const [formData, setFormData] = useState({
@@ -272,6 +288,9 @@ function PatientLogSystem(): React.ReactElement {
 
   // 자동 저장 함수 (매우 빠른 저장)
   const autoSave = useCallback(async () => {
+    // unlock되지 않았으면 저장하지 않음
+    if (!isUnlocked) return;
+    
     // Basic Information이 완료되지 않으면 저장하지 않음
     if (!isBasicInfoComplete()) return;
 
@@ -281,23 +300,90 @@ function PatientLogSystem(): React.ReactElement {
     }
 
     try {
+      const currentDocId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
+      
+      // 이전 formData가 있고 basic information이 변경되었으면 기존 document를 찾아서 patientRows를 가져옴
+      let rowsToSave = patientRows;
+      let previousDocIdToDelete: string | null = null;
+      
+      const prevFormData = previousFormDataRef.current;
+      if (prevFormData && 
+          (prevFormData.dutyDate !== formData.dutyDate ||
+           prevFormData.userName !== formData.userName ||
+           prevFormData.workOffice !== formData.workOffice ||
+           prevFormData.workHoursFrom !== formData.workHoursFrom ||
+           prevFormData.workHoursTo !== formData.workHoursTo)) {
+        try {
+          const prevDocId = sanitizeFirebaseDocIdClient(generateDocId(
+            prevFormData.dutyDate,
+            prevFormData.userName,
+            prevFormData.workOffice,
+            prevFormData.workHoursFrom,
+            prevFormData.workHoursTo
+          ));
+          
+          const previousDocRef = doc(db, "patient-logs", prevDocId);
+          const previousDocSnap = await getDoc(previousDocRef);
+          
+          if (previousDocSnap.exists()) {
+            const previousData = previousDocSnap.data();
+            // 기존 patientRows를 유지
+            if (previousData.patientRows && Array.isArray(previousData.patientRows)) {
+              rowsToSave = previousData.patientRows;
+              // state에도 반영
+              setPatientRows(previousData.patientRows);
+            }
+            
+            // 나중에 삭제할 document ID 저장
+            previousDocIdToDelete = prevDocId;
+          }
+        } catch (error) {
+          // 기존 document를 찾지 못해도 계속 진행
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn("Previous document not found or error:", error);
+          }
+        }
+      }
+
       // 모든 row 저장 (빈 row도 포함하여 나중에 로드할 때 정확히 복원)
       const dataToSave = {
         ...formData,
-        patientRows: patientRows, // 필터링하지 않고 모든 row 저장
+        patientRows: rowsToSave, // 기존 patientRows 또는 현재 patientRows
         timestamp: new Date().toISOString(),
         autoSaved: true
       };
 
       // Firebase 데이터 보안 검증
       const safeDataToSave = sanitizeFirebaseDataClient(dataToSave);
-      const docId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
       
       // 자동 저장 시작 (메시지 표시 안함)
       
       // Firebase 저장 (비동기 처리로 UI 블로킹 방지)
-      setDoc(doc(db, "patient-logs", docId), safeDataToSave)
-        .then(() => {
+      setDoc(doc(db, "patient-logs", currentDocId), safeDataToSave)
+        .then(async () => {
+          // 기존 document 삭제 (새 document 저장 성공 후)
+          if (previousDocIdToDelete && previousDocIdToDelete !== currentDocId) {
+            try {
+              await deleteDoc(doc(db, "patient-logs", previousDocIdToDelete));
+            } catch (deleteError) {
+              // 삭제 실패해도 계속 진행
+              if (process.env.NODE_ENV !== 'production') {
+                console.warn("Error deleting previous document:", deleteError);
+              }
+            }
+          }
+          
+          // 현재 basic information을 이전 값으로 저장 (state와 ref 모두 업데이트)
+          const newPreviousFormData = {
+            dutyDate: formData.dutyDate,
+            userName: formData.userName,
+            workOffice: formData.workOffice,
+            workHoursFrom: formData.workHoursFrom,
+            workHoursTo: formData.workHoursTo
+          };
+          setPreviousFormData(newPreviousFormData);
+          previousFormDataRef.current = newPreviousFormData;
+          setPreviousDocId(currentDocId);
           // 자동 저장 성공 (메시지 표시 안함)
           // setAutoSaveStatus('✅ Auto-saved');
         })
@@ -320,22 +406,34 @@ function PatientLogSystem(): React.ReactElement {
         console.error("Auto-save error:", error);
       }
     }
-  }, [formData, patientRows]);
+  }, [formData, patientRows, isUnlocked]);
 
   // 데이터 변경 시 자동 저장 (입력 완료 후 저장)
   useEffect(() => {
     // 초기 로드 시에는 저장하지 않음
-    if (Object.values(formData).some(value => value !== '') || patientRows.length > 0) {
-      const timeoutId = setTimeout(() => {
-        autoSave();
-      }, 2000); // 2초 debounce - 입력이 완료된 후 저장
-
-      return () => clearTimeout(timeoutId);
+    // unlock되지 않았으면 저장하지 않음
+    if (!isUnlocked) return;
+    
+    // Basic Information이 완료되지 않았으면 저장하지 않음
+    if (!isBasicInfoComplete()) return;
+    
+    // 이름이 공백으로 끝나면 아직 입력 중이므로 저장하지 않음
+    if (formData.userName.trim().endsWith(' ')) {
+      return;
     }
-  }, [formData, patientRows, autoSave]);
+
+    const timeoutId = setTimeout(() => {
+      autoSave();
+    }, 2000); // 2초 debounce - 입력이 완료된 후 저장
+
+    return () => clearTimeout(timeoutId);
+  }, [formData, patientRows, isUnlocked, autoSave]);
   
   // 입력 필드에서 포커스를 잃을 때 저장하는 함수
   const handleFieldBlur = useCallback(() => {
+    // unlock되지 않았으면 저장하지 않음
+    if (!isUnlocked) return;
+    
     // 포커스를 잃을 때 즉시 저장 (debounce 없이)
     // Basic Information이 완료되었는지 확인
     const isComplete = formData.dutyDate && 
@@ -346,7 +444,7 @@ function PatientLogSystem(): React.ReactElement {
     if (isComplete) {
       autoSave();
     }
-  }, [formData, autoSave]);
+  }, [formData, autoSave, isUnlocked]);
 
   // 저장된 데이터를 현재 환자 로그에 로드하는 함수 (최적화 + 보안 강화)
   const loadExistingData = async () => {
@@ -358,8 +456,74 @@ function PatientLogSystem(): React.ReactElement {
       // 인증 상태 확인 (보안 강화)
       const currentUser = await getCurrentUser();
       
-      const docId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
-      const docRef = doc(db, "patient-logs", docId);
+      const currentDocId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
+      
+      // 이전 formData가 있고 basic information이 변경되었으면 이전 document에서 patientRows를 가져옴
+      if (previousFormData && 
+          (previousFormData.dutyDate !== formData.dutyDate ||
+           previousFormData.userName !== formData.userName ||
+           previousFormData.workOffice !== formData.workOffice ||
+           previousFormData.workHoursFrom !== formData.workHoursFrom ||
+           previousFormData.workHoursTo !== formData.workHoursTo)) {
+        try {
+          const prevDocId = sanitizeFirebaseDocIdClient(generateDocId(
+            previousFormData.dutyDate,
+            previousFormData.userName,
+            previousFormData.workOffice,
+            previousFormData.workHoursFrom,
+            previousFormData.workHoursTo
+          ));
+          
+          const previousDocRef = doc(db, "patient-logs", prevDocId);
+          const previousDocSnap = await getDoc(previousDocRef);
+          
+          if (previousDocSnap.exists()) {
+            const previousData = previousDocSnap.data();
+            
+            // 보안 강화: 데이터 소유권 확인
+            if (currentUser && previousData.userId && previousData.userId !== currentUser.uid) {
+              if (process.env.NODE_ENV !== 'production') {
+                console.warn('⚠️ 다른 사용자의 데이터 접근 시도 차단');
+              }
+            } else if (previousData.patientRows && Array.isArray(previousData.patientRows)) {
+              // 기존 patientRows를 state에 반영
+              const loadedRows = previousData.patientRows.map((row: any, index: number) => ({
+                ...row,
+                id: index + 1
+              }));
+              
+              // 저장된 row 개수와 30 중 더 큰 값으로 배열 생성 (30개 이상도 유지)
+              const minRows = Math.max(loadedRows.length, 30);
+              const newRows = Array.from({ length: minRows }, (_, index) => {
+                if (index < loadedRows.length) {
+                  return loadedRows[index];
+                }
+                return {
+                  id: index + 1,
+                  name: '',
+                  office: '',
+                  appt_date: '',
+                  visit_type: '',
+                  call_in: false,
+                  call_out: false,
+                  time: '',
+                  remark: '',
+                  other_duty: ''
+                };
+              });
+              
+              setPatientRows(newRows);
+            }
+          }
+        } catch (error) {
+          // 이전 document를 찾지 못해도 계속 진행
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn("Previous document not found or error:", error);
+          }
+        }
+      }
+      
+      const docRef = doc(db, "patient-logs", currentDocId);
       
       // 직접 document 참조로 조회 (전체 collection 스캔 방지)
       const docSnap = await getDoc(docRef);
@@ -375,6 +539,19 @@ function PatientLogSystem(): React.ReactElement {
           }
           return;
         }
+        
+        // 현재 docId를 previousDocId로 설정
+        setPreviousDocId(currentDocId);
+        // 현재 basic information을 previousFormData로 설정 (state와 ref 모두 업데이트)
+        const newPreviousFormData = {
+          dutyDate: formData.dutyDate,
+          userName: formData.userName,
+          workOffice: formData.workOffice,
+          workHoursFrom: formData.workHoursFrom,
+          workHoursTo: formData.workHoursTo
+        };
+        setPreviousFormData(newPreviousFormData);
+        previousFormDataRef.current = newPreviousFormData;
         
         if (matchingLog && matchingLog.patientRows) {
           // 기존 저장된 환자 로그를 현재 patientRows에 로드
@@ -413,6 +590,19 @@ function PatientLogSystem(): React.ReactElement {
             }));
           }
         }
+      } else {
+        // 문서가 없으면 previousDocId를 현재 docId로 설정 (새 문서 생성 준비)
+        setPreviousDocId(currentDocId);
+        // 현재 basic information을 previousFormData로 설정 (state와 ref 모두 업데이트)
+        const newPreviousFormData = {
+          dutyDate: formData.dutyDate,
+          userName: formData.userName,
+          workOffice: formData.workOffice,
+          workHoursFrom: formData.workHoursFrom,
+          workHoursTo: formData.workHoursTo
+        };
+        setPreviousFormData(newPreviousFormData);
+        previousFormDataRef.current = newPreviousFormData;
       }
     } catch (error) {
       // Production에서는 에러 로깅 비활성화
@@ -470,7 +660,7 @@ function PatientLogSystem(): React.ReactElement {
       // 미제출 날짜가 있으면 경고 메시지 표시
       if (unsubmittedDates.length > 0) {
         const datesList = unsubmittedDates.sort().join(', ');
-        setUnsubmittedWarning(`⚠️ 미제출된 데이터가 있습니다: ${datesList}`);
+        setUnsubmittedWarning(`⚠️ Please submit the following dates:: ${datesList}`);
       } else {
         setUnsubmittedWarning('');
       }
@@ -482,14 +672,64 @@ function PatientLogSystem(): React.ReactElement {
     }
   }, [formData.userName, formData.workOffice, formData.dutyDate]);
 
-  // 기본 정보가 입력되면 기존 데이터 로드 (매우 빠른 로드)
+  // 기본 정보가 입력되면 기존 데이터 로드 (unlock 후에만)
   useEffect(() => {
+    // unlock되지 않았으면 로드하지 않음
+    if (!isUnlocked) return;
+    
     const timeoutId = setTimeout(() => {
       loadExistingData();
     }, 50); // 0.05초 debounce로 매우 빠르게
 
     return () => clearTimeout(timeoutId);
-  }, [formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo]);
+  }, [formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo, isUnlocked]);
+
+  // unlock된 상태에서 basic information이 변경되면 다시 lock
+  useEffect(() => {
+    // unlock되지 않았으면 실행하지 않음
+    if (!isUnlocked) return;
+    
+    // previousFormData가 없으면 (처음 unlock한 경우) 실행하지 않음
+    const prevFormData = previousFormDataRef.current;
+    if (!prevFormData) return;
+    
+    // basic information이 변경되었는지 확인
+    if (prevFormData.dutyDate !== formData.dutyDate ||
+        prevFormData.userName !== formData.userName ||
+        prevFormData.workOffice !== formData.workOffice ||
+        prevFormData.workHoursFrom !== formData.workHoursFrom ||
+        prevFormData.workHoursTo !== formData.workHoursTo) {
+      // basic information이 변경되었으면 다시 lock
+      setIsUnlocked(false);
+      
+      // patientRows 초기화
+      setPatientRows(() => {
+        return Array.from({ length: 30 }, (_, index) => ({
+          id: index + 1,
+          name: '',
+          office: '',
+          appt_date: '',
+          visit_type: '',
+          call_in: false,
+          call_out: false,
+          time: '',
+          remark: '',
+          other_duty: ''
+        }));
+      });
+      
+      // dailyWorkReport 초기화
+      setFormData(prev => ({
+        ...prev,
+        dailyWorkReport: ''
+      }));
+      
+      // previousFormData 초기화
+      setPreviousFormData(null);
+      previousFormDataRef.current = null;
+      setPreviousDocId(null);
+    }
+  }, [formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo, isUnlocked]);
 
   // 이름이나 오피스가 변경되면 미제출 데이터 확인
   useEffect(() => {
@@ -629,6 +869,10 @@ function PatientLogSystem(): React.ReactElement {
       other_duty: ''
     }]);
     setLastSavedData({});
+    setPreviousDocId(null);
+    setPreviousFormData(null);
+    previousFormDataRef.current = null;
+    setIsUnlocked(false);
   };
 
   // PDF 생성 및 제출
@@ -688,10 +932,54 @@ function PatientLogSystem(): React.ReactElement {
       setProgress(10);
 
       // 1. Firebase에 데이터 저장 (보안 강화)
-      // 모든 row 저장 (빈 row도 포함하여 나중에 로드할 때 정확히 복원)
+      const currentDocId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
+      
+      // 이전 formData가 있고 basic information이 변경되었으면 기존 document를 찾아서 patientRows를 가져옴
+      let rowsToSave = patientRows;
+      let previousDocIdToDelete: string | null = null;
+      
+      if (previousFormData && 
+          (previousFormData.dutyDate !== formData.dutyDate ||
+           previousFormData.userName !== formData.userName ||
+           previousFormData.workOffice !== formData.workOffice ||
+           previousFormData.workHoursFrom !== formData.workHoursFrom ||
+           previousFormData.workHoursTo !== formData.workHoursTo)) {
+        try {
+          const prevDocId = sanitizeFirebaseDocIdClient(generateDocId(
+            previousFormData.dutyDate,
+            previousFormData.userName,
+            previousFormData.workOffice,
+            previousFormData.workHoursFrom,
+            previousFormData.workHoursTo
+          ));
+          
+          const previousDocRef = doc(db, "patient-logs", prevDocId);
+          const previousDocSnap = await getDoc(previousDocRef);
+          
+          if (previousDocSnap.exists()) {
+            const previousData = previousDocSnap.data();
+            // 기존 patientRows를 유지
+            if (previousData.patientRows && Array.isArray(previousData.patientRows)) {
+              rowsToSave = previousData.patientRows;
+            }
+            
+            // 나중에 삭제할 document ID 저장
+            previousDocIdToDelete = prevDocId;
+          }
+        } catch (error) {
+          // 기존 document를 찾지 못해도 계속 진행
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn("Previous document not found or error:", error);
+          }
+        }
+      }
+      
+      // appt_date가 있는 row만 필터링하여 저장
+      const filteredRowsToSave = rowsToSave.filter(row => row.appt_date && row.appt_date.trim() !== '');
+      
       const dataToSave = {
         ...formData,
-        patientRows: patientRows, // 필터링하지 않고 모든 row 저장
+        patientRows: filteredRowsToSave, // appt_date가 있는 row만 저장
         timestamp: new Date().toISOString(),
         // 보안 강화: 사용자 정보 강제 추가 (항상 현재 사용자로 설정)
         userId: currentUser.uid, // 항상 현재 사용자 ID로 설정 (보안 강화)
@@ -700,9 +988,33 @@ function PatientLogSystem(): React.ReactElement {
         updatedAt: new Date().toISOString()
       };
 
-      const docId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
       const safeDataToSave = sanitizeFirebaseDataClient(dataToSave);
-      await setDoc(doc(db, "patient-logs", docId), safeDataToSave);
+      await setDoc(doc(db, "patient-logs", currentDocId), safeDataToSave);
+      
+      // 기존 document 삭제 (새 document 저장 성공 후)
+      if (previousDocIdToDelete && previousDocIdToDelete !== currentDocId) {
+        try {
+          await deleteDoc(doc(db, "patient-logs", previousDocIdToDelete));
+        } catch (deleteError) {
+          // 삭제 실패해도 계속 진행
+          if (process.env.NODE_ENV !== 'production') {
+            console.warn("Error deleting previous document:", deleteError);
+          }
+        }
+      }
+      
+      // 현재 docId를 previousDocId로 저장
+      setPreviousDocId(currentDocId);
+      // 현재 basic information을 previousFormData로 저장 (state와 ref 모두 업데이트)
+      const newPreviousFormData = {
+        dutyDate: formData.dutyDate,
+        userName: formData.userName,
+        workOffice: formData.workOffice,
+        workHoursFrom: formData.workHoursFrom,
+        workHoursTo: formData.workHoursTo
+      };
+      setPreviousFormData(newPreviousFormData);
+      previousFormDataRef.current = newPreviousFormData;
 
       // 2. API로 PDF 생성 (보안 강화 - 인증 필수)
       setSubmitStatus('Generating PDF...');
@@ -1369,7 +1681,7 @@ function PatientLogSystem(): React.ReactElement {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
                 Work Hours From:
@@ -1398,6 +1710,36 @@ function PatientLogSystem(): React.ReactElement {
               />
             </div>
           </div>
+
+          {/* Unlock 버튼 */}
+          {!isUnlocked && (
+            <div style={{ display: 'flex', justifyContent: 'center', marginTop: '20px' }}>
+              <button
+                onClick={async () => {
+                  if (isBasicInfoComplete()) {
+                    // unlock 시 기존 데이터 로드
+                    await loadExistingData();
+                    // unlock 상태로 변경
+                    setIsUnlocked(true);
+                    // unlock 후 저장 시작 (기존 데이터가 없으면 새 document로 저장)
+                    setTimeout(() => {
+                      autoSave();
+                    }, 500); // 데이터 로드 후 저장
+                  } else {
+                    alert('⚠️ Please fill in all Basic Information fields.');
+                  }
+                }}
+                style={{
+                  ...buttonStyle,
+                  backgroundColor: '#0077B6',
+                  padding: '12px 30px',
+                  fontSize: '1.1em'
+                }}
+              >
+                🔓 Unlock Patient Log
+              </button>
+            </div>
+          )}
         </div>
 
         {/* 환자 로그 테이블 */}
@@ -1405,32 +1747,6 @@ function PatientLogSystem(): React.ReactElement {
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
             <h2 style={{ color: '#0077B6', margin: 0 }}>👥 Patient Log</h2>
-              {!isBasicInfoComplete() && (
-                <span style={{ 
-                  fontSize: '12px', 
-                  color: '#dc3545', 
-                  fontWeight: 'bold',
-                  padding: '4px 8px',
-                  backgroundColor: '#f8d7da',
-                  borderRadius: '12px',
-                  border: '1px solid #dc3545'
-                }}>
-                  ⚠️ Complete Basic Information First
-                </span>
-              )}
-              {isBasicInfoComplete() && (
-                <span style={{ 
-                  fontSize: '12px', 
-                  color: '#28a745', 
-                  fontWeight: 'bold',
-                  padding: '4px 8px',
-                  backgroundColor: '#e8f5e8',
-                  borderRadius: '12px',
-                  border: '1px solid #28a745'
-                }}>
-                  ✅ Data Loaded
-                </span>
-              )}
               {autoSaveStatus && (
                 <span style={{ 
                   fontSize: '12px', 
@@ -1508,8 +1824,8 @@ function PatientLogSystem(): React.ReactElement {
             </div>
           </div>
 
-          {/* Basic Information 완료 체크 후 테이블 표시 */}
-          {!isBasicInfoComplete() ? (
+          {/* Unlock 체크 후 테이블 표시 */}
+          {!isUnlocked ? (
             <div style={{
               padding: '40px',
               textAlign: 'center',
@@ -1519,12 +1835,6 @@ function PatientLogSystem(): React.ReactElement {
               margin: '20px 0'
             }}>
               <div style={{ fontSize: '48px', marginBottom: '20px' }}>🔒</div>
-              <h3 style={{ color: '#6c757d', marginBottom: '10px' }}>
-                Complete Basic Information First
-              </h3>
-              <p style={{ color: '#6c757d', margin: 0 }}>
-                Please fill in all Basic Information fields above to access Patient Log
-              </p>
             </div>
           ) : (
             <>
@@ -1576,7 +1886,7 @@ function PatientLogSystem(): React.ReactElement {
         {/* 일일 업무 보고서 */}
         <div style={sectionStyle}>
           <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>📝 Daily Work Report</h2>
-          {!isBasicInfoComplete() ? (
+          {!isUnlocked ? (
             <div style={{
               padding: '20px',
               textAlign: 'center',
@@ -1586,9 +1896,6 @@ function PatientLogSystem(): React.ReactElement {
               margin: '10px 0'
             }}>
               <div style={{ fontSize: '24px', marginBottom: '10px' }}>🔒</div>
-              <p style={{ color: '#6c757d', margin: 0 }}>
-                Complete Basic Information first to access Daily Work Report
-              </p>
             </div>
           ) : (
             <textarea
@@ -1607,7 +1914,7 @@ function PatientLogSystem(): React.ReactElement {
 
         {/* PDF 생성 버튼 */}
         <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginBottom: '30px' }}>
-          {!isBasicInfoComplete() ? (
+          {!isUnlocked ? (
             <div style={{
               padding: '20px',
               textAlign: 'center',
@@ -1617,9 +1924,6 @@ function PatientLogSystem(): React.ReactElement {
               margin: '10px 0'
             }}>
               <div style={{ fontSize: '24px', marginBottom: '10px' }}>🔒</div>
-              <p style={{ color: '#6c757d', margin: 0 }}>
-                Complete Basic Information first to generate PDF
-              </p>
             </div>
           ) : (
             <button 
