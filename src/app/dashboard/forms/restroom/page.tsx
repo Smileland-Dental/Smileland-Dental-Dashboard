@@ -427,7 +427,7 @@ export default function RestroomInspection() {
   // 스타일 정의
   const styles: { [key: string]: React.CSSProperties } = {
     body: {
-      fontFamily: "'Roboto', sans-serif",
+      fontFamily: "Arial, sans-serif",
       backgroundColor: '#C2E6E6',
       color: '#333',
       lineHeight: '1.6',
@@ -441,7 +441,7 @@ export default function RestroomInspection() {
       minWidth: '320px',
       width: '100%',
       margin: '20px auto',
-      backgroundColor: 'linear-gradient(145deg, #ffffff 0%, #f8fafc 100%)',
+      backgroundColor: '#ffffff',
       borderRadius: '20px',
       boxShadow: '0 20px 40px rgba(0, 0, 0, 0.1), 0 0 0 1px rgba(255, 255, 255, 0.1)',
       padding: '25px 2vw 30px 2vw',
@@ -452,7 +452,7 @@ export default function RestroomInspection() {
     header: {
       fontSize: '1.8rem',
       fontWeight: '700',
-      marginBottom: '25px',
+      marginBottom: '10px',
       color: '#4a6fa1',
       textAlign: 'center',
       textShadow: '0 2px 4px rgba(0, 0, 0, 0.1)',
@@ -465,7 +465,7 @@ export default function RestroomInspection() {
       justifyContent: 'center',
       marginBottom: '30px',
       flexWrap: 'wrap',
-      backgroundColor: 'linear-gradient(135deg, rgba(74, 111, 161, 0.05) 0%, rgba(46, 58, 78, 0.05) 100%)',
+      backgroundColor: 'rgba(194, 230, 230, 0.5)',
       padding: '20px',
       borderRadius: '15px',
       border: '1px solid rgba(74, 111, 161, 0.1)'
@@ -500,7 +500,7 @@ export default function RestroomInspection() {
       width: '100%',
       margin: '0 auto',
       borderRadius: '12px',
-      backgroundColor: '#fff',
+      backgroundColor: '#ffffff',
       boxShadow: '0 8px 32px rgba(74, 111, 161, 0.1)'
     },
     table: {
@@ -550,8 +550,8 @@ export default function RestroomInspection() {
     submitButton: {
       display: 'inline-block',
       padding: '12px 32px',
-      backgroundColor: 'linear-gradient(135deg, #4a6fa1 0%, #2e3a4e 100%)',
-      color: '#fff',
+      backgroundColor: '#C2E6E6',
+      color: '#333',
       fontSize: '1.1rem',
       fontWeight: '600',
       border: 'none',
@@ -617,7 +617,6 @@ export default function RestroomInspection() {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
         }
-        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
       `}</style>
       <div style={styles.body}>
         {/* 로딩 모달 */}
@@ -890,7 +889,7 @@ export default function RestroomInspection() {
                 disabled={loading || !selectedOffice}
                 style={{
                   ...styles.submitButton,
-                  backgroundColor: loading || !selectedOffice ? '#bdc3c7' : 'linear-gradient(135deg, #4a6fa1 0%, #2e3a4e 100%)',
+                  backgroundColor: loading || !selectedOffice ? '#bdc3c7' : '#C2E6E6',
                   cursor: loading || !selectedOffice ? 'not-allowed' : 'pointer'
                 } as React.CSSProperties}
               >
