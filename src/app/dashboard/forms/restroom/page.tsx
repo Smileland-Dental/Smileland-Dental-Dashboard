@@ -362,7 +362,7 @@ export default function RestroomInspection() {
         setProgress(70);
         try {
           const storage = getStorage();
-          const filename = `${inspectionDate}_${selectedOffice}_Restroom_${selectedRestroom}_Inspection_Log.pdf`;
+          const filename = `6) ${inspectionDate}_${selectedOffice}_Restroom_${selectedRestroom}_Inspection_Log.pdf`;
           const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`);
           
           // PDF 업로드
@@ -921,3 +921,4 @@ export default function RestroomInspection() {
     </>
   );
 }
+
