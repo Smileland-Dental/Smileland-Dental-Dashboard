@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { db } from '@/lib/firebase.config';
-import { collection, doc, setDoc, getDoc, getDocs, query, where, Timestamp, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, Timestamp, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface StaffMember {
@@ -56,7 +56,6 @@ interface DoctorRow {
 
 export default function AttendanceTrack() {
   const [loading, setLoading] = useState(false);
-  const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [staffList, setStaffList] = useState<{ staff: StaffList; doctors: DoctorMember[] } | null>(null);
   const [attendanceData, setAttendanceData] = useState<{ staffData: AttendanceRow[]; doctorData: DoctorRow[] }>({
     staffData: [],
@@ -67,15 +66,25 @@ export default function AttendanceTrack() {
   const lastSavedDataRef = useRef<string>('');
   // 초기 로드 완료 플래그 (초기 로드 시 자동 저장 방지)
   const isInitialLoadRef = useRef<boolean>(true);
+  // 🔒 보안: Rate limiting을 위한 ref
+  const lastAutoSaveTimeRef = useRef<number>(0);
+  const lastApiCallTimeRef = useRef<number>(0);
+  const autoSaveCountRef = useRef<number>(0);
+  const autoSaveResetTimeRef = useRef<number>(Date.now());
 
-  // 🔒 보안: 입력 검증 함수
+  // 🔒 보안: 입력 검증 및 XSS 방지 함수
   const validateInput = (value: string | undefined | null, maxLength: number = 500): string => {
     if (!value || typeof value !== 'string') return '';
+    // XSS 방지: 위험한 문자 제거
+    let sanitized = value
+      .replace(/[<>\"']/g, '') // HTML 태그 및 따옴표 제거
+      .replace(/javascript:/gi, '') // javascript: 프로토콜 제거
+      .replace(/on\w+=/gi, ''); // 이벤트 핸들러 제거 (onclick, onerror 등)
     // 길이 제한
-    if (value.length > maxLength) {
-      return value.substring(0, maxLength);
+    if (sanitized.length > maxLength) {
+      sanitized = sanitized.substring(0, maxLength);
     }
-    return value;
+    return sanitized;
   };
 
   // 🔒 보안: 날짜 형식 검증
@@ -90,6 +99,18 @@ export default function AttendanceTrack() {
   const validateOffice = (office: string): boolean => {
     const allowedOffices = ['Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
     return allowedOffices.includes(office);
+  };
+
+  // 🔒 보안: Position 값 검증
+  const validatePosition = (position: string): boolean => {
+    const allowedPositions = ['Front Office', 'Biller', 'Dental Assistant', 'RDA', 'Sub', 'Extern'];
+    return allowedPositions.includes(position);
+  };
+
+  // 🔒 보안: Incident 값 검증
+  const validateIncident = (incident: string): boolean => {
+    const allowedIncidents = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'];
+    return allowedIncidents.includes(incident);
   };
 
   // 날짜 상태 (캘리포니아 시간대)
@@ -175,12 +196,7 @@ export default function AttendanceTrack() {
 
   // Staff List를 기반으로 테이블 행 업데이트 (기존 입력 데이터 보존)
   const updateTableRowsFromStaffList = useCallback((staffListData: { staff: StaffList; doctors: DoctorMember[] }, preserveExistingData: boolean = true) => {
-    console.log('=== updateTableRowsFromStaffList called ===');
-    console.log('Staff list data received:', staffListData);
-    console.log('Preserve existing data:', preserveExistingData);
-    
     setTableRows(prevRows => {
-      console.log('Updating table rows from staff list. Previous rows:', prevRows.length);
       
       // 타입 정의
       type TableRow = {
@@ -201,7 +217,6 @@ export default function AttendanceTrack() {
       
       // 임시 row는 preserveExistingData가 true일 때만 보존
       const tempRows = preserveExistingData ? prevRows.filter(row => row.id.startsWith('temp-')) : [];
-      console.log('Preserving temp rows:', tempRows.length, '(preserveExistingData:', preserveExistingData, ')');
       
       // 저장된 출석 데이터를 가져오기 (attendanceData에서)
       const savedRowsMap = new Map<string, TableRow>();
@@ -224,7 +239,6 @@ export default function AttendanceTrack() {
             notes: row.notes || ''
           });
         });
-        console.log('Saved attendance data rows:', savedRowsMap.size);
       }
       
       // staff-list를 기반으로 테이블 행 생성
@@ -249,33 +263,18 @@ export default function AttendanceTrack() {
         }
       });
       
-      console.log('Processing positions:', positionOrder);
-      
       positionOrder.forEach(position => {
         const members = staffListData.staff[position] || [];
-        console.log(`${position}: Total members:`, members.length);
-        console.log(`${position}: Members data:`, members);
         
         // Active가 true인 것만, 또는 Sub/Extern은 항상 포함
         const activeMembers = members.filter(m => {
           // Sub/Extern은 항상 포함
           if (position === 'Sub' || position === 'Extern') {
-            console.log(`  Including ${m.name} (${position}) - Sub/Extern always included`);
             return true;
           }
           // 다른 포지션은 active가 명시적으로 true인 것만 포함
-          // active가 false, undefined, null이면 제외
-          const activeValue = m.active;
-          const isActive = activeValue === true;
-          console.log(`  Checking ${m.name} (${position}): active =`, activeValue, 'type:', typeof activeValue, 'isActive:', isActive);
-          if (!isActive) {
-            console.log(`  ⚠️ Skipping ${m.name} (${position}) - active:`, activeValue, 'type:', typeof activeValue);
-          }
-          return isActive;
+          return m.active === true;
         });
-        
-        console.log(`${position}: Active members:`, activeMembers.length);
-        console.log(`${position}: Active members list:`, activeMembers.map(m => `${m.name} (no: ${m.no}, active: ${m.active})`));
         
         activeMembers.forEach(member => {
           const rowId = `${position}-${member.no}`;
@@ -285,14 +284,12 @@ export default function AttendanceTrack() {
           const savedRow = savedRowsMap.get(rowId);
           
           if (existingRow) {
-            console.log(`  Keeping existing row: ${rowId} (${member.name || existingRow.name})`);
             // 기존 행과 저장된 데이터 병합 (저장된 데이터가 우선)
             const mergedRow = savedRow 
               ? { ...existingRow, ...savedRow, name: member.name || existingRow.name || savedRow.name || '' }
               : { ...existingRow, name: member.name || existingRow.name || '' };
             newRows.push(mergedRow);
           } else if (savedRow) {
-            console.log(`  Creating row from saved data: ${rowId} (${member.name || savedRow.name})`);
             // 저장된 데이터가 있으면 그것을 사용, staff-list의 이름으로 업데이트
             newRows.push({
               ...savedRow,
@@ -301,7 +298,6 @@ export default function AttendanceTrack() {
               no: member.no // no도 확실히 설정
             });
           } else {
-            console.log(`  Creating new row: ${rowId} (${member.name})`);
             newRows.push({
               id: rowId,
               position,
@@ -338,16 +334,16 @@ export default function AttendanceTrack() {
         return [...regularRows, ...tempRowsForPosition];
       });
       
-      console.log('=== Table rows update complete ===');
-      console.log('New rows count:', sortedRows.length, 'Previous rows count:', prevRows.length);
-      console.log('New rows:', sortedRows.map(r => `${r.position}-${r.no}: ${r.name}`));
-      
       return sortedRows;
     });
   }, [attendanceData]);
 
   // 임시 row 추가 (특정 position에)
   const addTempRow = (position: string) => {
+    // 🔒 보안: Position 값 검증
+    if (!validatePosition(position)) {
+      return;
+    }
     const positionRows = tableRows.filter(r => r.position === position);
     const tempRows = positionRows.filter(r => r.id.startsWith('temp-'));
     const tempNo = 1000 + tempRows.length; // 임시 row는 1000부터 시작
@@ -410,14 +406,9 @@ export default function AttendanceTrack() {
 
   // Doctor 테이블 행 업데이트
   const updateDoctorRowsFromStaffList = useCallback((doctors: DoctorMember[], preserveExistingData: boolean = true) => {
-    console.log('=== updateDoctorRowsFromStaffList called ===');
-    console.log('Doctors data received:', doctors);
-    console.log('Preserve existing data:', preserveExistingData);
-    
     setDoctorRows(prevRows => {
       // 임시 row는 preserveExistingData가 true일 때만 보존
       const tempRows = preserveExistingData ? prevRows.filter(row => row.id.startsWith('temp-')) : [];
-      console.log('Preserving temp doctor rows:', tempRows.length, '(preserveExistingData:', preserveExistingData, ')');
       
       // 저장된 출석 데이터에서 doctor 데이터 가져오기
       const savedDoctorsMap = new Map<string, {
@@ -445,7 +436,6 @@ export default function AttendanceTrack() {
             checkOut: row.checkOut || ''
           });
         });
-        console.log('Saved doctor data rows:', savedDoctorsMap.size);
       }
       
       // 기존 행 데이터 맵 (임시 row 제외)
@@ -494,7 +484,6 @@ export default function AttendanceTrack() {
         }
       });
       
-      console.log('Doctor rows updated:', newRows.length);
       return newRows;
     });
   }, [attendanceData]);
@@ -550,7 +539,6 @@ export default function AttendanceTrack() {
             checkOut: row.checkOut || ''
           }));
           setDoctorRows(doctorRowsData);
-          console.log('Doctor rows loaded from attendance data:', doctorRowsData.length);
         }
         
         // 저장된 데이터를 임시로 저장 (staff-list가 로드된 후에 적용)
@@ -576,7 +564,6 @@ export default function AttendanceTrack() {
           setTableRows(prevRows => {
             if (prevRows.length === 0) {
               // 테이블 행이 아직 없으면 staff-list가 먼저 로드되어야 함
-              console.log('Table rows not ready yet, will apply saved data after staff-list loads');
               return prevRows;
             }
             
@@ -584,13 +571,11 @@ export default function AttendanceTrack() {
             const mergedRows = prevRows.map(prevRow => {
               const savedRow = savedRows.find(sr => sr.id === prevRow.id);
               if (savedRow) {
-                console.log('Merging saved data for:', prevRow.id);
                 return { ...prevRow, ...savedRow };
               }
               return prevRow;
             });
             
-            console.log('Merged rows count:', mergedRows.length);
             return mergedRows;
           });
         }
@@ -604,7 +589,8 @@ export default function AttendanceTrack() {
       }
     } catch (error) {
       console.error('Error loading attendance data:', error);
-      alert('Error loading attendance data: ' + (error as Error).message);
+      // 🔒 보안: 상세한 에러 메시지 노출 최소화
+      alert('Error loading attendance data. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -612,6 +598,25 @@ export default function AttendanceTrack() {
 
   // 출석 데이터 저장
   const saveAttendanceData = useCallback(async (silent: boolean = false) => {
+    // 🔒 보안: Rate limiting - 자동 저장은 최소 2초 간격, 분당 최대 30회
+    const now = Date.now();
+    if (silent) {
+      // 자동 저장의 경우 rate limiting 적용
+      if (now - lastAutoSaveTimeRef.current < 2000) {
+        return; // 최소 2초 간격
+      }
+      // 분당 30회 제한
+      if (now - autoSaveResetTimeRef.current > 60000) {
+        autoSaveCountRef.current = 0;
+        autoSaveResetTimeRef.current = now;
+      }
+      if (autoSaveCountRef.current >= 30) {
+        return; // 분당 30회 초과
+      }
+      autoSaveCountRef.current++;
+      lastAutoSaveTimeRef.current = now;
+    }
+
     if (!trackDate) {
       if (!silent) alert('Please select a date');
       return;
@@ -646,24 +651,28 @@ export default function AttendanceTrack() {
       const safeCheckedBy = validateInput(checkedBy, 100);
       
       // 현재 테이블에서 데이터 추출 (입력 검증 포함)
-      const staffData: AttendanceRow[] = tableRows.map(row => ({
-        date: trackDate,
-        filledBy: safeFilledBy,
-        checkedBy: safeCheckedBy,
-        position: validateInput(row.position, 50),
-        count: 0, // position별 present 개수는 저장 시 계산
-        no: typeof row.no === 'number' ? row.no : 0,
-        name: validateInput(row.name, 100),
-        present: typeof row.present === 'boolean' ? row.present : false,
-        startTardy: validateInput(row.startTardy, 50),
-        lateLunch: validateInput(row.lateLunch, 50),
-        needsAdj: typeof row.needsAdj === 'boolean' ? row.needsAdj : false,
-        overtime: validateInput(row.overtime, 50),
-        otCorp: validateInput(row.otCorp, 50),
-        subAnother: typeof row.subAnother === 'boolean' ? row.subAnother : false,
-        incident: validateInput(row.incident, 500),
-        notes: validateInput(row.notes, 500)
-      }));
+      const staffData: AttendanceRow[] = tableRows.map(row => {
+        const validatedPosition = validatePosition(row.position) ? row.position : '';
+        const validatedIncident = validateIncident(row.incident || '') ? (row.incident || '') : '';
+        return {
+          date: trackDate,
+          filledBy: safeFilledBy,
+          checkedBy: safeCheckedBy,
+          position: validatedPosition,
+          count: 0, // position별 present 개수는 저장 시 계산
+          no: typeof row.no === 'number' && row.no >= 0 && row.no <= 9999 ? row.no : 0,
+          name: validateInput(row.name, 100),
+          present: typeof row.present === 'boolean' ? row.present : false,
+          startTardy: validateInput(row.startTardy, 50),
+          lateLunch: validateInput(row.lateLunch, 50),
+          needsAdj: typeof row.needsAdj === 'boolean' ? row.needsAdj : false,
+          overtime: validateInput(row.overtime, 50),
+          otCorp: validateInput(row.otCorp, 50),
+          subAnother: typeof row.subAnother === 'boolean' ? row.subAnother : false,
+          incident: validatedIncident,
+          notes: validateInput(row.notes, 500)
+        };
+      });
 
       // position별 present 개수 계산
       const positionCounts: { [key: string]: number } = {};
@@ -708,14 +717,11 @@ export default function AttendanceTrack() {
       // 마지막 저장된 데이터 업데이트 (자동 저장 최적화용)
       lastSavedDataRef.current = JSON.stringify({ tableRows, doctorRows, filledBy, checkedBy });
       
-      // 자동 저장은 조용히 수행 (메시지 표시 안 함)
-      if (!silent) {
-        console.log('Data saved successfully');
-      }
     } catch (error) {
       console.error('Error saving attendance data:', error);
       if (!silent) {
-        alert('Error saving attendance data: ' + (error as Error).message);
+        // 🔒 보안: 상세한 에러 메시지 노출 최소화
+        alert('Error saving attendance data. Please try again.');
       }
     } finally {
       if (!silent) {
@@ -756,25 +762,38 @@ export default function AttendanceTrack() {
       const safeFilledBy = validateInput(filledBy, 100);
       const safeCheckedBy = validateInput(checkedBy, 100);
       
+      // 🔒 보안: Rate limiting - API 호출은 최소 5초 간격
+      const now = Date.now();
+      if (now - lastApiCallTimeRef.current < 5000) {
+        alert('Please wait a moment before submitting again.');
+        setLoading(false);
+        return;
+      }
+      lastApiCallTimeRef.current = now;
+
       // 1. 현재 테이블 데이터를 Firestore에 저장 (입력 검증 포함)
-      const staffData: AttendanceRow[] = tableRows.map(row => ({
-        date: trackDate,
-        filledBy: safeFilledBy,
-        checkedBy: safeCheckedBy,
-        position: validateInput(row.position, 50),
-        count: 0,
-        no: typeof row.no === 'number' ? row.no : 0,
-        name: validateInput(row.name, 100),
-        present: typeof row.present === 'boolean' ? row.present : false,
-        startTardy: validateInput(row.startTardy, 50),
-        lateLunch: validateInput(row.lateLunch, 50),
-        needsAdj: typeof row.needsAdj === 'boolean' ? row.needsAdj : false,
-        overtime: validateInput(row.overtime, 50),
-        otCorp: validateInput(row.otCorp, 50),
-        subAnother: typeof row.subAnother === 'boolean' ? row.subAnother : false,
-        incident: validateInput(row.incident, 500),
-        notes: validateInput(row.notes, 500)
-      }));
+      const staffData: AttendanceRow[] = tableRows.map(row => {
+        const validatedPosition = validatePosition(row.position) ? row.position : '';
+        const validatedIncident = validateIncident(row.incident || '') ? (row.incident || '') : '';
+        return {
+          date: trackDate,
+          filledBy: safeFilledBy,
+          checkedBy: safeCheckedBy,
+          position: validatedPosition,
+          count: 0,
+          no: typeof row.no === 'number' && row.no >= 0 && row.no <= 9999 ? row.no : 0,
+          name: validateInput(row.name, 100),
+          present: typeof row.present === 'boolean' ? row.present : false,
+          startTardy: validateInput(row.startTardy, 50),
+          lateLunch: validateInput(row.lateLunch, 50),
+          needsAdj: typeof row.needsAdj === 'boolean' ? row.needsAdj : false,
+          overtime: validateInput(row.overtime, 50),
+          otCorp: validateInput(row.otCorp, 50),
+          subAnother: typeof row.subAnother === 'boolean' ? row.subAnother : false,
+          incident: validatedIncident,
+          notes: validateInput(row.notes, 500)
+        };
+      });
 
       // position별 present 개수 계산
       const positionCounts: { [key: string]: number } = {};
@@ -867,7 +886,6 @@ export default function AttendanceTrack() {
             createdAt: Timestamp.now(),
           });
           
-          console.log('PDF saved successfully to Firebase Storage');
         } catch (storageError: any) {
           console.error('Storage error:', storageError);
           const errorMsg = storageError?.message || '알 수 없는 오류';
@@ -902,23 +920,21 @@ export default function AttendanceTrack() {
       setFilledBy('');
       setCheckedBy('');
       
+      // Office 및 비밀번호 상태 초기화
+      setSelectedOffice('');
+      setOfficePasswordVerified(false);
+      
       // 테이블 데이터 리셋 (staff-list 기반으로 다시 초기화)
       // 자동 저장이 트리거되지 않도록 먼저 플래그 설정
       isInitialLoadRef.current = true;
       lastSavedDataRef.current = '';
       
-      if (staffList) {
-        updateTableRowsFromStaffList(staffList, false); // preserveExistingData: false로 입력 데이터 초기화
-        if (staffList.doctors && staffList.doctors.length > 0) {
-          updateDoctorRowsFromStaffList(staffList.doctors, false); // preserveExistingData: false로 임시 row 제거
-        } else {
-          setDoctorRows([]);
-        }
-      } else {
-        // staffList가 없으면 빈 배열로 설정
-        setTableRows([]);
-        setDoctorRows([]);
-      }
+      // doctorRows와 tableRows를 명시적으로 빈 배열로 초기화
+      setDoctorRows([]);
+      setTableRows([]);
+      
+      // staffList가 있으면 나중에 다시 로드될 때 자동으로 채워질 것임
+      // 여기서는 명시적으로 빈 배열로 초기화만 함
       
       // 리셋 완료 후 자동 저장 방지를 위한 처리
       // isInitialLoadRef가 true로 설정되어 있으므로 자동 저장 useEffect가 실행되지 않음
@@ -926,7 +942,8 @@ export default function AttendanceTrack() {
       // 따라서 별도로 lastSavedDataRef를 업데이트할 필요 없음
     } catch (error) {
       console.error('Error submitting:', error);
-      alert('Error submitting: ' + (error as Error).message);
+      // 🔒 보안: 상세한 에러 메시지 노출 최소화
+      alert('Error submitting. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -944,41 +961,25 @@ export default function AttendanceTrack() {
 
     const staffListDocRef = doc(db, 'staff-list', selectedOffice);
     
-    console.log('Setting up staff-list listener...');
-    
     const unsubscribe = onSnapshot(staffListDocRef, (docSnap) => {
-      console.log('=== Staff-list snapshot triggered ===');
-      console.log('Document exists:', docSnap.exists());
-      console.log('Document ID:', docSnap.id);
-      
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log('Raw data from Firestore:', data);
         
         const staffListData = {
           staff: data.staff || {},
           doctors: data.doctors || []
         };
         
-        console.log('Parsed staff list data:', staffListData);
-        console.log('Staff positions:', Object.keys(staffListData.staff));
-        Object.keys(staffListData.staff).forEach(position => {
-          console.log(`${position}:`, staffListData.staff[position].length, 'members');
-        });
-        
         setStaffList(staffListData);
         
         // 테이블 행 업데이트 (기존 입력 데이터 보존)
-        console.log('Calling updateTableRowsFromStaffList...');
         updateTableRowsFromStaffList(staffListData, true);
         
         // Doctor 테이블 행 업데이트
         if (staffListData.doctors && staffListData.doctors.length > 0) {
-          console.log('Updating doctor rows from staff list...');
-          updateDoctorRowsFromStaffList(staffListData.doctors, true); // preserveExistingData: true로 기존 입력 데이터 보존
+          updateDoctorRowsFromStaffList(staffListData.doctors, true);
         }
       } else {
-        console.log('Staff list document does not exist');
         // Staff List가 없으면 빈 데이터로 초기화
         setStaffList({
           staff: {},
@@ -988,11 +989,10 @@ export default function AttendanceTrack() {
       }
     }, (error) => {
       console.error('Error listening to staff list:', error);
-      alert('Error loading staff list: ' + (error as Error).message);
+      alert('Error loading staff list. Please try again.');
     });
     
     return () => {
-      console.log('Cleaning up staff-list listener...');
       unsubscribe();
     };
   }, [updateTableRowsFromStaffList, selectedOffice, officePasswordVerified]);
@@ -1092,7 +1092,11 @@ export default function AttendanceTrack() {
           <input
             type="text"
             value={filledBy}
-            onChange={(e) => setFilledBy(e.target.value)}
+            onChange={(e) => {
+              // 🔒 보안: 입력 검증
+              const validatedValue = validateInput(e.target.value, 100);
+              setFilledBy(validatedValue);
+            }}
             style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ddd', minWidth: '150px' }}
           />
         </label>
@@ -1102,17 +1106,15 @@ export default function AttendanceTrack() {
           <input
             type="text"
             value={checkedBy}
-            onChange={(e) => setCheckedBy(e.target.value)}
+            onChange={(e) => {
+              // 🔒 보안: 입력 검증
+              const validatedValue = validateInput(e.target.value, 100);
+              setCheckedBy(validatedValue);
+            }}
             style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ddd', minWidth: '150px' }}
           />
         </label>
       </div>
-
-      {autoSaveStatus && (
-        <div style={{ padding: '10px', background: '#4CAF50', color: 'white', marginBottom: '10px' }}>
-          {autoSaveStatus}
-        </div>
-      )}
 
       {loading && <div>Loading...</div>}
 
@@ -1188,12 +1190,8 @@ export default function AttendanceTrack() {
                 </colgroup>
                 <tbody>
               {(() => {
-                console.log('Rendering table. tableRows.length:', tableRows.length);
-                console.log('tableRows:', tableRows);
-                
                 const positionOrder = ['Front Office', 'Biller', 'Dental Assistant', 'RDA', 'Sub', 'Extern'];
                 const rows: React.ReactElement[] = [];
-                let currentPosition = '';
                 
                 if (tableRows.length === 0) {
                   return (
@@ -1253,10 +1251,12 @@ export default function AttendanceTrack() {
                             type="text"
                             value={row.name}
                             onChange={(e) => {
+                              // 🔒 보안: 입력 검증
+                              const validatedValue = validateInput(e.target.value, 100);
                               const newRows = [...tableRows];
                               const rowIndex = newRows.findIndex(r => r.id === row.id);
                               if (rowIndex !== -1) {
-                                newRows[rowIndex].name = e.target.value;
+                                newRows[rowIndex].name = validatedValue;
                                 setTableRows(newRows);
                               }
                             }}
@@ -1286,14 +1286,16 @@ export default function AttendanceTrack() {
                         <input
                           type="text"
                           value={row.startTardy}
-                          onChange={(e) => {
-                            const newRows = [...tableRows];
-                            const rowIndex = newRows.findIndex(r => r.id === row.id);
-                            if (rowIndex !== -1) {
-                              newRows[rowIndex].startTardy = e.target.value;
-                              setTableRows(newRows);
-                            }
-                          }}
+                            onChange={(e) => {
+                              // 🔒 보안: 입력 검증
+                              const validatedValue = validateInput(e.target.value, 50);
+                              const newRows = [...tableRows];
+                              const rowIndex = newRows.findIndex(r => r.id === row.id);
+                              if (rowIndex !== -1) {
+                                newRows[rowIndex].startTardy = validatedValue;
+                                setTableRows(newRows);
+                              }
+                            }}
                           style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
                         />
                       </td>
@@ -1301,14 +1303,16 @@ export default function AttendanceTrack() {
                         <input
                           type="text"
                           value={row.lateLunch}
-                          onChange={(e) => {
-                            const newRows = [...tableRows];
-                            const rowIndex = newRows.findIndex(r => r.id === row.id);
-                            if (rowIndex !== -1) {
-                              newRows[rowIndex].lateLunch = e.target.value;
-                              setTableRows(newRows);
-                            }
-                          }}
+                            onChange={(e) => {
+                              // 🔒 보안: 입력 검증
+                              const validatedValue = validateInput(e.target.value, 50);
+                              const newRows = [...tableRows];
+                              const rowIndex = newRows.findIndex(r => r.id === row.id);
+                              if (rowIndex !== -1) {
+                                newRows[rowIndex].lateLunch = validatedValue;
+                                setTableRows(newRows);
+                              }
+                            }}
                           style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
                         />
                       </td>
@@ -1331,14 +1335,16 @@ export default function AttendanceTrack() {
                         <input
                           type="text"
                           value={row.overtime}
-                          onChange={(e) => {
-                            const newRows = [...tableRows];
-                            const rowIndex = newRows.findIndex(r => r.id === row.id);
-                            if (rowIndex !== -1) {
-                              newRows[rowIndex].overtime = e.target.value;
-                              setTableRows(newRows);
-                            }
-                          }}
+                            onChange={(e) => {
+                              // 🔒 보안: 입력 검증
+                              const validatedValue = validateInput(e.target.value, 50);
+                              const newRows = [...tableRows];
+                              const rowIndex = newRows.findIndex(r => r.id === row.id);
+                              if (rowIndex !== -1) {
+                                newRows[rowIndex].overtime = validatedValue;
+                                setTableRows(newRows);
+                              }
+                            }}
                           style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
                         />
                       </td>
@@ -1346,14 +1352,16 @@ export default function AttendanceTrack() {
                         <input
                           type="text"
                           value={row.otCorp}
-                          onChange={(e) => {
-                            const newRows = [...tableRows];
-                            const rowIndex = newRows.findIndex(r => r.id === row.id);
-                            if (rowIndex !== -1) {
-                              newRows[rowIndex].otCorp = e.target.value;
-                              setTableRows(newRows);
-                            }
-                          }}
+                            onChange={(e) => {
+                              // 🔒 보안: 입력 검증
+                              const validatedValue = validateInput(e.target.value, 50);
+                              const newRows = [...tableRows];
+                              const rowIndex = newRows.findIndex(r => r.id === row.id);
+                              if (rowIndex !== -1) {
+                                newRows[rowIndex].otCorp = validatedValue;
+                                setTableRows(newRows);
+                              }
+                            }}
                           style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
                         />
                       </td>
@@ -1376,10 +1384,15 @@ export default function AttendanceTrack() {
                         <select
                           value={row.incident || ''}
                           onChange={(e) => {
+                            // 🔒 보안: Incident 값 검증
+                            const value = e.target.value;
+                            if (!validateIncident(value)) {
+                              return; // 유효하지 않은 값은 무시
+                            }
                             const newRows = [...tableRows];
                             const rowIndex = newRows.findIndex(r => r.id === row.id);
                             if (rowIndex !== -1) {
-                              newRows[rowIndex].incident = e.target.value;
+                              newRows[rowIndex].incident = value;
                               setTableRows(newRows);
                             }
                           }}
@@ -1396,14 +1409,16 @@ export default function AttendanceTrack() {
                         <input
                           type="text"
                           value={row.notes}
-                          onChange={(e) => {
-                            const newRows = [...tableRows];
-                            const rowIndex = newRows.findIndex(r => r.id === row.id);
-                            if (rowIndex !== -1) {
-                              newRows[rowIndex].notes = e.target.value;
-                              setTableRows(newRows);
-                            }
-                          }}
+                            onChange={(e) => {
+                              // 🔒 보안: 입력 검증
+                              const validatedValue = validateInput(e.target.value, 500);
+                              const newRows = [...tableRows];
+                              const rowIndex = newRows.findIndex(r => r.id === row.id);
+                              if (rowIndex !== -1) {
+                                newRows[rowIndex].notes = validatedValue;
+                                setTableRows(newRows);
+                              }
+                            }}
                           style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
                         />
                       </td>
