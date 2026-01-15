@@ -6,6 +6,21 @@ import { db } from '@/lib/firebase.config';
 import { doc, setDoc, getDoc, onSnapshot, addDoc, collection, deleteDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
+// 서비스 목록 상수
+const SERVICE_OPTIONS = [
+  'Xray',
+  'Intra Oral Pictures', 
+  'Caries Risk Assessments',
+  'Prophy',
+  'Flouride',
+  'Varnish',
+  'Sealant',
+  'Main assistant during treatment',
+  'Holding/stabilizing the patient\'s head',
+  'Dismissed patient consists of: explained treatment, gave post op instructions, gave tooth brush bag and points',
+  'Postcard'
+];
+
 // 개별 테이블 행 컴포넌트
 const TreatmentRow = ({ 
   rowIndex,
@@ -16,7 +31,8 @@ const TreatmentRow = ({
   inputStyle,
   addingSealant,
   isInputDisabled,
-  isViewMode
+  isViewMode,
+  isSealantDetailsEditable
 }: {
   rowIndex: number;
   treatmentData: any;
@@ -27,6 +43,7 @@ const TreatmentRow = ({
   addingSealant: Set<number>;
   isInputDisabled: boolean;
   isViewMode: boolean;
+  isSealantDetailsEditable: boolean;
 }) => {
   return (
     <>
@@ -38,7 +55,13 @@ const TreatmentRow = ({
           <input
             type="text"
             value={treatmentData.patientName || ''}
-            onChange={(e) => updateTreatment(rowIndex, 'patientName', e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              // 최대 길이 제한
+              if (value.length <= 100) {
+                updateTreatment(rowIndex, 'patientName', value);
+              }
+            }}
             style={{...inputStyle, backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'text'}}
             placeholder="Patient Name"
             disabled={isInputDisabled}
@@ -113,19 +136,7 @@ const TreatmentRow = ({
                 <div style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>
                   Select services:
                 </div>
-                {[
-                  'Xray',
-                  'Intra Oral Pictures', 
-                  'Caries Risk Assessments',
-                  'Prophy',
-                  'Flouride',
-                  'Varnish',
-                  'Sealant',
-                  'Main assistant during treatment',
-                  'Holding/stabilizing the patient\'s head',
-                  'Dismissed patient consists of: explained treatment, gave post op instructions, gave tooth brush bag and points',
-                  'Postcard'
-                ].map((service) => (
+                {SERVICE_OPTIONS.map((service) => (
                   <label key={service} style={{ 
                     display: 'block', 
                     fontSize: '12px', 
@@ -137,16 +148,24 @@ const TreatmentRow = ({
                       type="checkbox"
                       checked={(treatmentData.services || []).includes(service)}
                       onChange={(e) => {
-                        const currentServices = treatmentData.services || [];
-                        let newServices;
-                        if (e.target.checked) {
-                          newServices = [...currentServices, service];
-                        } else {
-                          newServices = currentServices.filter((s: string) => s !== service);
+                        if (!isInputDisabled) {
+                          const currentServices = treatmentData.services || [];
+                          let newServices;
+                          if (e.target.checked) {
+                            // 허용된 서비스만 추가
+                            if (SERVICE_OPTIONS.includes(service)) {
+                              newServices = [...currentServices, service];
+                            } else {
+                              return; // 허용되지 않은 서비스는 무시
+                            }
+                          } else {
+                            newServices = currentServices.filter((s: string) => s !== service);
+                          }
+                          updateTreatment(rowIndex, 'services', newServices);
                         }
-                        updateTreatment(rowIndex, 'services', newServices);
                       }}
-                      style={{ marginRight: '6px' }}
+                      disabled={isInputDisabled}
+                      style={{ marginRight: '6px', cursor: isInputDisabled ? 'not-allowed' : 'pointer' }}
                     />
                     {service}
                   </label>
@@ -158,7 +177,13 @@ const TreatmentRow = ({
         <td style={{ padding: '0' }}>
           <textarea
             value={treatmentData.explanation || ''}
-            onChange={(e) => updateTreatment(rowIndex, 'explanation', e.target.value)}
+            onChange={(e) => {
+              const value = e.target.value;
+              // 최대 길이 제한
+              if (value.length <= 1000) {
+                updateTreatment(rowIndex, 'explanation', value);
+              }
+            }}
             style={{
               ...inputStyle,
               minHeight: '60px',
@@ -178,7 +203,7 @@ const TreatmentRow = ({
           <td colSpan={6} style={{ padding: '0', backgroundColor: '#f8f9fa' }}>
             <div style={{ padding: '15px', borderTop: '2px solid #0077B6' }}>
               <h4 style={{ color: '#0077B6', marginBottom: '10px', fontSize: '16px' }}>
-                🦷 Sealant Details
+                Sealant Details
               </h4>
               <table style={{ width: '100%', borderCollapse: 'collapse', backgroundColor: 'white', borderRadius: '4px', overflow: 'hidden' }}>
                 <thead>
@@ -203,8 +228,8 @@ const TreatmentRow = ({
                           type="text"
                           value={detail.ptName || ''}
                           onChange={(e) => updateSealantDetail(rowIndex, detailIndex, 'ptName', e.target.value)}
-                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'text' }}
-                          disabled={isInputDisabled}
+                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white', cursor: !isSealantDetailsEditable ? 'not-allowed' : 'text' }}
+                          disabled={!isSealantDetailsEditable}
                         />
                       </td>
                       <td style={{ padding: '0', border: '1px solid #dee2e6' }}>
@@ -212,8 +237,8 @@ const TreatmentRow = ({
                           type="text"
                           value={detail.chartNumber || ''}
                           onChange={(e) => updateSealantDetail(rowIndex, detailIndex, 'chartNumber', e.target.value)}
-                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'text' }}
-                          disabled={isInputDisabled}
+                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white', cursor: !isSealantDetailsEditable ? 'not-allowed' : 'text' }}
+                          disabled={!isSealantDetailsEditable}
                         />
                       </td>
                       <td style={{ padding: '0', border: '1px solid #dee2e6' }}>
@@ -221,16 +246,16 @@ const TreatmentRow = ({
                           type="date"
                           value={detail.dob || ''}
                           onChange={(e) => updateSealantDetail(rowIndex, detailIndex, 'dob', e.target.value)}
-                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'text' }}
-                          disabled={isInputDisabled}
+                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white', cursor: !isSealantDetailsEditable ? 'not-allowed' : 'text' }}
+                          disabled={!isSealantDetailsEditable}
                         />
                       </td>
                       <td style={{ padding: '0', border: '1px solid #dee2e6' }}>
                         <select
                           value={detail.toothNumber || ''}
                           onChange={(e) => updateSealantDetail(rowIndex, detailIndex, 'toothNumber', e.target.value)}
-                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'pointer' }}
-                          disabled={isInputDisabled}
+                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white', cursor: !isSealantDetailsEditable ? 'not-allowed' : 'pointer' }}
+                          disabled={!isSealantDetailsEditable}
                         >
                           <option value=""></option>
                           <option value="2">2</option>
@@ -247,8 +272,8 @@ const TreatmentRow = ({
                         <select
                           value={detail.redo || ''}
                           onChange={(e) => updateSealantDetail(rowIndex, detailIndex, 'redo', e.target.value)}
-                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'pointer' }}
-                          disabled={isInputDisabled}
+                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white', cursor: !isSealantDetailsEditable ? 'not-allowed' : 'pointer' }}
+                          disabled={!isSealantDetailsEditable}
                         >
                           <option value=""></option>
                           <option value="Yes">Yes</option>
@@ -259,8 +284,8 @@ const TreatmentRow = ({
                         <select
                           value={detail.acctType || ''}
                           onChange={(e) => updateSealantDetail(rowIndex, detailIndex, 'acctType', e.target.value)}
-                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'pointer' }}
-                          disabled={isInputDisabled}
+                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white', cursor: !isSealantDetailsEditable ? 'not-allowed' : 'pointer' }}
+                          disabled={!isSealantDetailsEditable}
                         >
                           <option value=""></option>
                           <option value="D">D</option>
@@ -272,8 +297,8 @@ const TreatmentRow = ({
                         <select
                           value={detail.payable || ''}
                           onChange={(e) => updateSealantDetail(rowIndex, detailIndex, 'payable', e.target.value)}
-                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'pointer' }}
-                          disabled={isInputDisabled}
+                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white', cursor: !isSealantDetailsEditable ? 'not-allowed' : 'pointer' }}
+                          disabled={!isSealantDetailsEditable}
                         >
                           <option value=""></option>
                           <option value="Y">Y</option>
@@ -285,8 +310,8 @@ const TreatmentRow = ({
                           type="text"
                           value={detail.dxDr || ''}
                           onChange={(e) => updateSealantDetail(rowIndex, detailIndex, 'dxDr', e.target.value)}
-                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: isInputDisabled ? '#f5f5f5' : 'white', cursor: isInputDisabled ? 'not-allowed' : 'text' }}
-                          disabled={isInputDisabled}
+                          style={{ ...inputStyle, border: 'none', fontSize: '12px', padding: '6px', backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white', cursor: !isSealantDetailsEditable ? 'not-allowed' : 'text' }}
+                          disabled={!isSealantDetailsEditable}
                         />
                       </td>
                       <td style={{ padding: '0', border: '1px solid #dee2e6' }}>
@@ -306,10 +331,10 @@ const TreatmentRow = ({
                             border: 'none', 
                             fontSize: '12px',
                             padding: '6px',
-                            backgroundColor: isInputDisabled ? '#f5f5f5' : 'white',
-                            cursor: isInputDisabled ? 'not-allowed' : 'text'
+                            backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white',
+                            cursor: !isSealantDetailsEditable ? 'not-allowed' : 'text'
                           }}
-                          disabled={isInputDisabled}
+                          disabled={!isSealantDetailsEditable}
                         />
                       </td>
                       <td style={{ padding: '0', border: '1px solid #dee2e6' }}>
@@ -329,10 +354,10 @@ const TreatmentRow = ({
                             border: 'none', 
                             fontSize: '12px',
                             padding: '6px',
-                            backgroundColor: isInputDisabled ? '#f5f5f5' : 'white',
-                            cursor: isInputDisabled ? 'not-allowed' : 'text'
+                            backgroundColor: !isSealantDetailsEditable ? '#f5f5f5' : 'white',
+                            cursor: !isSealantDetailsEditable ? 'not-allowed' : 'text'
                           }}
-                          disabled={isInputDisabled}
+                          disabled={!isSealantDetailsEditable}
                         />
                       </td>
                     </tr>
@@ -376,6 +401,49 @@ const TreatmentRow = ({
                       </td>
                     </tr>
                   )}
+                  {isViewMode && (
+                    <tr>
+                      <td colSpan={10} style={{ padding: '8px', textAlign: 'center', border: '1px solid #dee2e6', backgroundColor: '#f8f9fa' }}>
+                        <button
+                          disabled={addingSealant.has(rowIndex) || !isSealantDetailsEditable}
+                          onClick={(e) => {
+                            if (isSealantDetailsEditable) {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              addSealantDetail(rowIndex);
+                            }
+                          }}
+                          style={{
+                            backgroundColor: (addingSealant.has(rowIndex) || !isSealantDetailsEditable) ? '#6c757d' : '#28a745',
+                            color: 'white',
+                            border: 'none',
+                            padding: '8px 16px',
+                            borderRadius: '6px',
+                            fontSize: '13px',
+                            cursor: (addingSealant.has(rowIndex) || !isSealantDetailsEditable) ? 'not-allowed' : 'pointer',
+                            fontWeight: 'bold',
+                            boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                            transition: 'all 0.2s ease',
+                            opacity: (addingSealant.has(rowIndex) || !isSealantDetailsEditable) ? 0.6 : 1
+                          }}
+                          onMouseOver={(e) => {
+                            if (!(addingSealant.has(rowIndex) || !isSealantDetailsEditable)) {
+                              e.currentTarget.style.backgroundColor = '#218838';
+                              e.currentTarget.style.transform = 'translateY(-1px)';
+                            }
+                          }}
+                          onMouseOut={(e) => {
+                            if (!(addingSealant.has(rowIndex) || !isSealantDetailsEditable)) {
+                              e.currentTarget.style.backgroundColor = '#28a745';
+                              e.currentTarget.style.transform = 'translateY(0)';
+                            }
+                          }}
+                        >
+                          ➕ Add Sealant Detail
+                        </button>
+                      </td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -395,10 +463,26 @@ export default function RDATreatmentSheetSystem() {
   // Firebase 관련 상태
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
-  const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
+  // 보안 강화: 더 안전한 세션 ID 생성 (crypto API 사용)
+  const [userSessionId] = useState(() => {
+    if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
+      const array = new Uint32Array(4);
+      window.crypto.getRandomValues(array);
+      return Array.from(array).map((val: number) => val.toString(36)).join('');
+    }
+    // Fallback: 더 긴 랜덤 문자열
+    return Math.random().toString(36).substring(2, 15) + 
+           Math.random().toString(36).substring(2, 15) + 
+           Date.now().toString(36);
+  });
   const [lastSavedData, setLastSavedData] = useState<any>({});
   const [isSubmitted, setIsSubmitted] = useState(false); // 제출 상태 추적
   const pdfGeneratedRef = useRef(false); // Generate PDF 버튼을 눌렀는지 추적
+  
+  // Rate limiting을 위한 ref
+  const lastAutoSaveTimeRef = useRef<number>(0);
+  const lastApiCallTimeRef = useRef<number>(0);
+  const autoSaveAttemptsRef = useRef<number>(0);
   
   // Hydration 오류 방지를 위한 클라이언트 마운트 상태
   const [isClient, setIsClient] = useState(false);
@@ -428,10 +512,35 @@ export default function RDATreatmentSheetSystem() {
 
     if (typeof window !== 'undefined') {
       const urlParams = new URLSearchParams(window.location.search);
+      // URL 파라미터 검증 및 sanitization
+      const urlOffice = urlParams.get('office') || '';
+      const urlRdaName = urlParams.get('rdaName') || '';
+      const urlDate = urlParams.get('date') || '';
+      
+      // Office 검증: 알파벳과 숫자만 허용, 최대 10자
+      const safeOffice = urlOffice.trim().replace(/[^A-Za-z0-9]/g, '').substring(0, 10);
+      
+      // RDA Name 검증: 알파벳, 숫자, 공백만 허용, 최대 50자
+      const safeRdaName = urlRdaName.trim().replace(/[^A-Za-z0-9\s]/g, '').substring(0, 50);
+      
+      // Date 검증: YYYY-MM-DD 형식만 허용 (보안 강화)
+      let safeDate = urlDate.trim().replace(/[^0-9-]/g, '');
+      if (safeDate && !/^\d{4}-\d{2}-\d{2}$/.test(safeDate)) {
+        safeDate = '';
+      }
+      // 날짜 범위 검증 (1900-01-01 ~ 2100-12-31)
+      if (safeDate) {
+        const dateObj = new Date(safeDate + 'T00:00:00');
+        const year = dateObj.getFullYear();
+        if (isNaN(year) || year < 1900 || year > 2100) {
+          safeDate = '';
+        }
+      }
+      
       return {
-        office: urlParams.get('office') || '',
-        rdaName: urlParams.get('rdaName') || '',
-        date: urlParams.get('date') || getPacificDate()
+        office: safeOffice,
+        rdaName: safeRdaName,
+        date: safeDate || getPacificDate()
       };
     }
     return {
@@ -496,7 +605,12 @@ export default function RDATreatmentSheetSystem() {
   const isOfficeUnlocked = unlockedOffices.has(office);
   
   // 입력 비활성화 조건 확인 (Office가 잠금 해제되고 Unlock 버튼을 눌러야 함)
-  const isInputDisabled = !office || !rdaName || !date || !isOfficeUnlocked || !isUnlocked;
+  // View 모드에서는 sealant details만 수정 가능하도록 별도 처리
+  const isViewModeFromUrl = isClient && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'true';
+  const baseIsInputDisabled = !office || !rdaName || !date || !isOfficeUnlocked || !isUnlocked;
+  // View 모드일 때는 일반 필드는 항상 비활성화, sealant details만 수정 가능
+  const isInputDisabled = isViewModeFromUrl ? true : baseIsInputDisabled;
+  const isSealantDetailsEditable = isViewModeFromUrl ? true : !baseIsInputDisabled;
   
   // 필드 변경 시 잠금 처리
   const handleDateChange = (newDate: string) => {
@@ -610,20 +724,67 @@ export default function RDATreatmentSheetSystem() {
     setTreatmentData(emptyRows);
   };
   
-  // 비밀번호 확인 핸들러
+  // 비밀번호 확인 핸들러 (보안 강화)
   const handlePasswordSubmit = () => {
-    if (passwordInput.trim().toUpperCase() === selectedOfficeForPassword.toUpperCase()) {
-      // 비밀번호가 맞으면 Office 잠금 해제 (테이블은 아직 잠김)
-      setUnlockedOffices(prev => new Set(prev).add(selectedOfficeForPassword));
-      setOffice(selectedOfficeForPassword);
-      setShowPasswordModal(false);
+    // 입력값 검증 및 sanitization
+    const sanitizedPassword = passwordInput.trim().toUpperCase();
+    const sanitizedOffice = selectedOfficeForPassword.trim().toUpperCase();
+    
+    // 빈 값 체크
+    if (!sanitizedPassword || !sanitizedOffice) {
       setPasswordInput('');
-      setSelectedOfficeForPassword('');
-      setIsUnlocked(false);
-      setUnlockedCombination(null);
-      unlockedTreatmentDataRef.current = null;
+      return;
+    }
+    
+    // 길이 제한 (보안 강화)
+    if (sanitizedPassword.length > 50 || sanitizedOffice.length > 10) {
+      setPasswordInput('');
+      return;
+    }
+    
+    // 알파벳과 숫자만 허용
+    if (!/^[A-Z0-9]+$/.test(sanitizedPassword) || !/^[A-Z0-9]+$/.test(sanitizedOffice)) {
+      setPasswordInput('');
+      return;
+    }
+    
+    // 비밀번호 검증 (타이밍 공격 방지를 위한 일정한 시간 소요)
+    const startTime = Date.now();
+    const isValid = sanitizedPassword === sanitizedOffice;
+    
+    // 최소 처리 시간 보장 (타이밍 공격 방지)
+    const minProcessingTime = 100; // 100ms
+    const processingTime = Date.now() - startTime;
+    if (processingTime < minProcessingTime) {
+      setTimeout(() => {
+        if (isValid) {
+          // 비밀번호가 맞으면 Office 잠금 해제 (테이블은 아직 잠김)
+          setUnlockedOffices(prev => new Set(prev).add(selectedOfficeForPassword));
+          setOffice(selectedOfficeForPassword);
+          setShowPasswordModal(false);
+          setPasswordInput('');
+          setSelectedOfficeForPassword('');
+          setIsUnlocked(false);
+          setUnlockedCombination(null);
+          unlockedTreatmentDataRef.current = null;
+        } else {
+          setPasswordInput('');
+        }
+      }, minProcessingTime - processingTime);
     } else {
-      setPasswordInput('');
+      if (isValid) {
+        // 비밀번호가 맞으면 Office 잠금 해제 (테이블은 아직 잠김)
+        setUnlockedOffices(prev => new Set(prev).add(selectedOfficeForPassword));
+        setOffice(selectedOfficeForPassword);
+        setShowPasswordModal(false);
+        setPasswordInput('');
+        setSelectedOfficeForPassword('');
+        setIsUnlocked(false);
+        setUnlockedCombination(null);
+        unlockedTreatmentDataRef.current = null;
+      } else {
+        setPasswordInput('');
+      }
     }
   };
   
@@ -651,6 +812,26 @@ export default function RDATreatmentSheetSystem() {
     if (!office || !rdaName || !date || isUpdatingFromFirebase || !isUnlocked) {
       return;
     }
+    
+    // Rate limiting: 최소 2초 간격으로 저장 (서버 부하 방지)
+    const now = Date.now();
+    const timeSinceLastSave = now - lastAutoSaveTimeRef.current;
+    if (timeSinceLastSave < 2000) {
+      return; // 너무 빈번한 저장 방지
+    }
+    
+    // 연속 저장 시도 제한 (1분에 30회 이상 시도 시 차단)
+    if (timeSinceLastSave < 60000) {
+      autoSaveAttemptsRef.current++;
+      if (autoSaveAttemptsRef.current > 30) {
+        console.warn('Too many auto-save attempts. Rate limiting activated.');
+        return;
+      }
+    } else {
+      autoSaveAttemptsRef.current = 0; // 1분 경과 시 카운터 리셋
+    }
+    
+    lastAutoSaveTimeRef.current = now;
 
     // treatmentData에 실제 데이터가 있는지 확인
     const hasData = treatmentData.some(row => 
@@ -693,11 +874,20 @@ export default function RDATreatmentSheetSystem() {
       const currentTime = new Date();
       const pacificDateTime = new Date(currentTime.toLocaleString("en-US", {timeZone: "America/Los_Angeles"}));
       
+      // Sealant가 없는 행의 sealantDetails를 빈 배열로 명시적으로 설정
+      const normalizedTreatmentData = treatmentData.map((row: any) => {
+        const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
+        return {
+          ...row,
+          sealantDetails: hasSealant ? (row.sealantDetails || []) : []
+        };
+      });
+      
       const dataToSave = {
         office,
         rdaName,
         date,
-        treatmentData,
+        treatmentData: normalizedTreatmentData,
         timestamp: pacificDateTime.toISOString(),
         autoSaved: true,
         lastUpdatedBy: userSessionId,
@@ -726,8 +916,15 @@ export default function RDATreatmentSheetSystem() {
       if (process.env.NODE_ENV === 'development') {
         console.error("Auto-save error:", error);
       }
+      // 에러 메시지에서 민감한 정보 제거
       setAutoSaveStatus('💾 Save failed ❌');
       setTimeout(() => setAutoSaveStatus(''), 3000);
+      
+      // 에러 로깅 (프로덕션에서는 서버로 전송)
+      if (process.env.NODE_ENV === 'production') {
+        // 서버로 에러 로그 전송 (구현 필요)
+        // fetch('/api/log-error', { method: 'POST', body: JSON.stringify({ type: 'auto-save', timestamp: Date.now() }) });
+      }
     }
   }, [office, rdaName, date, treatmentData, lastSavedData, isUpdatingFromFirebase, userSessionId, isSubmitted, isUnlocked, createSafeDocId]);
 
@@ -769,6 +966,17 @@ export default function RDATreatmentSheetSystem() {
   // 치료 데이터 업데이트
   const updateTreatment = useCallback((rowIndex: number, field: string, value: string | string[] | boolean) => {
     setTreatmentData(prev => {
+      // rowIndex 범위 검증 (보안 강화: 음수 및 범위 초과 방지)
+      if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= prev.length || rowIndex >= 10000) {
+        return prev;
+      }
+      
+      // field 검증 (허용된 필드만 처리)
+      const allowedFields = ['patientName', 'startTime', 'roomNumber', 'services', 'explanation', 'showServices'];
+      if (!allowedFields.includes(field)) {
+        return prev;
+      }
+      
       const newData = [...prev];
       
       // showServices가 변경될 때 다른 모든 행의 showServices를 false로 설정
@@ -786,17 +994,70 @@ export default function RDATreatmentSheetSystem() {
             };
           }
         });
+      } else if (field === 'services') {
+        // Services 배열 검증
+        if (Array.isArray(value)) {
+          // 보안 강화: rowIndex 범위 재검증 및 prev[rowIndex] 존재 확인
+          if (!prev[rowIndex] || typeof prev[rowIndex] !== 'object') {
+            return prev;
+          }
+          
+          // 변경 전 Sealant 상태 확인 (업데이트 전에 확인)
+          const hadSealant = Array.isArray(prev[rowIndex].services) && prev[rowIndex].services.includes('Sealant');
+          
+          // 허용된 서비스만 필터링
+          const validServices = value.filter((s: any) => 
+            typeof s === 'string' && SERVICE_OPTIONS.includes(s)
+          );
+          // 중복 제거
+          const uniqueServices = Array.from(new Set(validServices));
+          // 최대 50개로 제한
+          const limitedServices = uniqueServices.slice(0, 50);
+          
+          // 변경 후 Sealant 상태 확인
+          const hasSealant = limitedServices.includes('Sealant');
+          
+          // Sealant 상태에 따라 sealantDetails 처리
+          if (hadSealant && !hasSealant) {
+            // Sealant가 제거되면 sealantDetails도 완전히 삭제
+            newData[rowIndex] = {
+              ...newData[rowIndex],
+              [field]: limitedServices,
+              sealantDetails: [] // 명시적으로 빈 배열로 설정
+            };
+          } else if (!hadSealant && hasSealant) {
+            // Sealant가 새로 추가되면 빈 배열로 초기화 (이전 데이터 복원 방지)
+            newData[rowIndex] = {
+              ...newData[rowIndex],
+              [field]: limitedServices,
+              sealantDetails: [] // 명시적으로 빈 배열로 설정
+            };
+          } else {
+            // Sealant 상태가 변경되지 않은 경우
+            newData[rowIndex] = {
+              ...newData[rowIndex],
+              [field]: limitedServices
+            };
+          }
+        }
       } else if (field === 'patientName') {
+        // 입력값 검증 및 sanitization
+        let sanitizedValue = typeof value === 'string' ? value : String(value || '');
+        // 최대 길이 제한
+        sanitizedValue = sanitizedValue.substring(0, 100);
+        // 위험한 문자 제거 (XSS 방지)
+        sanitizedValue = sanitizedValue.replace(/[<>\"']/g, '');
+        
         // Patient Name이 변경되면 Sealant Details의 모든 PT Name도 업데이트
-      newData[rowIndex] = {
-        ...newData[rowIndex],
-        [field]: value
-      };
+        newData[rowIndex] = {
+          ...newData[rowIndex],
+          [field]: sanitizedValue
+        };
         
         if (newData[rowIndex].sealantDetails) {
           newData[rowIndex].sealantDetails = newData[rowIndex].sealantDetails.map((detail: any) => ({
             ...detail,
-            ptName: value
+            ptName: sanitizedValue
           }));
         }
       } else {
@@ -813,10 +1074,57 @@ export default function RDATreatmentSheetSystem() {
   // Sealant 상세 정보 업데이트
   const updateSealantDetail = useCallback((rowIndex: number, detailIndex: number, field: string, value: string) => {
     setTreatmentData(prev => {
+      // rowIndex 범위 검증
+      if (rowIndex < 0 || rowIndex >= prev.length) {
+        return prev;
+      }
+      
+      // 허용된 필드만 처리
+      const allowedFields = ['ptName', 'chartNumber', 'dob', 'toothNumber', 'redo', 'acctType', 'payable', 'dxDr', 'drAmount', 'rdaAmount'];
+      if (!allowedFields.includes(field)) {
+        return prev;
+      }
+      
+      // value가 문자열인지 확인
+      let safeValue = typeof value === 'string' ? value : String(value || '');
+      
+      // XSS 방지: 위험한 문자 제거 (특정 필드 제외)
+      const fieldsThatAllowSpecialChars = ['drAmount', 'rdaAmount']; // 금액 필드는 숫자만 허용
+      if (!fieldsThatAllowSpecialChars.includes(field)) {
+        safeValue = safeValue.replace(/[<>\"']/g, '');
+      }
+      
+      // 필드별 길이 제한
+      const maxLengths: { [key: string]: number } = {
+        ptName: 100,
+        chartNumber: 50,
+        dob: 20,
+        toothNumber: 10,
+        redo: 10,
+        acctType: 10,
+        payable: 10,
+        dxDr: 50,
+        drAmount: 20,
+        rdaAmount: 20
+      };
+      const limitedValue = safeValue.substring(0, maxLengths[field] || 1000);
+      
       const newData = [...prev];
-      if (!newData[rowIndex].sealantDetails) {
+      
+      // 보안 강화: newData[rowIndex] 존재 및 유효성 검증
+      if (!newData[rowIndex] || typeof newData[rowIndex] !== 'object') {
+        return prev;
+      }
+      
+      if (!Array.isArray(newData[rowIndex].sealantDetails)) {
         newData[rowIndex].sealantDetails = [];
       }
+      
+      // detailIndex 범위 검증 및 최대 개수 제한
+      if (!Number.isInteger(detailIndex) || detailIndex < 0 || detailIndex >= 100) {
+        return prev;
+      }
+      
       const newDetails = [...newData[rowIndex].sealantDetails];
       
       // 기존 데이터가 없으면 기본값으로 초기화
@@ -837,7 +1145,7 @@ export default function RDATreatmentSheetSystem() {
       
       newDetails[detailIndex] = {
         ...newDetails[detailIndex],
-        [field]: value
+        [field]: limitedValue
       };
       
       // 첫 번째 줄의 특정 필드가 변경되면 다른 모든 줄도 동일하게 업데이트
@@ -951,11 +1259,20 @@ export default function RDATreatmentSheetSystem() {
       const currentTime = new Date();
       const pacificDateTime = new Date(currentTime.toLocaleString("en-US", {timeZone: "America/Los_Angeles"}));
       
+      // Sealant가 없는 행의 sealantDetails를 빈 배열로 명시적으로 설정
+      const normalizedTreatmentData = prevTreatmentData.map((row: any) => {
+        const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
+        return {
+          ...row,
+          sealantDetails: hasSealant ? (row.sealantDetails || []) : []
+        };
+      });
+      
       const dataToSave = {
         office: prevOffice,
         rdaName: prevRdaName,
         date: prevDate,
-        treatmentData: prevTreatmentData,
+        treatmentData: normalizedTreatmentData,
         timestamp: pacificDateTime.toISOString(),
         autoSaved: true,
         lastUpdatedBy: userSessionId,
@@ -1041,15 +1358,19 @@ export default function RDATreatmentSheetSystem() {
         setIsUpdatingFromFirebase(true);
         
         // 치료 데이터를 정규화하여 sealantDetails가 없는 경우 빈 배열로 초기화
-        const normalizedTreatmentData = (data.treatmentData || []).map((row: any) => ({
-          patientName: row.patientName || '',
-          startTime: row.startTime || '',
-          roomNumber: row.roomNumber || '',
-          services: row.services || [],
-          explanation: row.explanation || '',
-          showServices: row.showServices || false,
-          sealantDetails: row.sealantDetails || []
-        }));
+        // Sealant가 없는 행의 sealantDetails는 빈 배열로 설정
+        const normalizedTreatmentData = (data.treatmentData || []).map((row: any) => {
+          const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
+          return {
+            patientName: row.patientName || '',
+            startTime: row.startTime || '',
+            roomNumber: row.roomNumber || '',
+            services: row.services || [],
+            explanation: row.explanation || '',
+            showServices: row.showServices || false,
+            sealantDetails: hasSealant ? (row.sealantDetails || []) : [] // Sealant가 없으면 빈 배열
+          };
+        });
         
         // 20개 행을 유지하도록 빈 행 추가
         const paddedData = [...normalizedTreatmentData];
@@ -1122,6 +1443,83 @@ export default function RDATreatmentSheetSystem() {
       setTimeout(() => setAutoSaveStatus(''), 3000);
     }
   }, [office, rdaName, date]);
+
+  // treatmentData가 변경될 때마다 Sealant가 없는 행의 sealantDetails 정리
+  // 보안 강화: ref를 사용하여 무한 루프 방지 및 성능 최적화
+  const lastCleanupRef = useRef<string>('');
+  useEffect(() => {
+    // Firebase 업데이트 중이면 정리하지 않음 (무한 루프 방지)
+    if (isUpdatingFromFirebase) {
+      return;
+    }
+    
+    // treatmentData의 해시를 생성하여 실제 변경이 있었는지 확인 (성능 최적화)
+    const dataHash = JSON.stringify(treatmentData.map((row: any) => ({
+      hasSealant: row.services && Array.isArray(row.services) && row.services.includes('Sealant'),
+      hasSealantDetails: row.sealantDetails && row.sealantDetails.length > 0
+    })));
+    
+    // 이전에 정리한 데이터와 동일하면 스킵 (무한 루프 방지)
+    if (lastCleanupRef.current === dataHash) {
+      return;
+    }
+    
+    // Sealant가 없는 행의 sealantDetails가 있는지 확인
+    const needsCleanup = treatmentData.some((row: any) => {
+      // 입력값 검증: row가 유효한 객체인지 확인
+      if (!row || typeof row !== 'object') {
+        return false;
+      }
+      const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
+      return !hasSealant && row.sealantDetails && Array.isArray(row.sealantDetails) && row.sealantDetails.length > 0;
+    });
+    
+    // 정리가 필요한 경우에만 업데이트
+    if (needsCleanup) {
+      setTreatmentData(prev => {
+        // 입력값 검증: prev가 유효한 배열인지 확인
+        if (!Array.isArray(prev)) {
+          return prev;
+        }
+        
+        const cleaned = prev.map((row: any, index: number) => {
+          // 행 데이터 검증
+          if (!row || typeof row !== 'object' || !Number.isInteger(index) || index < 0 || index >= 10000) {
+            return row;
+          }
+          
+          // services 배열 검증
+          const services = Array.isArray(row.services) ? row.services : [];
+          const hasSealant = services.includes('Sealant');
+          
+          // sealantDetails 검증 및 정리
+          if (!hasSealant) {
+            const sealantDetails = Array.isArray(row.sealantDetails) ? row.sealantDetails : [];
+            if (sealantDetails.length > 0) {
+              // Sealant가 없으면 빈 배열로 설정 (다른 필드는 그대로 유지)
+              return {
+                ...row,
+                sealantDetails: []
+              };
+            }
+          }
+          return row;
+        });
+        
+        // 정리된 데이터의 해시 저장
+        const cleanedHash = JSON.stringify(cleaned.map((row: any) => ({
+          hasSealant: row.services && Array.isArray(row.services) && row.services.includes('Sealant'),
+          hasSealantDetails: row.sealantDetails && row.sealantDetails.length > 0
+        })));
+        lastCleanupRef.current = cleanedHash;
+        
+        return cleaned;
+      });
+    } else {
+      // 정리가 필요 없어도 해시 업데이트 (다음 변경 감지용)
+      lastCleanupRef.current = dataHash;
+    }
+  }, [treatmentData, isUpdatingFromFirebase]);
 
   // treatmentData가 변경될 때마다 현재 조합의 데이터를 추적
   useEffect(() => {
@@ -1248,6 +1646,11 @@ export default function RDATreatmentSheetSystem() {
       alert('⚠️ Please fill in Office and RDA/DA Name!');
       return;
     }
+    
+    // Rate limiting: 중복 제출 방지
+    if (loading) {
+      return;
+    }
 
     try {
       setLoading(true);
@@ -1260,11 +1663,20 @@ export default function RDATreatmentSheetSystem() {
       const selectedDateObj = new Date(date + 'T00:00:00'); // 로컬 시간으로 해석
       const pacificDateString = pacificDateTime.toISOString().split('T')[0];
       
+      // Sealant가 없는 행의 sealantDetails를 빈 배열로 명시적으로 설정
+      const normalizedTreatmentData = treatmentData.map((row: any) => {
+        const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
+        return {
+          ...row,
+          sealantDetails: hasSealant ? (row.sealantDetails || []) : []
+        };
+      });
+      
       const formData = {
         office: office.trim(),
         rdaName: rdaName.trim(),
         date: date, // 이미 캘리포니아 시간대로 설정된 날짜
-        treatmentData: treatmentData,
+        treatmentData: normalizedTreatmentData,
         createdAt: pacificDateTime.toISOString(),
         lastUpdated: pacificDateTime.toISOString()
       };
@@ -1622,16 +2034,14 @@ export default function RDATreatmentSheetSystem() {
           -moz-appearance: textfield;
         }
       `}</style>
-      {/* 자동 저장 상태 표시 */}
-      {autoSaveStatus && (
+      {/* 자동 저장 상태 표시 - 에러 메시지만 표시 */}
+      {autoSaveStatus && autoSaveStatus.includes('❌') && (
         <div style={{
           position: 'fixed',
           top: '20px',
           right: '20px',
           padding: '12px 20px',
-          backgroundColor: autoSaveStatus.includes('❌') ? '#ff6b6b' : 
-                          autoSaveStatus.includes('🔄') ? '#4a90e2' : 
-                          autoSaveStatus.includes('💾') ? '#51cf66' : '#51cf66',
+          backgroundColor: '#ff6b6b',
           color: 'white',
           borderRadius: '25px',
           fontSize: '14px',
@@ -1736,14 +2146,14 @@ export default function RDATreatmentSheetSystem() {
 
       <div style={containerStyle}>
         {/* 헤더 */}
-        <h1 style={headerStyle}>🦷 RDA/DA Treatment</h1>
+        <h1 style={headerStyle}>RDA/DA Treatment</h1>
 
         {/* 기본 정보 섹션 */}
         <div style={sectionStyle}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '20px' }}>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>
-                📅 Date:
+                Date:
               </label>
               <input
                 type="date"
@@ -1754,7 +2164,7 @@ export default function RDATreatmentSheetSystem() {
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>
-                🏢 Office:
+                Office:
               </label>
               <select
                 value={office}
@@ -1770,11 +2180,12 @@ export default function RDATreatmentSheetSystem() {
                 <option value="Ortho">Ortho</option>
                 <option value="Tulare">Tulare</option>
                 <option value="Visalia">Visalia</option>
+
               </select>
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>
-                👨‍⚕️ RDA/DA Name:
+                RDA/DA Name:
               </label>
               <input
                 type="text"
@@ -1905,7 +2316,8 @@ export default function RDATreatmentSheetSystem() {
                     inputStyle={excelInputStyle}
                     addingSealant={addingSealant}
                     isInputDisabled={isInputDisabled}
-                    isViewMode={isClient && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'true'}
+                    isViewMode={isViewModeFromUrl}
+                    isSealantDetailsEditable={isSealantDetailsEditable}
                   />
                 ))}
               </tbody>
@@ -1933,6 +2345,102 @@ export default function RDATreatmentSheetSystem() {
         </div>
         )}
 
+        {/* 서비스별 체크 개수 요약 (Unlock 시에만 표시) */}
+        {isUnlocked && (() => {
+          // 서비스별 체크 개수 계산
+          const serviceCounts: { [key: string]: number } = {};
+          SERVICE_OPTIONS.forEach(service => {
+            serviceCounts[service] = 0;
+          });
+          
+          treatmentData.forEach(row => {
+            if (row.services && Array.isArray(row.services)) {
+              row.services.forEach((service: string) => {
+                if (serviceCounts.hasOwnProperty(service)) {
+                  serviceCounts[service]++;
+                }
+              });
+            }
+          });
+          
+          // 체크된 서비스만 필터링
+          const checkedServices = Object.entries(serviceCounts)
+            .filter(([_, count]) => count > 0)
+            .sort((a, b) => b[1] - a[1]); // 개수 순으로 정렬
+          
+          if (checkedServices.length === 0) {
+            return null;
+          }
+          
+          return (
+            <div style={{
+              marginBottom: '15px',
+              backgroundColor: '#f8f9fa',
+              border: '1px solid #0077B6',
+              borderRadius: '6px',
+              padding: '12px'
+            }}>
+              <h3 style={{
+                color: '#0077B6',
+                marginBottom: '8px',
+                marginTop: '0',
+                fontSize: '14px',
+                fontWeight: 'bold',
+                textAlign: 'center'
+              }}>
+                Treatment or Services Performed
+              </h3>
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                gap: '6px',
+                padding: '0'
+              }}>
+                {checkedServices.map(([service, count]) => (
+                  <div
+                    key={service}
+                    style={{
+                      backgroundColor: 'white',
+                      padding: '6px 10px',
+                      borderRadius: '4px',
+                      border: '1px solid #dee2e6',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      boxShadow: '0 1px 2px rgba(0,0,0,0.05)'
+                    }}
+                  >
+                    <span style={{
+                      fontSize: '12px',
+                      color: '#495057',
+                      flex: 1,
+                      marginRight: '8px',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap'
+                    }}>
+                      {service}
+                    </span>
+                    <span style={{
+                      fontSize: '13px',
+                      fontWeight: 'bold',
+                      color: '#0077B6',
+                      backgroundColor: '#e7f3ff',
+                      padding: '2px 8px',
+                      borderRadius: '12px',
+                      minWidth: '30px',
+                      textAlign: 'center',
+                      flexShrink: 0
+                    }}>
+                      {count}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
         {/* 액션 버튼들 (Unlock 시에만 표시) */}
         {isUnlocked && (
         <div style={{ textAlign: 'center', padding: '30px' }}>
@@ -1940,11 +2448,29 @@ export default function RDATreatmentSheetSystem() {
           {isClient && typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('view') === 'true' ? (
             <button
               onClick={async () => {
+                // Rate limiting: 최소 5초 간격으로 PDF 생성 (서버 부하 방지)
+                const now = Date.now();
+                const timeSinceLastCall = now - lastApiCallTimeRef.current;
+                if (timeSinceLastCall < 5000) {
+                  alert('⚠️ Please wait a moment before generating another PDF.');
+                  return;
+                }
+                lastApiCallTimeRef.current = now;
+                
                 // 바로 PDF 생성
                 setLoading(true);
                 setAutoSaveStatus('Generating PDF...');
 
                 try {
+                  // Sealant가 없는 행의 sealantDetails를 빈 배열로 명시적으로 설정
+                  const normalizedTreatmentData = treatmentData.map((row: any) => {
+                    const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
+                    return {
+                      ...row,
+                      sealantDetails: hasSealant ? (row.sealantDetails || []) : []
+                    };
+                  });
+                  
                   // PDF 생성 API 호출
                   const response = await fetch('/api/generate-rda-pdf', {
                     method: 'POST',
@@ -1955,7 +2481,7 @@ export default function RDATreatmentSheetSystem() {
                       office,
                       rdaName,
                       date,
-                      treatmentData
+                      treatmentData: normalizedTreatmentData
                     }),
                   });
 
