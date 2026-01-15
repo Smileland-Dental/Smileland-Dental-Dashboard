@@ -1,12 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { 
-  escapeHtml, 
-  sanitizeString, 
-  getSecurityHeaders
-} from '@/lib/security-server';
+import puppeteer from 'puppeteer';
+
+// HTML 이스케이프 함수
+function escapeHtml(text: string): string {
+  const map: { [key: string]: string } = {
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#039;'
+  };
+  return text.replace(/[&<>"']/g, (m) => map[m]);
+}
+
+// 문자열 sanitize 함수
+function sanitizeString(str: string, maxLength: number): string {
+  if (!str) return '';
+  const sanitized = String(str).trim().slice(0, maxLength);
+  return sanitized.replace(/[<>]/g, '');
+}
 
 export async function POST(request: NextRequest) {
   try {
+    // HTTPS 강제 (프로덕션 환경)
+    const isProduction = process.env.NODE_ENV === 'production';
+    if (isProduction) {
+      const protocol = request.headers.get('x-forwarded-proto') || 
+                       (request.nextUrl.protocol === 'https:' ? 'https' : 'http');
+      
+      if (protocol !== 'https') {
+        const httpsUrl = request.nextUrl.clone();
+        httpsUrl.protocol = 'https:';
+        return NextResponse.redirect(httpsUrl, 301);
+      }
+    }
+
     const { inspectionDate, selectedOffice, lobbyData } = await request.json();
 
     if (!inspectionDate || !selectedOffice || !lobbyData) {
@@ -14,8 +42,7 @@ export async function POST(request: NextRequest) {
         success: false, 
         error: 'Inspection date, office, and data are required' 
       }, {
-        status: 400,
-        headers: getSecurityHeaders()
+        status: 400
       });
     }
     
@@ -209,37 +236,55 @@ export async function POST(request: NextRequest) {
               hour12: true
             })}
           </div>
-          
-          <script>
-            // 페이지 로드 후 자동으로 인쇄 대화상자 열기
-            window.onload = function() {
-              // 약간의 지연 후 인쇄 대화상자 열기 (스타일이 완전히 로드되도록)
-              setTimeout(function() {
-                window.print();
-              }, 500);
-            };
-            
-            // 인쇄 대화상자가 닫힌 후 부모 창에 메시지 전송
-            window.addEventListener('afterprint', function() {
-              if (window.opener) {
-                window.opener.postMessage('print-completed', '*');
-              }
-            });
-          </script>
         </body>
       </html>
     `;
 
-    // HTML 반환 (클라이언트에서 인쇄/저장 가능)
-    return new NextResponse(htmlContent, {
-      headers: {
-        'Content-Type': 'text/html; charset=utf-8',
-        ...getSecurityHeaders(),
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Pragma': 'no-cache',
-        'Expires': '0'
+    // Puppeteer를 사용하여 PDF 생성
+    let browser;
+    try {
+      browser = await puppeteer.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+      });
+      
+      const page = await browser.newPage();
+      await page.setContent(htmlContent, { waitUntil: 'networkidle0' });
+      
+      // PDF 생성
+      const pdf = await page.pdf({
+        format: 'A4',
+        landscape: true,
+        margin: {
+          top: '0.3in',
+          right: '0.3in',
+          bottom: '0.3in',
+          left: '0.3in'
+        },
+        printBackground: true
+      });
+      
+      await browser.close();
+      
+      // PDF 반환 (Buffer로 변환하여 타입 에러 해결)
+      return new NextResponse(Buffer.from(pdf), {
+        headers: {
+          'Content-Type': 'application/pdf',
+          'Content-Disposition': `attachment; filename="${safeInspectionDate}_${safeSelectedOffice}_Lobby Inspection Log.pdf"`,
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0',
+          'X-Content-Type-Options': 'nosniff',
+          'X-Frame-Options': 'DENY',
+          'X-XSS-Protection': '1; mode=block'
+        }
+      });
+    } catch (pdfError: any) {
+      if (browser) {
+        await browser.close();
       }
-    });
+      throw new Error(`PDF generation failed: ${pdfError.message}`);
+    }
 
   } catch (error) {
     return NextResponse.json(
@@ -249,7 +294,11 @@ export async function POST(request: NextRequest) {
       },
       {
         status: 500,
-        headers: getSecurityHeaders()
+        headers: {
+          'X-Content-Type-Options': 'nosniff',
+          'X-Frame-Options': 'DENY',
+          'X-XSS-Protection': '1; mode=block'
+        }
       }
     );
   }
