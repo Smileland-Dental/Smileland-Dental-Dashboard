@@ -3,7 +3,14 @@ import puppeteer from 'puppeteer';
 
 export async function POST(request: NextRequest) {
   try {
-    const { office, rdaName, date, treatmentData } = await request.json();
+    // 요청 본문 크기 제한 (10MB)
+    const contentLength = request.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > 10 * 1024 * 1024) {
+      return NextResponse.json({ error: 'Request body too large' }, { status: 413 });
+    }
+
+    const body = await request.json();
+    const { office, rdaName, date, treatmentData } = body;
 
     // 데이터 검증
     if (!office || !rdaName || !date || !treatmentData) {
@@ -105,12 +112,58 @@ export async function POST(request: NextRequest) {
 
     const formattedDate = formatDate(safeDate);
 
-    // 치료 데이터 필터링 (빈 행 제외)
-    const filteredData = treatmentData.filter(row => 
-      row.patientName || row.startTime || row.roomNumber || 
-      (row.services && row.services.length > 0) || row.explanation ||
-      (row.sealantDetails && row.sealantDetails.length > 0)
-    );
+    // 서비스 목록
+    const SERVICE_OPTIONS = [
+      'Xray',
+      'Intra Oral Pictures', 
+      'Caries Risk Assessments',
+      'Prophy',
+      'Flouride',
+      'Varnish',
+      'Sealant',
+      'Main assistant during treatment',
+      'Holding/stabilizing the patient\'s head',
+      'Dismissed patient consists of: explained treatment, gave post op instructions, gave tooth brush bag and points',
+      'Postcard'
+    ];
+
+    // 서비스별 체크 개수 계산
+    const calculateServiceCounts = () => {
+      const serviceCounts: { [key: string]: number } = {};
+      SERVICE_OPTIONS.forEach(service => {
+        serviceCounts[service] = 0;
+      });
+      
+      treatmentData.forEach((row: any) => {
+        if (row && typeof row === 'object' && row.services && Array.isArray(row.services)) {
+          row.services.forEach((service: any) => {
+            // 서비스가 문자열이고 허용된 서비스 목록에 있는지 확인
+            if (typeof service === 'string' && serviceCounts.hasOwnProperty(service)) {
+              serviceCounts[service]++;
+            }
+          });
+        }
+      });
+      
+      // 체크된 서비스만 필터링하고 개수 순으로 정렬
+      return Object.entries(serviceCounts)
+        .filter(([_, count]) => count > 0)
+        .sort((a, b) => b[1] - a[1]);
+    };
+
+    // 치료 데이터 필터링 및 검증 (빈 행 제외)
+    const filteredData = treatmentData
+      .filter((row: any) => {
+        // row가 객체인지 확인
+        if (!row || typeof row !== 'object' || Array.isArray(row)) {
+          return false;
+        }
+        return row.patientName || row.startTime || row.roomNumber || 
+               (row.services && Array.isArray(row.services) && row.services.length > 0) || 
+               row.explanation ||
+               (row.sealantDetails && Array.isArray(row.sealantDetails) && row.sealantDetails.length > 0);
+      })
+      .slice(0, 1000); // 최대 1000개 행만 처리 (추가 DoS 방지)
 
 
     // HTML 테이블 생성
@@ -154,7 +207,10 @@ export async function POST(request: NextRequest) {
           const limitedServices = row.services.slice(0, 50);
           tableHTML += `<ul style="margin: 0; padding-left: 15px; font-size: 8px;">`;
           limitedServices.forEach((service: any) => {
-            tableHTML += `<li style="margin: 2px 0; font-size: 8px;">${escapeHtml(String(service || ''), 200)}</li>`;
+            // 서비스가 문자열이고 허용된 서비스 목록에 있는지 확인
+            if (typeof service === 'string' && SERVICE_OPTIONS.includes(service)) {
+              tableHTML += `<li style="margin: 2px 0; font-size: 8px;">${escapeHtml(service, 200)}</li>`;
+            }
           });
           tableHTML += `</ul>`;
         }
@@ -191,11 +247,30 @@ export async function POST(request: NextRequest) {
           // sealantDetails 배열 크기 제한 (DoS 방지)
           const limitedDetails = row.sealantDetails.slice(0, 100);
           limitedDetails.forEach((detail: any) => {
-            // detail이 객체인지 확인
-            if (detail && typeof detail === 'object') {
+            // detail이 객체인지 확인 및 null 체크
+            if (detail && typeof detail === 'object' && !Array.isArray(detail) && detail.constructor === Object) {
+              // 각 필드가 문자열 또는 숫자 타입인지 검증
+              const sanitizedDetail: any = {};
+              const allowedFields = ['ptName', 'chartNumber', 'dob', 'toothNumber', 'redo', 'acctType', 'payable', 'dxDr', 'drAmount', 'rdaAmount'];
+              
+              allowedFields.forEach(field => {
+                if (detail.hasOwnProperty(field)) {
+                  const value = detail[field];
+                  if (value === null || value === undefined) {
+                    sanitizedDetail[field] = '';
+                  } else if (typeof value === 'string' || typeof value === 'number') {
+                    sanitizedDetail[field] = String(value);
+                  } else {
+                    sanitizedDetail[field] = '';
+                  }
+                } else {
+                  sanitizedDetail[field] = '';
+                }
+              });
+              
               allSealantDetails.push({
                 patientName: row.patientName || '',
-                detail: detail,
+                detail: sanitizedDetail,
                 rowIndex: rowIndex
               });
             }
@@ -347,7 +422,7 @@ export async function POST(request: NextRequest) {
         </head>
         <body>
           <div class="header">
-            <div class="main-title">RDA/DA Treatment (Sealant)</div>
+            <div class="main-title">RDA/DA Treatment(Sealant)</div>
           </div>
 
           <div class="info-section">
@@ -364,6 +439,19 @@ export async function POST(request: NextRequest) {
               <span class="info-value">${escapeHtml(safeRdaName)}</span>
             </div>
           </div>
+          
+          ${(() => {
+            const checkedServices = calculateServiceCounts();
+            if (checkedServices.length === 0) {
+              return '';
+            }
+            let countHTML = '<div style="margin-bottom: 12px; font-size: 9px; color: #000; line-height: 1.4;">';
+            checkedServices.forEach(([service, count], index) => {
+              countHTML += `<span style="display: inline-block; margin-right: 8px; margin-bottom: 2px; padding: 2px 6px; background-color: #f0f0f0; border-radius: 3px;">${escapeHtml(service)}: <strong>${count}</strong></span>`;
+            });
+            countHTML += '</div>';
+            return countHTML;
+          })()}
           
           ${generateTableHTML()}
           
@@ -424,7 +512,8 @@ export async function POST(request: NextRequest) {
       });
 
       // 파일명 생성 (8) 포함) - 이미 검증된 값 사용
-      const filename = `8) ${safeDate}_${safeOffice}_${safeRdaName}_RDA Treatment Sheet.pdf`;
+      // page.tsx와 동일한 파일명 형식 사용
+      const filename = `8) ${safeDate}_${safeOffice}_${safeRdaName}_RDA/DA Treatment(Sealant) Sheet.pdf`;
       
       // 브라우저 안전하게 종료
       try {
