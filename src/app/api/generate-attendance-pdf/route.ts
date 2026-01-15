@@ -29,9 +29,35 @@ function validateDate(date: string): boolean {
 
 // 🔒 보안: 오피스 값 검증
 function validateOffice(office: string | undefined): boolean {
-  if (!office) return true; // 선택적 필드
+  if (!office) return false; // 필수 필드
   const allowedOffices = ['Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
   return allowedOffices.includes(office);
+}
+
+// 🔒 보안: Position 값 검증
+function validatePosition(position: string | undefined): boolean {
+  if (!position || typeof position !== 'string') return false;
+  const allowedPositions = ['Front Office', 'Biller', 'Dental Assistant', 'RDA', 'Sub', 'Extern', 'DA'];
+  return allowedPositions.includes(position);
+}
+
+// 🔒 보안: Incident 값 검증
+function validateIncident(incident: string | undefined): boolean {
+  if (!incident) return true; // 빈 값 허용
+  const allowedIncidents = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'];
+  return allowedIncidents.includes(incident);
+}
+
+// 🔒 보안: 숫자 필드 검증
+function validateNumber(value: any, min: number = 0, max: number = 9999): boolean {
+  if (typeof value === 'number') {
+    return value >= min && value <= max;
+  }
+  if (typeof value === 'string') {
+    const num = parseInt(value, 10);
+    return !isNaN(num) && num >= min && num <= max;
+  }
+  return false;
 }
 
 export async function POST(request: NextRequest) {
@@ -50,12 +76,10 @@ export async function POST(request: NextRequest) {
     }
 
     // 🔒 보안: 오피스 값 검증
-    // 🔒 보안: 오피스는 필수 값
     if (!office) {
       return NextResponse.json({ success: false, error: 'Office is required' }, { status: 400 });
     }
-    const selectedOffice = office;
-    if (!validateOffice(selectedOffice)) {
+    if (!validateOffice(office)) {
       return NextResponse.json({ success: false, error: 'Invalid office value' }, { status: 400 });
     }
 
@@ -67,12 +91,49 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Data array too large' }, { status: 400 });
     }
 
+    // 🔒 보안: 각 데이터 행 검증
+    for (const row of staffData) {
+      if (typeof row !== 'object' || row === null) {
+        return NextResponse.json({ success: false, error: 'Invalid data format' }, { status: 400 });
+      }
+      // Position 검증
+      if (row.position && !validatePosition(row.position)) {
+        return NextResponse.json({ success: false, error: 'Invalid position value' }, { status: 400 });
+      }
+      // Incident 검증
+      if (row.incident && !validateIncident(row.incident)) {
+        return NextResponse.json({ success: false, error: 'Invalid incident value' }, { status: 400 });
+      }
+      // 숫자 필드 검증
+      if (row.no !== undefined && !validateNumber(row.no)) {
+        return NextResponse.json({ success: false, error: 'Invalid number value' }, { status: 400 });
+      }
+      // 문자열 필드 길이 검증
+      if (row.name && !validateInput(row.name, 100)) {
+        return NextResponse.json({ success: false, error: 'Invalid name length' }, { status: 400 });
+      }
+    }
+
+    for (const row of doctorData) {
+      if (typeof row !== 'object' || row === null) {
+        return NextResponse.json({ success: false, error: 'Invalid data format' }, { status: 400 });
+      }
+      // 숫자 필드 검증
+      if (row.no !== undefined && !validateNumber(row.no)) {
+        return NextResponse.json({ success: false, error: 'Invalid number value' }, { status: 400 });
+      }
+      // 문자열 필드 길이 검증
+      if (row.name && !validateInput(row.name, 100)) {
+        return NextResponse.json({ success: false, error: 'Invalid name length' }, { status: 400 });
+      }
+    }
+
     // 🔒 보안: 사용자 입력 검증 및 이스케이프
     const safeFilledBy = typeof filledBy === 'string' && validateInput(filledBy, 100) ? filledBy : '';
     const safeCheckedBy = typeof checkedBy === 'string' && validateInput(checkedBy, 100) ? checkedBy : '';
 
     // HTML 생성 (generateHTML 함수 내부에서 이스케이프 처리)
-    const html = generateHTML(date, selectedOffice, safeFilledBy, safeCheckedBy, staffData, doctorData);
+    const html = generateHTML(date, office, safeFilledBy, safeCheckedBy, staffData, doctorData);
 
     // Puppeteer로 PDF 생성 (안정적인 설정)
     try {
@@ -104,15 +165,6 @@ export async function POST(request: NextRequest) {
       // 추가 대기 (CSS 및 스타일 렌더링 완료)
       await new Promise(resolve => setTimeout(resolve, 2000));
       
-      // 테이블이 제대로 렌더링되었는지 확인 (디버깅용)
-      const tableExists = await page.evaluate(() => {
-        return document.querySelector('table') !== null;
-      });
-      
-      if (!tableExists) {
-        console.warn('Warning: Table element not found in HTML');
-      }
-      
       // PDF 생성
       const pdfBuffer = await page.pdf({
         format: 'Letter',
@@ -129,8 +181,10 @@ export async function POST(request: NextRequest) {
         timeout: 30000,
       });
       
-      // 🔒 보안: 파일명 이스케이프 (파일명 주입 공격 방지)
-      const safeFilename = escapeHtml(`${date}_${selectedOffice || 'unknown'}_Attendance Tract.pdf`);
+      // 🔒 보안: 파일명 이스케이프 및 특수문자 제거 (파일명 주입 공격 방지)
+      const safeDate = date.replace(/[^a-zA-Z0-9_-]/g, '');
+      const safeOffice = office.replace(/[^a-zA-Z0-9_-]/g, '');
+      const safeFilename = `${safeDate}_${safeOffice}_Attendance_Tract.pdf`.replace(/[<>:"|?*\x00-\x1f]/g, '_');
       const filename = `3) ${safeFilename}`;
       
       // Buffer를 Uint8Array로 변환하여 NextResponse에 전달
@@ -141,11 +195,13 @@ export async function POST(request: NextRequest) {
           // 🔒 보안: 추가 보안 헤더
           'X-Content-Type-Options': 'nosniff',
           'X-Frame-Options': 'DENY',
-          'X-XSS-Protection': '1; mode=block'
+          'X-XSS-Protection': '1; mode=block',
+          'Cache-Control': 'no-store, no-cache, must-revalidate'
         }
       });
       
     } catch (puppeteerError) {
+      // 🔒 보안: 상세한 에러 정보 노출 최소화
       console.error('Puppeteer PDF generation error:', puppeteerError);
       // 🔒 보안: 폴백 제거 - PDF 생성 실패 시 에러만 반환 (HTML 반환하지 않음)
       return NextResponse.json({ 
@@ -162,8 +218,8 @@ export async function POST(request: NextRequest) {
     }
 
   } catch (error) {
+    // 🔒 보안: 상세한 에러 정보 노출 최소화
     console.error('Attendance PDF generation error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     
     // 브라우저가 열려있으면 정리
     if (browser) {
@@ -174,7 +230,7 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json({ 
       success: false, 
-      error: 'Failed to generate PDF: ' + errorMessage
+      error: 'Failed to generate PDF. Please try again later.'
     }, { status: 500 });
   }
 }
@@ -184,6 +240,10 @@ function generateHTML(date: string, office: string, filledBy: string, checkedBy:
   const staffByPosition: { [key: string]: any[] } = {};
   staffData.forEach(row => {
     let pos = row.position || '';
+    // 🔒 보안: Position 값 검증
+    if (!validatePosition(pos) && pos !== 'Dental Assistant') {
+      pos = ''; // 유효하지 않은 position은 빈 문자열로 처리
+    }
     if (pos === 'Dental Assistant') pos = 'DA';
     if (!staffByPosition[pos]) staffByPosition[pos] = [];
     staffByPosition[pos].push(row);
@@ -226,20 +286,28 @@ function generateHTML(date: string, office: string, filledBy: string, checkedBy:
     // 직원 행
     rows.forEach(row => {
       // 🔒 보안: 입력 검증 및 이스케이프
-      const safeName = validateInput(row.name) ? escapeHtml(row.name) : '';
+      const safeName = validateInput(row.name, 100) ? escapeHtml(String(row.name || '')) : '';
       if (safeName && safeName.trim()) {
+        // 🔒 보안: 모든 필드 검증 및 이스케이프
+        const safeStartTardy = validateInput(row.startTardy, 50) ? escapeHtml(String(row.startTardy || '')) : '';
+        const safeLateLunch = validateInput(row.lateLunch, 50) ? escapeHtml(String(row.lateLunch || '')) : '';
+        const safeOvertime = validateInput(row.overtime, 50) ? escapeHtml(String(row.overtime || '')) : '';
+        const safeOtCorp = validateInput(row.otCorp, 50) ? escapeHtml(String(row.otCorp || '')) : '';
+        const safeIncident = validateIncident(row.incident) ? escapeHtml(String(row.incident || '')) : '';
+        const safeNotes = validateInput(row.notes, 500) ? escapeHtml(String(row.notes || '')) : '';
+        
         staffTableHTML += `
           <tr>
             <td style="border: 1px solid #000; padding: 2px;">${safeName}</td>
             <td style="border: 1px solid #000; padding: 2px; text-align: center;">${(row.present === true || row.present === 'TRUE') ? '✔' : ''}</td>
-            <td style="border: 1px solid #000; padding: 2px;">${validateInput(row.startTardy) ? escapeHtml(row.startTardy || '') : ''}</td>
-            <td style="border: 1px solid #000; padding: 2px;">${validateInput(row.lateLunch) ? escapeHtml(row.lateLunch || '') : ''}</td>
+            <td style="border: 1px solid #000; padding: 2px;">${safeStartTardy}</td>
+            <td style="border: 1px solid #000; padding: 2px;">${safeLateLunch}</td>
             <td style="border: 1px solid #000; padding: 2px; text-align: center;">${(row.needsAdj === true || row.needsAdj === 'TRUE') ? '✔' : ''}</td>
-            <td style="border: 1px solid #000; padding: 2px;">${validateInput(row.overtime) ? escapeHtml(row.overtime || '') : ''}</td>
-            <td style="border: 1px solid #000; padding: 2px;">${validateInput(row.otCorp) ? escapeHtml(row.otCorp || '') : ''}</td>
+            <td style="border: 1px solid #000; padding: 2px;">${safeOvertime}</td>
+            <td style="border: 1px solid #000; padding: 2px;">${safeOtCorp}</td>
             <td style="border: 1px solid #000; padding: 2px; text-align: center;">${(row.subAnother === true || row.subAnother === 'TRUE') ? '✔' : ''}</td>
-            <td style="border: 1px solid #000; padding: 2px;">${validateInput(row.incident) ? escapeHtml(row.incident || '') : ''}</td>
-            <td style="border: 1px solid #000; padding: 2px;">${validateInput(row.notes) ? escapeHtml(row.notes || '') : ''}</td>
+            <td style="border: 1px solid #000; padding: 2px;">${safeIncident}</td>
+            <td style="border: 1px solid #000; padding: 2px;">${safeNotes}</td>
           </tr>
         `;
       }
@@ -273,12 +341,12 @@ function generateHTML(date: string, office: string, filledBy: string, checkedBy:
 
   doctorData.forEach(row => {
     // 🔒 보안: 입력 검증 및 이스케이프
-    const safeName = validateInput(row.name) ? escapeHtml(row.name) : '';
+    const safeName = validateInput(row.name, 100) ? escapeHtml(String(row.name || '')) : '';
     if (safeName && safeName.trim()) {
-      const safeCheckIn = validateInput(row.checkIn) ? formatTimeToAMPM(row.checkIn || '') : '';
-      const safeLunchOut = validateInput(row.lunchOut) ? formatTimeToAMPM(row.lunchOut || '') : '';
-      const safeLunchIn = validateInput(row.lunchIn) ? formatTimeToAMPM(row.lunchIn || '') : '';
-      const safeCheckOut = validateInput(row.checkOut) ? formatTimeToAMPM(row.checkOut || '') : '';
+      const safeCheckIn = validateInput(row.checkIn, 10) ? formatTimeToAMPM(String(row.checkIn || '')) : '';
+      const safeLunchOut = validateInput(row.lunchOut, 10) ? formatTimeToAMPM(String(row.lunchOut || '')) : '';
+      const safeLunchIn = validateInput(row.lunchIn, 10) ? formatTimeToAMPM(String(row.lunchIn || '')) : '';
+      const safeCheckOut = validateInput(row.checkOut, 10) ? formatTimeToAMPM(String(row.checkOut || '')) : '';
       
       doctorTableHTML += `
         <tr>
@@ -369,7 +437,6 @@ function generateHTML(date: string, office: string, filledBy: string, checkedBy:
     </html>
   `;
 }
-
 
 // 🔒 보안: 시간 형식 검증 및 포맷팅
 function formatTimeToAMPM(timeStr: string): string {
