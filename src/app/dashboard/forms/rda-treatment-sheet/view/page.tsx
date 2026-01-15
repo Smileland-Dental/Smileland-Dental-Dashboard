@@ -27,6 +27,13 @@ export default function ViewTreatmentSheets() {
     setMounted(true);
   }, []);
 
+  // 안전한 문자열 검증 함수
+  const sanitizeString = (value: any, maxLength: number = 1000): string => {
+    if (value === null || value === undefined) return '';
+    const str = String(value);
+    return str.substring(0, maxLength);
+  };
+
   // Firebase에서 모든 treatment sheet 데이터 가져오기
   const fetchTreatmentSheets = async () => {
     try {
@@ -40,17 +47,30 @@ export default function ViewTreatmentSheets() {
         
         // submitted: true인 데이터만 포함
         if (data.submitted === true) {
-          sheetsData.push({
-            id: doc.id,
-            ...data
-          } as TreatmentSheet);
+          // 데이터 검증 및 sanitization
+          const sanitizedSheet: TreatmentSheet = {
+            id: sanitizeString(doc.id, 200),
+            office: sanitizeString(data.office, 10),
+            rdaName: sanitizeString(data.rdaName, 50),
+            date: sanitizeString(data.date, 20),
+            lastUpdated: data.lastUpdated,
+            treatmentData: Array.isArray(data.treatmentData) 
+              ? data.treatmentData.slice(0, 1000) // 최대 1000개 행만 허용
+              : []
+          };
+          
+          sheetsData.push(sanitizedSheet);
         }
       });
       
       // 중복 제거: 같은 office, rdaName, date 조합의 데이터 중 가장 최신 것만 유지
       const uniqueSheets = new Map();
       sheetsData.forEach(sheet => {
-        const key = `${sheet.office}_${sheet.rdaName}_${sheet.date}`;
+        // 안전한 키 생성 (최대 길이 제한)
+        const safeOffice = sanitizeString(sheet.office, 10);
+        const safeRdaName = sanitizeString(sheet.rdaName, 50);
+        const safeDate = sanitizeString(sheet.date, 20);
+        const key = `${safeOffice}_${safeRdaName}_${safeDate}`.substring(0, 100); // 최대 100자
         const existingSheet = uniqueSheets.get(key);
         
         if (!existingSheet) {
@@ -100,21 +120,29 @@ export default function ViewTreatmentSheets() {
     .filter(sheet => {
       // 공백 제거 및 대소문자 무시 비교
       const normalizedInputOffice = officeInput.trim();
-      const normalizedSheetOffice = (sheet.office || '').trim();
+      const normalizedSheetOffice = sanitizeString(sheet.office, 10).trim();
       const officeMatch = normalizedInputOffice !== '' && 
                          normalizedSheetOffice.toLowerCase() === normalizedInputOffice.toLowerCase();
       
       const normalizedInputDate = dateFilter.trim();
-      const dateMatch = normalizedInputDate === '' || sheet.date === normalizedInputDate;
+      const safeSheetDate = sanitizeString(sheet.date, 20);
+      // 날짜 형식 검증
+      const dateMatch = normalizedInputDate === '' || 
+                       (normalizedInputDate.match(/^\d{4}-\d{2}-\d{2}$/) && 
+                        safeSheetDate === normalizedInputDate);
       
       return officeMatch && dateMatch;
     })
     .sort((a, b) => {
       // 기본 정렬: date (내림차순), rdaName (오름차순)
-      const dateCompare = b.date.localeCompare(a.date); // 최신 날짜가 먼저
+      const safeDateA = sanitizeString(a.date, 20);
+      const safeDateB = sanitizeString(b.date, 20);
+      const dateCompare = safeDateB.localeCompare(safeDateA); // 최신 날짜가 먼저
       if (dateCompare !== 0) return dateCompare;
       
-      return a.rdaName.localeCompare(b.rdaName); // rdaName 알파벳 순
+      const safeRdaNameA = sanitizeString(a.rdaName, 50);
+      const safeRdaNameB = sanitizeString(b.rdaName, 50);
+      return safeRdaNameA.localeCompare(safeRdaNameB); // rdaName 알파벳 순
     });
 
   const handleViewDetails = (sheet: TreatmentSheet) => {
@@ -135,15 +163,29 @@ export default function ViewTreatmentSheets() {
   };
 
   const formatDate = (dateString: string) => {
-    if (!dateString) return '';
-    if (typeof window === 'undefined') return dateString; // 서버 사이드에서는 원본 반환
+    if (!dateString || typeof dateString !== 'string') return '';
+    if (typeof window === 'undefined') return ''; // 서버 사이드에서는 빈 문자열 반환
     
     try {
-      // 날짜 문자열을 로컬 시간대로 파싱 (UTC로 해석하지 않음)
-      const [year, month, day] = dateString.split('-').map(Number);
+      // 날짜 형식 검증 (YYYY-MM-DD)
+      const dateMatch = dateString.trim().match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!dateMatch) return '';
+      
+      const year = parseInt(dateMatch[1], 10);
+      const month = parseInt(dateMatch[2], 10);
+      const day = parseInt(dateMatch[3], 10);
+      
+      // 날짜 범위 검증
+      if (isNaN(year) || isNaN(month) || isNaN(day) || 
+          year < 1900 || year > 2100 || 
+          month < 1 || month > 12 || 
+          day < 1 || day > 31) {
+        return '';
+      }
+      
       const date = new Date(year, month - 1, day); // month는 0-based
       
-      if (isNaN(date.getTime())) return dateString;
+      if (isNaN(date.getTime())) return '';
       
       // 캘리포니아 시간대로 날짜 포맷
       const formattedDate = date.toLocaleDateString('en-US', {
@@ -155,7 +197,7 @@ export default function ViewTreatmentSheets() {
       
       return formattedDate;
     } catch {
-      return dateString;
+      return '';
     }
   };
 
@@ -322,7 +364,7 @@ export default function ViewTreatmentSheets() {
           borderBottom: '3px solid #3498db',
           paddingBottom: '15px'
         }}>
-          RDA/DA Treatment (Sealant) Review
+          RDA/DA Treatment(Sealant) Review
         </h1>
       </div>
 
@@ -335,7 +377,7 @@ export default function ViewTreatmentSheets() {
             color: '#333',
             whiteSpace: 'nowrap'
           }}>
-            🏢 Enter Office:
+             Enter Office:
           </label>
           <select
             value={officeInput}
@@ -386,7 +428,7 @@ export default function ViewTreatmentSheets() {
                 whiteSpace: 'nowrap',
                 marginLeft: '20px'
               }}>
-                📅 Filter by Date:
+                Filter by Date:
               </label>
               <input
                 type="date"
@@ -418,8 +460,8 @@ export default function ViewTreatmentSheets() {
               fontWeight: 'bold',
               marginLeft: '20px'
             }}>
-              📊 Showing {filteredAndSortedSheets.length} sheet(s) for "{officeInput}" office
-              {dateFilter && ` on ${dateFilter}`}
+              Showing {filteredAndSortedSheets.length} sheet(s) for "{sanitizeString(officeInput, 10)}" office
+              {dateFilter && ` on ${sanitizeString(dateFilter, 20)}`}
             </div>
           )}
         </div>
@@ -428,17 +470,17 @@ export default function ViewTreatmentSheets() {
       {/* 결과 표시 */}
       {treatmentSheets.length === 0 ? (
         <div style={emptyStyle}>
-          <div>📭 No submitted treatment sheets found</div>
+          <div>No submitted treatment sheets found</div>
         </div>
       ) : officeInput.trim() === '' ? (
         <div style={emptyStyle}>
-          <div>🏢 Please select an office to view treatment sheets</div>
+          <div>Please select an office to view treatment sheets</div>
         </div>
       ) : filteredAndSortedSheets.length === 0 ? (
         <div style={emptyStyle}>
           <div>
-            🔍 No treatment sheets found for "{officeInput}" office
-            {dateFilter && ` on ${dateFilter}`}
+            No treatment sheets found for "{sanitizeString(officeInput, 10)}" office
+            {dateFilter && ` on ${sanitizeString(dateFilter, 20)}`}
           </div>
           <div style={{ fontSize: '14px', marginTop: '10px' }}>
             Try selecting a different office{dateFilter && ' or date'}
@@ -450,30 +492,40 @@ export default function ViewTreatmentSheets() {
             <thead>
               <tr>
                 <th style={thStyle}>
-                  📅 Date
+                  Date
                 </th>
                 <th style={thStyle}>
-                  🏢 Office
+                  Office
                 </th>
                 <th style={thStyle}>
-                  👤 RDA/DA Name
+                  RDA/DA Name
                 </th>
                 <th style={thStyle}>
-                  📊 Patients
+                  Patients
                 </th>
                 <th style={thStyle}>
-                  🕒 Last Updated
+                  Last Updated
                 </th>
                 <th style={thStyle}>
-                  🔗 Action
+                  Action
                 </th>
               </tr>
             </thead>
             <tbody>
               {filteredAndSortedSheets.map((sheet, index) => {
-                const patientCount = sheet.treatmentData.filter(row => 
-                  row.patientName && row.patientName.trim() !== ''
+                // treatmentData가 배열인지 확인
+                const safeTreatmentData = Array.isArray(sheet.treatmentData) ? sheet.treatmentData : [];
+                const patientCount = safeTreatmentData.filter((row: any) => 
+                  row && typeof row === 'object' && 
+                  row.patientName && 
+                  typeof row.patientName === 'string' && 
+                  row.patientName.trim() !== ''
                 ).length;
+                
+                // 안전한 값으로 sanitization
+                const safeOffice = sanitizeString(sheet.office, 10);
+                const safeRdaName = sanitizeString(sheet.rdaName, 50);
+                const safeDate = formatDate(sanitizeString(sheet.date, 20));
                 
                 return (
                   <tr
@@ -487,13 +539,13 @@ export default function ViewTreatmentSheets() {
                     }}
                   >
                     <td style={tdStyle}>
-                      <strong>{formatDate(sheet.date)}</strong>
+                      <strong>{safeDate}</strong>
                     </td>
                     <td style={tdStyle}>
-                      {sheet.office}
+                      {safeOffice}
                     </td>
                     <td style={tdStyle}>
-                      <strong>{sheet.rdaName}</strong>
+                      <strong>{safeRdaName}</strong>
                     </td>
                     <td style={tdStyle}>
                       <span style={{
@@ -522,7 +574,7 @@ export default function ViewTreatmentSheets() {
                           backgroundColor: '#28a745'
                         }}
                       >
-                        👁️ View Details
+                        View Details
                       </button>
                     </td>
                   </tr>
