@@ -20,6 +20,14 @@ function sanitizeString(str: string, maxLength: number): string {
   return sanitized.replace(/[<>]/g, '');
 }
 
+// 파일명 sanitize 함수 (파일명 인젝션 방지)
+function sanitizeFilename(filename: string): string {
+  return filename
+    .replace(/[^a-zA-Z0-9._-]/g, '_')
+    .replace(/\.\./g, '_')
+    .slice(0, 255);
+}
+
 export async function POST(request: NextRequest) {
   try {
     // HTTPS 강제 (프로덕션 환경)
@@ -45,18 +53,52 @@ export async function POST(request: NextRequest) {
         status: 400
       });
     }
+
+    // 입력 타입 검증
+    if (typeof inspectionDate !== 'string' || 
+        typeof selectedOffice !== 'string' || 
+        typeof lobbyData !== 'object' || 
+        lobbyData === null) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid input format' },
+        { status: 400 }
+      );
+    }
+
+    // lobbyData 크기 제한 (대략적인 크기 체크)
+    const lobbyDataSize = JSON.stringify(lobbyData).length;
+    if (lobbyDataSize > 100000) { // 100KB 제한
+      return NextResponse.json(
+        { success: false, error: 'Data too large' },
+        { status: 400 }
+      );
+    }
+
+    // 날짜 형식 검증 (YYYY-MM-DD)
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (!dateRegex.test(inspectionDate)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid date format' },
+        { status: 400 }
+      );
+    }
+    
+    // Office 값 검증 (A, B, C만 허용)
+    const validOffices = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+    if (!validOffices.includes(selectedOffice)) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid office selection' },
+        { status: 400 }
+      );
+    }
     
     // 데이터 sanitize
     const safeInspectionDate = sanitizeString(inspectionDate, 20);
     const safeSelectedOffice = sanitizeString(selectedOffice, 100);
 
-    // 날짜를 요일로 변환
+    // 날짜 포맷팅 (MM/DD/YYYY)
     const dateObj = new Date(inspectionDate + 'T00:00:00');
     const laDate = new Date(dateObj.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-    const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-    const dayName = days[laDate.getDay()];
-
-    // 날짜 포맷팅 (MM/DD/YYYY)
     const month = String(laDate.getMonth() + 1).padStart(2, '0');
     const day = String(laDate.getDate()).padStart(2, '0');
     const year = laDate.getFullYear();
@@ -125,7 +167,7 @@ export async function POST(request: NextRequest) {
         tableHTML += `<td style="border: 1px solid #444; padding: 2px 2px; text-align: center; vertical-align: center; height: ${rowHeight}; font-size: 6px;">${escapeHtml(checkValue)}</td>`;
         
         // 나머지 컬럼들
-        COLUMN_NAMES.slice(2, -1).forEach((columnName, colIndex) => {
+        COLUMN_NAMES.slice(2, -1).forEach((_, colIndex) => {
           if (isSweepMop) {
             tableHTML += `<td style="border: 1px solid #444; padding: 2px 2px; text-align: center; vertical-align: center; height: ${rowHeight}; font-size: 6px;"></td>`;
           } else {
@@ -266,11 +308,16 @@ export async function POST(request: NextRequest) {
       
       await browser.close();
       
+      // 파일명 sanitize (파일명 인젝션 방지)
+      const safeFilename = sanitizeFilename(
+        `${safeInspectionDate}_${safeSelectedOffice}_Lobby_Inspection_Log.pdf`
+      );
+      
       // PDF 반환 (Buffer로 변환하여 타입 에러 해결)
       return new NextResponse(Buffer.from(pdf), {
         headers: {
           'Content-Type': 'application/pdf',
-          'Content-Disposition': `attachment; filename="${safeInspectionDate}_${safeSelectedOffice}_Lobby Inspection Log.pdf"`,
+          'Content-Disposition': `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(safeFilename)}`,
           'Cache-Control': 'no-cache, no-store, must-revalidate',
           'Pragma': 'no-cache',
           'Expires': '0',
@@ -283,14 +330,18 @@ export async function POST(request: NextRequest) {
       if (browser) {
         await browser.close();
       }
-      throw new Error(`PDF generation failed: ${pdfError.message}`);
+      // 에러 메시지 노출 최소화 (보안)
+      console.error('PDF generation error:', pdfError);
+      throw new Error('PDF generation failed');
     }
 
-  } catch (error) {
+  } catch (error: any) {
+    // 에러 정보 노출 최소화
+    console.error('Request error:', error);
     return NextResponse.json(
       { 
         success: false, 
-        error: 'Failed to generate lobby inspection report' 
+        error: 'Failed to generate lobby inspection log' 
       },
       {
         status: 500,
