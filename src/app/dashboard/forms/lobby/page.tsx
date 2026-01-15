@@ -11,7 +11,6 @@ export default function LobbyInspectionPage() {
   const [selectedOffice, setSelectedOffice] = useState('');
   const [lobbyData, setLobbyData] = useState<any>({});
   const [loading, setLoading] = useState(false);
-  const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
@@ -71,8 +70,6 @@ export default function LobbyInspectionPage() {
     if (!hasChanges) return;
 
     try {
-      setAutoSaveStatus('💾 Saving...');
-      
       const dataToSave = {
         inspectionDate,
         selectedOffice,
@@ -88,13 +85,8 @@ export default function LobbyInspectionPage() {
       // 저장 성공 시 마지막 저장된 데이터 업데이트
       setLastSavedData({ ...lobbyData });
       
-      setAutoSaveStatus('💾 Saved ✅');
-      setTimeout(() => setAutoSaveStatus(''), 2000);
-      
     } catch (error) {
       console.error("Auto-save error:", error);
-      setAutoSaveStatus('💾 Save failed ❌');
-      setTimeout(() => setAutoSaveStatus(''), 3000);
     }
   }, [inspectionDate, selectedOffice, lobbyData, lastSavedData, isUpdatingFromFirebase]);
 
@@ -202,21 +194,12 @@ export default function LobbyInspectionPage() {
           setIsUpdatingFromFirebase(false);
         }, 100);
         
-        // 다른 사용자의 업데이트만 표시 (자신의 업데이트는 제외)
-        if (data.timestamp && 
-            new Date(data.timestamp).getTime() > Date.now() - 5000 && 
-            data.lastUpdatedBy && 
-            data.lastUpdatedBy !== userSessionId) {
-          setAutoSaveStatus('🔄 Updated by another user.');
-          setTimeout(() => setAutoSaveStatus(''), 3000);
-        }
+        // 다른 사용자의 업데이트는 조용히 처리 (알림 없음)
       } else {
         console.log("Real-time listener: No document exists for date:", inspectionDate);
       }
     }, (error: any) => {
       console.error("Real-time listener error:", error);
-      setAutoSaveStatus('❌ 연결 오류 - 실시간 동기화가 중단되었습니다');
-      setTimeout(() => setAutoSaveStatus(''), 3000);
     });
 
     return () => {
@@ -262,7 +245,9 @@ export default function LobbyInspectionPage() {
       return;
     }
     
+    // 주의: 약한 비밀번호 검증 (보안 취약점)
     // 선택된 office의 첫 알파벳 대문자를 비밀번호로 사용
+    // TODO: 강력한 비밀번호 정책 적용 또는 서버 사이드 인증으로 이동
     const officePassword = newOffice.charAt(0).toUpperCase();
     const password = prompt(`Enter password to change office: `);
     if (password === null) return;
@@ -280,8 +265,13 @@ export default function LobbyInspectionPage() {
       return;
     }
 
+    // 비밀번호는 서버 사이드에서 검증해야 함 (현재는 클라이언트 사이드 검증만)
+    // TODO: 서버 사이드 인증으로 이동 필요
     const password = prompt(`Are you sure you want to submit? Submitting will reset today's data. Enter password to proceed:`);
     if (password === null) return;
+    
+    // 주의: 비밀번호가 클라이언트 코드에 노출됨 (보안 취약점)
+    // 프로덕션에서는 서버 사이드 인증 API를 통해 검증해야 함
     if (password !== 'Halloween') {
       alert("Incorrect password. Submission cancelled.");
       return;
@@ -365,6 +355,7 @@ export default function LobbyInspectionPage() {
           setLoading(false);
           setSubmitStatus('');
           setProgress(0);
+          alert('✅ Report submitted successfully! PDF saved to archive.');
         }, 2000);
       } else {
         let errorMessage = 'PDF generation failed';
@@ -384,6 +375,7 @@ export default function LobbyInspectionPage() {
       setTimeout(() => {
         setLoading(false);
         setSubmitStatus('');
+        alert('❌ Submission failed: ' + error.message);
       }, 3000);
     }
   };
@@ -517,23 +509,6 @@ export default function LobbyInspectionPage() {
       overflow: 'hidden',
       letterSpacing: '0.5px'
     },
-    autoSaveStatus: {
-      position: 'fixed' as const,
-      top: '20px',
-      right: '20px',
-      padding: '12px 20px',
-      backgroundColor: '#51cf66',
-      color: 'white',
-      borderRadius: '25px',
-      fontSize: '14px',
-      fontWeight: 'bold',
-      boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-      zIndex: 1000,
-      maxWidth: '300px',
-      textAlign: 'center' as const,
-      backdropFilter: 'blur(10px)',
-      border: '1px solid rgba(255, 255, 255, 0.2)'
-    }
   };
 
   // 제출 중 브라우저 네비게이션 방지
@@ -564,9 +539,17 @@ export default function LobbyInspectionPage() {
     };
   }, [loading]);
 
-  // 컴포넌트 마운트 시 오늘 날짜 설정
+  // 컴포넌트 마운트 시 오늘 날짜 설정 및 HTTPS 체크
   useEffect(() => {
     setInspectionDate(getCurrentCaliforniaTime());
+    
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
   }, []);
 
   // 컬럼 정의
@@ -658,18 +641,6 @@ export default function LobbyInspectionPage() {
         )}
 
       <div style={styles.container}>
-        {/* 자동 저장 상태 표시 */}
-        {autoSaveStatus && (
-          <div style={{
-            ...styles.autoSaveStatus,
-            backgroundColor: autoSaveStatus.includes('❌') ? '#ff6b6b' : 
-                            autoSaveStatus.includes('🔄') ? '#4a90e2' : 
-                            autoSaveStatus.includes('💾') ? '#51cf66' : '#51cf66'
-          }}>
-            {autoSaveStatus}
-          </div>
-        )}
-
         <h2 style={styles.header}>
           <span style={{fontSize:'2.8em',verticalAlign:'middle',textShadow:'0 2px 4px rgba(0,0,0,0.1)',margin:'0 12px'}}>🛋️</span> 
           Lobby Inspection Log 
