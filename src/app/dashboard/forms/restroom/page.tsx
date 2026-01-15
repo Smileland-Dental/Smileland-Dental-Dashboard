@@ -7,7 +7,6 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 export default function RestroomInspection() {
   const [loading, setLoading] = useState(false);
-  const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
@@ -116,8 +115,6 @@ export default function RestroomInspection() {
     if (!hasChanges) return;
 
     try {
-      setAutoSaveStatus('💾 Saving...');
-      
       const dataToSave = {
         inspectionDate,
         selectedOffice,
@@ -134,13 +131,8 @@ export default function RestroomInspection() {
       // 저장 성공 시 마지막 저장된 데이터 업데이트
       setLastSavedData({ ...restroomData });
       
-      setAutoSaveStatus('💾 Saved ✅');
-      setTimeout(() => setAutoSaveStatus(''), 2000);
-      
     } catch (error) {
       console.error("Auto-save error:", error);
-      setAutoSaveStatus('💾 Save failed ❌');
-      setTimeout(() => setAutoSaveStatus(''), 3000);
     }
   }, [inspectionDate, selectedOffice, selectedRestroom, restroomData, lastSavedData, isUpdatingFromFirebase]);
 
@@ -244,21 +236,12 @@ export default function RestroomInspection() {
           setIsUpdatingFromFirebase(false);
         }, 100);
         
-        // 다른 사용자의 업데이트만 표시 (자신의 업데이트는 제외)
-        if (data.timestamp && 
-            new Date(data.timestamp).getTime() > Date.now() - 5000 && 
-            data.lastUpdatedBy && 
-            data.lastUpdatedBy !== userSessionId) {
-          setAutoSaveStatus('🔄 동시 저장됨 - 다른 사용자가 업데이트했습니다');
-          setTimeout(() => setAutoSaveStatus(''), 3000);
-        }
+        // 다른 사용자의 업데이트는 조용히 처리 (알림 없음)
       } else {
         console.log("Real-time listener: No document exists for date:", inspectionDate);
       }
     }, (error: any) => {
       console.error("Real-time listener error:", error);
-      setAutoSaveStatus('❌ 연결 오류 - 실시간 동기화가 중단되었습니다');
-      setTimeout(() => setAutoSaveStatus(''), 3000);
     });
 
     return () => {
@@ -358,7 +341,7 @@ export default function RestroomInspection() {
         const blob = await response.blob();
         
         // PDF를 Firebase Storage에 저장
-        setSubmitStatus('Saving PDF to archive...');
+        setSubmitStatus('Saving PDF...');
         setProgress(70);
         try {
           const storage = getStorage();
@@ -398,8 +381,9 @@ export default function RestroomInspection() {
         
         // 3. 폼 초기화
         setRestroomData({});
+        setLastSavedData({});
 
-        setSubmitStatus('Complete! PDF saved to archive.');
+        setSubmitStatus('Complete!');
         setProgress(100);
         
         // 2초 후 모달 닫기
@@ -407,6 +391,7 @@ export default function RestroomInspection() {
           setLoading(false);
           setSubmitStatus('');
           setProgress(0);
+          alert('✅ Submitted successfully!');
         }, 2000);
       } else {
         const errorData = await response.json();
@@ -420,6 +405,7 @@ export default function RestroomInspection() {
       setTimeout(() => {
         setLoading(false);
         setSubmitStatus('');
+        alert('❌ Submission failed: ' + error.message);
       }, 3000);
     }
   };
@@ -563,24 +549,18 @@ export default function RestroomInspection() {
       overflow: 'hidden',
       letterSpacing: '0.5px'
     },
-    autoSaveStatus: {
-      position: 'fixed',
-      top: '20px',
-      right: '20px',
-      padding: '12px 20px',
-      backgroundColor: '#51cf66',
-      color: 'white',
-      borderRadius: '25px',
-      fontSize: '14px',
-      fontWeight: 'bold',
-      boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-      zIndex: 1000,
-      maxWidth: '300px',
-      textAlign: 'center',
-      backdropFilter: 'blur(10px)',
-      border: '1px solid rgba(255, 255, 255, 0.2)'
-    }
   };
+
+  // 컴포넌트 마운트 시 HTTPS 체크
+  useEffect(() => {
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+  }, []);
 
   // 제출 중 브라우저 네비게이션 방지
   useEffect(() => {
@@ -636,99 +616,50 @@ export default function RestroomInspection() {
             <div style={{
               backgroundColor: "white",
               padding: "40px",
-              borderRadius: "12px",
+              borderRadius: "20px",
               textAlign: "center",
-              boxShadow: "0 10px 30px rgba(0, 0, 0, 0.3)",
+              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.3)",
               maxWidth: "400px",
               width: "90%"
             } as React.CSSProperties}>
               <div style={{
-                border: "4px solid #f3f3f3",
-                borderTop: "4px solid #4a90e2",
-                borderRadius: "50%",
-                width: "50px",
-                height: "50px",
-                animation: "spin 1s linear infinite",
-                margin: "0 auto 20px"
-              } as React.CSSProperties}></div>
-              <h3 style={{
-                color: "#333",
-                fontSize: "1.2rem",
+                fontSize: "18px",
                 fontWeight: "600",
-                margin: "0 0 10px 0"
-              } as React.CSSProperties}>
-                {submitStatus || "Processing..."}
-              </h3>
-              <p style={{
-                color: "#666",
-                fontSize: "0.9rem",
-                margin: "0 0 20px 0",
-                lineHeight: "1.4"
-              } as React.CSSProperties}>
-                {submitStatus === 'Saving...'}
-                {submitStatus === 'Generating PDF...'}
-                {submitStatus === 'Processing PDF...'}
-                {submitStatus === 'Cleaning up...'}
-                {submitStatus === 'Complete!'}
-                {!submitStatus && 'Processing... Please wait'}
-              </p>
-              {/* 진행률 바 */}
-              <div style={{
-                width: "100%",
-                backgroundColor: "#e9ecef",
-                borderRadius: "10px",
-                overflow: "hidden",
+                color: "#4a6fa1",
                 marginBottom: "20px"
               } as React.CSSProperties}>
-                <div style={{
-                  width: `${progress}%`,
-                  height: "8px",
-                  backgroundColor: "#4a90e2",
-                  borderRadius: "10px",
-                  transition: "width 0.3s ease",
-                  background: "linear-gradient(90deg, #4a90e2, #357abd)"
-                } as React.CSSProperties}></div>
+                {submitStatus}
               </div>
-              <p style={{
-                color: "#495057",
-                fontSize: "0.8rem",
-                margin: "0 0 20px 0",
-                fontWeight: "500"
-              } as React.CSSProperties}>
-                {progress}% Complete
-              </p>
-              <div style={{
-                backgroundColor: "#f8f9fa",
-                padding: "15px",
-                borderRadius: "8px",
-                border: "1px solid #e9ecef"
-              } as React.CSSProperties}>
-                <p style={{
-                  color: "#495057",
-                  fontSize: "0.8rem",
-                  margin: 0,
-                  fontWeight: "500"
+              {progress > 0 && (
+                <div style={{
+                  width: "100%",
+                  height: "8px",
+                  backgroundColor: "#f0f0f0",
+                  borderRadius: "4px",
+                  overflow: "hidden",
+                  marginBottom: "10px"
                 } as React.CSSProperties}>
-                  ⚠️ Please do not close.
-                </p>
+                  <div style={{
+                    width: `${progress}%`,
+                    height: "100%",
+                    background: "linear-gradient(90deg, #4a90e2, #51cf66)",
+                    transition: "width 0.3s ease",
+                    borderRadius: "4px"
+                  } as React.CSSProperties} />
+                </div>
+              )}
+              <div style={{
+                fontSize: "14px",
+                color: "#666",
+                marginTop: "10px"
+              } as React.CSSProperties}>
+                {progress}%
               </div>
             </div>
           </div>
         )}
 
         <div style={styles.container}>
-          {/* 자동 저장 상태 표시 */}
-          {autoSaveStatus && (
-            <div style={{
-              ...styles.autoSaveStatus,
-              backgroundColor: autoSaveStatus.includes('❌') ? '#ff6b6b' : 
-                              autoSaveStatus.includes('🔄') ? '#4a90e2' : 
-                              autoSaveStatus.includes('💾') ? '#51cf66' : '#51cf66'
-            } as React.CSSProperties}>
-              {autoSaveStatus}
-            </div>
-          )}
-
           <h2 style={styles.header}>
             <span style={{fontSize:'2.8em',verticalAlign:'middle',textShadow:'0 2px 4px rgba(0,0,0,0.1)',margin:'0 12px'} as React.CSSProperties}>🚻</span> 
             Restroom Inspection Log 
@@ -854,7 +785,7 @@ export default function RestroomInspection() {
                             />
                           )}
                         </td>
-                        {COLUMN_NAMES.slice(2, -1).map((columnName, colIndex) => {
+                        {COLUMN_NAMES.slice(2, -1).map((_, colIndex) => {
                           if (isMopRow) {
                             return <td key={colIndex} style={styles.td}></td>;
                           }
@@ -893,7 +824,7 @@ export default function RestroomInspection() {
                   cursor: loading || !selectedOffice ? 'not-allowed' : 'pointer'
                 } as React.CSSProperties}
               >
-                🚀 Submit Report
+                🚀 Submit
               </button>
             </div>
           )}
@@ -921,4 +852,3 @@ export default function RestroomInspection() {
     </>
   );
 }
-
