@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { db } from '@/lib/firebase.config';
-import { doc, setDoc, getDoc, onSnapshot, collection, getDocs, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 export default function LobbyInspectionPage() {
@@ -306,7 +306,7 @@ export default function LobbyInspectionPage() {
         const blob = await response.blob();
         
         // PDF를 Firebase Storage에 저장
-        setSubmitStatus('Saving PDF to archive...');
+        setSubmitStatus('Saving PDF...');
         setProgress(70);
         try {
           const storage = getStorage();
@@ -330,7 +330,7 @@ export default function LobbyInspectionPage() {
             createdAt: new Date(),
           });
           
-          console.log('PDF saved successfully to Firebase Storage');
+          console.log('PDF saved successfully');
         } catch (storageError: any) {
           console.error('Storage error:', storageError);
           // 저장 실패 시 사용자에게 알림
@@ -348,14 +348,14 @@ export default function LobbyInspectionPage() {
         setLobbyData({});
         setLastSavedData({});
 
-        setSubmitStatus('Complete! PDF saved to archive.');
+        setSubmitStatus('Complete!');
         setProgress(100);
         
         setTimeout(() => {
           setLoading(false);
           setSubmitStatus('');
           setProgress(0);
-          alert('✅ Report submitted successfully! PDF saved to archive.');
+          alert('✅ Submitted successfully!');
         }, 2000);
       } else {
         let errorMessage = 'PDF generation failed';
@@ -799,7 +799,7 @@ export default function LobbyInspectionPage() {
               }}
               disabled={loading || !selectedOffice}
             >
-              🚀 Submit Report
+              🚀 Submit
             </button>
           </div>
         )}
