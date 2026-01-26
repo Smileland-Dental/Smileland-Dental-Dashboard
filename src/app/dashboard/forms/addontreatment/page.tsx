@@ -923,8 +923,8 @@ export default function AddOnTreatment() {
       } as React.CSSProperties}>
         <div style={{ textAlign: 'center' } as React.CSSProperties}>
           <div style={{ fontSize: '24px', marginBottom: '20px' } as React.CSSProperties}>🚫</div>
-          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' } as React.CSSProperties}>접근 권한이 없습니다</div>
-          <div style={{ fontSize: '14px', color: '#666' } as React.CSSProperties}>관리자 권한이 필요합니다</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' } as React.CSSProperties}>You do not have access to this page.</div>
+          <div style={{ fontSize: '14px', color: '#666' } as React.CSSProperties}>You do not have access to this page.</div>
         </div>
       </div>
     );
@@ -1232,3 +1232,4 @@ export default function AddOnTreatment() {
     </>
   );
 }
+
