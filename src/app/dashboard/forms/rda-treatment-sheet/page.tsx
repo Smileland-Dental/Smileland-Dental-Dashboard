@@ -1,7 +1,6 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { enableAllSecurityMeasures, sanitizeFirebaseDataClient } from "@/lib/security-client";
 import { db, auth } from '@/lib/firebase.config';
 import { doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -27,6 +26,68 @@ const SERVICE_OPTIONS = [
 function safeStr(v: unknown, max: number): string {
   if (v == null) return '';
   return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+}
+
+// 🔒 보안: 데이터 저장 전 검증 및 sanitization 함수
+function sanitizeDataForFirebase(data: any): any {
+  if (data === null || data === undefined) {
+    return null;
+  }
+  
+  // 원시 타입 검증
+  if (typeof data === 'string') {
+    // 문자열 길이 제한 (최대 10000자)
+    const sanitized = data.trim().substring(0, 10000);
+    // 위험한 문자 제거 (XSS 방지)
+    return sanitized.replace(/[<>\"']/g, '');
+  }
+  
+  if (typeof data === 'number') {
+    // 숫자 범위 검증 (안전한 범위 내)
+    if (!isFinite(data) || data > Number.MAX_SAFE_INTEGER || data < Number.MIN_SAFE_INTEGER) {
+      return 0;
+    }
+    return data;
+  }
+  
+  if (typeof data === 'boolean') {
+    return data;
+  }
+  
+  // 배열 처리
+  if (Array.isArray(data)) {
+    // 배열 크기 제한 (최대 10000개)
+    const limitedArray = data.slice(0, 10000);
+    return limitedArray.map(item => sanitizeDataForFirebase(item));
+  }
+  
+  // 객체 처리
+  if (typeof data === 'object') {
+    const sanitized: any = {};
+    const keys = Object.keys(data);
+    // 객체 키 개수 제한 (최대 1000개)
+    const limitedKeys = keys.slice(0, 1000);
+    
+    for (const key of limitedKeys) {
+      // 키 이름 검증 (알파벳, 숫자, 언더스코어만 허용, 최대 100자)
+      const safeKey = key.replace(/[^A-Za-z0-9_]/g, '').substring(0, 100);
+      if (safeKey) {
+        sanitized[safeKey] = sanitizeDataForFirebase(data[key]);
+      }
+    }
+    return sanitized;
+  }
+  
+  return null;
+}
+
+// 🔒 보안: 금액 필드 검증 (숫자만 허용)
+function sanitizeAmount(value: string): string {
+  if (!value || typeof value !== 'string') return '';
+  // 숫자, 소수점, 음수 기호만 허용
+  const sanitized = value.replace(/[^0-9.-]/g, '');
+  // 최대 길이 제한
+  return sanitized.substring(0, 20);
 }
 
 // 24시간제를 12시간제로 변환하는 함수
@@ -1334,27 +1395,87 @@ export default function RDATreatmentSheetSystem() {
       const pacificDateTime = new Date(currentTime.toLocaleString("en-US", {timeZone: "America/Los_Angeles"}));
       
       // Sealant가 없는 행의 sealantDetails를 빈 배열로 명시적으로 설정
-      const normalizedTreatmentData = treatmentData.map((row: any) => {
-        const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
-        return {
-          ...row,
-          sealantDetails: hasSealant ? (row.sealantDetails || []) : []
-        };
-      });
+      // 🔒 보안: 배열 데이터 검증 및 정규화
+      const normalizedTreatmentData = treatmentData
+        .slice(0, 10000) // 최대 10000개 행만 허용
+        .map((row: any) => {
+          if (!row || typeof row !== 'object') {
+            return {
+              patientName: '',
+              startTime: '',
+              roomNumber: '',
+              services: [],
+              explanation: '',
+              showServices: false,
+              sealantDetails: []
+            };
+          }
+          
+          const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
+          
+          // sealantDetails 검증 및 정규화
+          let safeSealantDetails: any[] = [];
+          if (hasSealant && Array.isArray(row.sealantDetails)) {
+            safeSealantDetails = row.sealantDetails
+              .slice(0, 100) // 최대 100개만 허용
+              .map((detail: any) => {
+                if (!detail || typeof detail !== 'object') {
+                  return {
+                    ptName: row.patientName || '',
+                    chartNumber: '',
+                    dob: '',
+                    toothNumber: '',
+                    redo: '',
+                    acctType: '',
+                    payable: '',
+                    dxDr: '',
+                    drAmount: '',
+                    rdaAmount: ''
+                  };
+                }
+                return {
+                  ptName: String(detail.ptName || '').substring(0, 100).replace(/[<>\"']/g, ''),
+                  chartNumber: String(detail.chartNumber || '').substring(0, 50).replace(/[<>\"']/g, ''),
+                  dob: String(detail.dob || '').substring(0, 20).replace(/[<>\"']/g, ''),
+                  toothNumber: String(detail.toothNumber || '').substring(0, 10).replace(/[<>\"']/g, ''),
+                  redo: String(detail.redo || '').substring(0, 10).replace(/[<>\"']/g, ''),
+                  acctType: String(detail.acctType || '').substring(0, 10).replace(/[<>\"']/g, ''),
+                  payable: String(detail.payable || '').substring(0, 10).replace(/[<>\"']/g, ''),
+                  dxDr: String(detail.dxDr || '').substring(0, 50).replace(/[<>\"']/g, ''),
+                  drAmount: sanitizeAmount(String(detail.drAmount || '')),
+                  rdaAmount: sanitizeAmount(String(detail.rdaAmount || ''))
+                };
+              });
+          }
+          
+          return {
+            patientName: String(row.patientName || '').substring(0, 100).replace(/[<>\"']/g, ''),
+            startTime: String(row.startTime || '').substring(0, 10).replace(/[<>\"']/g, ''),
+            roomNumber: String(row.roomNumber || '').substring(0, 10).replace(/[<>\"']/g, ''),
+            services: Array.isArray(row.services) 
+              ? row.services
+                  .filter((s: any) => typeof s === 'string' && SERVICE_OPTIONS.includes(s))
+                  .slice(0, 50)
+              : [],
+            explanation: String(row.explanation || '').substring(0, 500).replace(/[<>\"']/g, ''),
+            showServices: Boolean(row.showServices),
+            sealantDetails: safeSealantDetails
+          };
+        });
       
       const dataToSave = {
-        office,
-        rdaName,
-        date,
+        office: office.trim().substring(0, 10),
+        rdaName: rdaName.trim().substring(0, 50),
+        date: date.trim().substring(0, 20),
         treatmentData: normalizedTreatmentData,
         timestamp: pacificDateTime.toISOString(),
         autoSaved: true,
-        lastUpdatedBy: userSessionId,
+        lastUpdatedBy: userSessionId.substring(0, 200),
         submitted: isSubmitted // 기존 제출 상태 유지 (view 모드에서 수정 시에도 submitted: true 유지)
       };
 
-      // 데이터 검증 및 sanitization
-      const sanitizedData = sanitizeFirebaseDataClient(dataToSave);
+      // 🔒 보안: 데이터 저장 전 검증 및 sanitization
+      const sanitizedData = sanitizeDataForFirebase(dataToSave);
 
       // sealant details가 포함된 데이터 확인
       const sealantRows = treatmentData.filter((row: any) => row.sealantDetails && row.sealantDetails.length > 0);
@@ -1370,9 +1491,10 @@ export default function RDATreatmentSheetSystem() {
       setAutoSaveStatus('Saved ✅');
       setTimeout(() => setAutoSaveStatus(''), 2000);
       
-    } catch (error) {
-      // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-      setAutoSaveStatus('error');
+    } catch (error: any) {
+      // 🔒 보안: 프로덕션에서는 상세한 에러 정보를 노출하지 않음
+      console.error('Auto-save error:', error);
+      setAutoSaveStatus('Save failed. Please try again.');
       setTimeout(() => setAutoSaveStatus(''), 3000);
     }
   }, [office, rdaName, date, treatmentData, lastSavedData, isUpdatingFromFirebase, userSessionId, isSubmitted, isUnlocked, createSafeDocId]);
@@ -1435,20 +1557,14 @@ export default function RDATreatmentSheetSystem() {
 
   // 치료 데이터 업데이트
   const updateTreatment = useCallback((rowIndex: number, field: string, value: string | string[] | boolean) => {
-    // Rate limiting: 전역 throttle (50ms)
+    // Rate limiting: 최소화 (1ms - 빠른 입력 허용하면서도 과도한 호출 방지)
     const now = Date.now();
-    if (now - lastUpdateTreatmentCall.current < 50) {
+    if (now - lastUpdateTreatmentCall.current < 1) {
       return;
     }
     lastUpdateTreatmentCall.current = now;
     
-    // Rate limiting: 개별 필드 throttle (100ms)
-    const fieldKey = `${rowIndex}-${field}`;
-    const lastFieldUpdate = lastFieldUpdateTimeRef.current.get(fieldKey) || 0;
-    if (now - lastFieldUpdate < 100) {
-      return;
-    }
-    lastFieldUpdateTimeRef.current.set(fieldKey, now);
+    // 개별 필드 throttle 제거 - 빠른 타이핑 시에도 모든 입력이 반영되도록 함
     
     setTreatmentData(prev => {
       // rowIndex 범위 검증 (보안 강화: 음수 및 범위 초과 방지)
@@ -1545,6 +1661,31 @@ export default function RDATreatmentSheetSystem() {
             ptName: sanitizedValue
           }));
         }
+      } else if (field === 'explanation') {
+        // Explanation 필드 검증 및 sanitization
+        let sanitizedValue = typeof value === 'string' ? value : String(value || '');
+        // 최대 길이 제한 (500자)
+        sanitizedValue = sanitizedValue.substring(0, 500);
+        // 위험한 문자 제거 (XSS 방지)
+        sanitizedValue = sanitizedValue.replace(/[<>\"']/g, '');
+        
+        newData[rowIndex] = {
+          ...newData[rowIndex],
+          [field]: sanitizedValue
+        };
+      } else if (field === 'startTime' || field === 'roomNumber') {
+        // 시간 및 방 번호 필드 검증
+        let sanitizedValue = typeof value === 'string' ? value : String(value || '');
+        // 최대 길이 제한
+        const maxLength = field === 'startTime' ? 10 : 10;
+        sanitizedValue = sanitizedValue.substring(0, maxLength);
+        // 위험한 문자 제거
+        sanitizedValue = sanitizedValue.replace(/[<>\"']/g, '');
+        
+        newData[rowIndex] = {
+          ...newData[rowIndex],
+          [field]: sanitizedValue
+        };
       } else {
         newData[rowIndex] = {
           ...newData[rowIndex],
@@ -1558,20 +1699,14 @@ export default function RDATreatmentSheetSystem() {
 
   // Sealant 상세 정보 업데이트
   const updateSealantDetail = useCallback((rowIndex: number, detailIndex: number, field: string, value: string) => {
-    // Rate limiting: 전역 throttle (50ms)
+    // Rate limiting: 최소화 (1ms - 빠른 입력 허용하면서도 과도한 호출 방지)
     const now = Date.now();
-    if (now - lastUpdateSealantDetailCall.current < 50) {
+    if (now - lastUpdateSealantDetailCall.current < 1) {
       return;
     }
     lastUpdateSealantDetailCall.current = now;
     
-    // Rate limiting: 개별 필드 throttle (100ms)
-    const fieldKey = `sealant-${rowIndex}-${detailIndex}-${field}`;
-    const lastFieldUpdate = lastFieldUpdateTimeRef.current.get(fieldKey) || 0;
-    if (now - lastFieldUpdate < 100) {
-      return;
-    }
-    lastFieldUpdateTimeRef.current.set(fieldKey, now);
+    // 개별 필드 throttle 제거 - 빠른 타이핑 시에도 모든 입력이 반영되도록 함
     
     setTreatmentData(prev => {
       // rowIndex 범위 검증
@@ -1588,9 +1723,11 @@ export default function RDATreatmentSheetSystem() {
       // value가 문자열인지 확인
       let safeValue = typeof value === 'string' ? value : String(value || '');
       
-      // XSS 방지: 위험한 문자 제거 (특정 필드 제외)
-      const fieldsThatAllowSpecialChars = ['drAmount', 'rdaAmount']; // 금액 필드는 숫자만 허용
-      if (!fieldsThatAllowSpecialChars.includes(field)) {
+      // 금액 필드는 숫자만 허용 (소수점 포함)
+      if (field === 'drAmount' || field === 'rdaAmount') {
+        safeValue = sanitizeAmount(safeValue);
+      } else {
+        // XSS 방지: 위험한 문자 제거
         safeValue = safeValue.replace(/[<>\"']/g, '');
       }
       
@@ -2174,32 +2311,92 @@ export default function RDATreatmentSheetSystem() {
       const pacificDateString = pacificDateTime.toISOString().split('T')[0];
       
       // Sealant가 없는 행의 sealantDetails를 빈 배열로 명시적으로 설정
-      const normalizedTreatmentData = treatmentData.map((row: any) => {
-        const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
-        return {
-          ...row,
-          sealantDetails: hasSealant ? (row.sealantDetails || []) : []
-        };
-      });
+      // 🔒 보안: 배열 데이터 검증 및 정규화 (autoSave와 동일한 검증 적용)
+      const normalizedTreatmentData = treatmentData
+        .slice(0, 10000) // 최대 10000개 행만 허용
+        .map((row: any) => {
+          if (!row || typeof row !== 'object') {
+            return {
+              patientName: '',
+              startTime: '',
+              roomNumber: '',
+              services: [],
+              explanation: '',
+              showServices: false,
+              sealantDetails: []
+            };
+          }
+          
+          const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
+          
+          // sealantDetails 검증 및 정규화
+          let safeSealantDetails: any[] = [];
+          if (hasSealant && Array.isArray(row.sealantDetails)) {
+            safeSealantDetails = row.sealantDetails
+              .slice(0, 100) // 최대 100개만 허용
+              .map((detail: any) => {
+                if (!detail || typeof detail !== 'object') {
+                  return {
+                    ptName: row.patientName || '',
+                    chartNumber: '',
+                    dob: '',
+                    toothNumber: '',
+                    redo: '',
+                    acctType: '',
+                    payable: '',
+                    dxDr: '',
+                    drAmount: '',
+                    rdaAmount: ''
+                  };
+                }
+                return {
+                  ptName: String(detail.ptName || '').substring(0, 100).replace(/[<>\"']/g, ''),
+                  chartNumber: String(detail.chartNumber || '').substring(0, 50).replace(/[<>\"']/g, ''),
+                  dob: String(detail.dob || '').substring(0, 20).replace(/[<>\"']/g, ''),
+                  toothNumber: String(detail.toothNumber || '').substring(0, 10).replace(/[<>\"']/g, ''),
+                  redo: String(detail.redo || '').substring(0, 10).replace(/[<>\"']/g, ''),
+                  acctType: String(detail.acctType || '').substring(0, 10).replace(/[<>\"']/g, ''),
+                  payable: String(detail.payable || '').substring(0, 10).replace(/[<>\"']/g, ''),
+                  dxDr: String(detail.dxDr || '').substring(0, 50).replace(/[<>\"']/g, ''),
+                  drAmount: sanitizeAmount(String(detail.drAmount || '')),
+                  rdaAmount: sanitizeAmount(String(detail.rdaAmount || ''))
+                };
+              });
+          }
+          
+          return {
+            patientName: String(row.patientName || '').substring(0, 100).replace(/[<>\"']/g, ''),
+            startTime: String(row.startTime || '').substring(0, 10).replace(/[<>\"']/g, ''),
+            roomNumber: String(row.roomNumber || '').substring(0, 10).replace(/[<>\"']/g, ''),
+            services: Array.isArray(row.services) 
+              ? row.services
+                  .filter((s: any) => typeof s === 'string' && SERVICE_OPTIONS.includes(s))
+                  .slice(0, 50)
+              : [],
+            explanation: String(row.explanation || '').substring(0, 500).replace(/[<>\"']/g, ''),
+            showServices: Boolean(row.showServices),
+            sealantDetails: safeSealantDetails
+          };
+        });
       
       const formData = {
-        office: office.trim(),
-        rdaName: rdaName.trim(),
-        date: date, // 이미 캘리포니아 시간대로 설정된 날짜
+        office: office.trim().substring(0, 10),
+        rdaName: rdaName.trim().substring(0, 50),
+        date: date.trim().substring(0, 20),
         treatmentData: normalizedTreatmentData,
         createdAt: pacificDateTime.toISOString(),
         lastUpdated: pacificDateTime.toISOString()
       };
 
-      // 데이터 검증
-      const sanitizedData = sanitizeFirebaseDataClient(formData);
-      
+      // 🔒 보안: 데이터 저장 전 검증 및 sanitization
+      const sanitizedFormData = sanitizeDataForFirebase(formData);
+
       // autoSave와 동일한 문서 ID 사용 (중복 저장 방지)
       const docId = createSafeDocId(date, office, rdaName);
       
       // Firebase에 저장 (setDoc 사용으로 기존 문서 업데이트)
       const finalData = {
-        ...sanitizedData,
+        ...sanitizedFormData,
         lastUpdated: new Date(),
         submitted: true
       };
@@ -2233,9 +2430,10 @@ export default function RDATreatmentSheetSystem() {
         return initialData;
       });
       
-    } catch (error) {
-      // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-      alert('error');
+    } catch (error: any) {
+      // 🔒 보안: 프로덕션에서는 상세한 에러 정보를 노출하지 않음
+      console.error('Submit error:', error);
+      alert('Submission failed. Please check your data and try again.');
     } finally {
       setLoading(false);
     }
@@ -2501,17 +2699,6 @@ export default function RDATreatmentSheetSystem() {
     };
   }, []);
 
-  // 보안 조치 활성화
-  useEffect(() => {
-    enableAllSecurityMeasures({
-      disableConsole: true,
-      disableRightClick: true,
-      disableShortcuts: true,
-      disableCopy: false,
-      disableSelection: false,
-      monitorDevTools: true
-    });
-  }, []);
 
   // 스타일 정의
   const bodyStyle: React.CSSProperties = {
