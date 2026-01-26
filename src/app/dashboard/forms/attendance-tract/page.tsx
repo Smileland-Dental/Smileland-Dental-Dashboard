@@ -1,9 +1,11 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { db } from '@/lib/firebase.config';
+import { db, auth } from '@/lib/firebase.config';
 import { doc, setDoc, getDoc, Timestamp, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 interface StaffMember {
   no: number;
@@ -61,6 +63,7 @@ export default function AttendanceTrack() {
     staffData: [],
     doctorData: []
   });
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
 
   // 마지막 저장된 데이터 추적 (자동 저장 최적화용)
   const lastSavedDataRef = useRef<string>('');
@@ -97,7 +100,7 @@ export default function AttendanceTrack() {
 
   // 🔒 보안: 오피스 값 검증
   const validateOffice = (office: string): boolean => {
-    const allowedOffices = ['Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
+    const allowedOffices = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
     return allowedOffices.includes(office);
   };
 
@@ -112,6 +115,184 @@ export default function AttendanceTrack() {
     const allowedIncidents = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'];
     return allowedIncidents.includes(incident);
   };
+
+  // --- PDF 생성 관련 상수/스타일 ---
+  const pdfStyles = StyleSheet.create({
+    page: { padding: 20, fontFamily: 'Helvetica', fontSize: 7 },
+    header: { marginBottom: 10, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 6, alignItems: 'center' },
+    headerTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
+    headerSub: { fontSize: 8 },
+    headerInfo: { fontSize: 7, marginBottom: 8, textAlign: 'center' },
+    row: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
+    cell: { padding: 2, fontSize: 6, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    cellBold: { fontWeight: 'bold', backgroundColor: '#e3f2fd' },
+    cellGray: { backgroundColor: '#fce4ec', fontWeight: 'bold' },
+    footer: { marginTop: 15, paddingTop: 8, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 7, color: '#666' },
+    dailyRecap: { textAlign: 'right', fontSize: 10, fontWeight: 'bold', marginTop: 4, marginBottom: 8 },
+  });
+
+  // PDF 생성 유틸 함수
+  function safeStr(v: unknown, max: number): string {
+    if (v == null) return '';
+    return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+  }
+
+  function isChecked(v: unknown): boolean {
+    return v === true || v === 1 || (typeof v === 'string' && (v === 'true' || v === '1'));
+  }
+
+  // 시간 형식 변환 (HH:MM -> H:MM AM/PM)
+  function formatTimeToAMPM(timeStr: string): string {
+    if (!timeStr || typeof timeStr !== 'string' || timeStr.trim() === '') return '';
+    if (timeStr.length > 10) return '';
+    const timeMatch = timeStr.match(/^(\d{1,2}):(\d{2})$/);
+    if (!timeMatch) return safeStr(timeStr, 10);
+    let hour = parseInt(timeMatch[1], 10);
+    const minute = timeMatch[2];
+    if (isNaN(hour) || hour < 0 || hour > 23) return safeStr(timeStr, 10);
+    if (!/^\d{2}$/.test(minute) || parseInt(minute, 10) < 0 || parseInt(minute, 10) > 59) return safeStr(timeStr, 10);
+    const period = hour >= 12 ? 'PM' : 'AM';
+    if (hour === 0) hour = 12;
+    else if (hour > 12) hour = hour - 12;
+    return `${hour}:${minute} ${period}`;
+  }
+
+  function createAttendancePDFDocument(props: {
+    safeDate: string;
+    safeOffice: string;
+    safeFilledBy: string;
+    safeCheckedBy: string;
+    staffData: AttendanceRow[];
+    doctorData: DoctorRow[];
+    generatedDate: string;
+  }) {
+    const { safeDate, safeOffice, safeFilledBy, safeCheckedBy, staffData, doctorData, generatedDate } = props;
+    const s = pdfStyles;
+
+    // Position별 그룹핑
+    const staffByPosition: { [key: string]: AttendanceRow[] } = {};
+    staffData.forEach(row => {
+      let pos = row.position || '';
+      if (!validatePosition(pos) && pos !== 'Dental Assistant') {
+        pos = '';
+      }
+      if (pos === 'Dental Assistant') pos = 'DA';
+      if (!staffByPosition[pos]) staffByPosition[pos] = [];
+      staffByPosition[pos].push(row);
+    });
+
+    // Staff 테이블 헤더
+    const staffHeaderRow = React.createElement(View, { key: 'staff-header', style: [s.row, s.cellBold] },
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Name')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Present')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Start Shift Tardy (Min)')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Late from Lunch (Min)')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Needs Clock Adj.')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Overtime')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'OT Corp Authorized By')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Sub. at Another Office')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Incident Description')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Notes')),
+    );
+
+    // Staff 테이블 데이터 행
+    const staffRows: React.ReactElement[] = [];
+    Object.keys(staffByPosition).forEach(pos => {
+      const rows = staffByPosition[pos];
+      const presentCount = rows.filter(r => r.present === true).length;
+      
+      // Position 구분 행
+      staffRows.push(
+        React.createElement(View, { key: `pos-${pos}`, style: [s.row, s.cellGray] },
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, pos)),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, String(presentCount))),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+          React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+        )
+      );
+      
+      // 직원 행
+      rows.forEach((row, idx) => {
+        const safeName = safeStr(row.name, 100);
+        if (safeName && safeName.trim()) {
+          staffRows.push(
+            React.createElement(View, { key: `staff-${pos}-${idx}`, style: s.row },
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, safeName)),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, isChecked(row.present) ? 'O' : '')),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, safeStr(row.startTardy, 50))),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, safeStr(row.lateLunch, 50))),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, isChecked(row.needsAdj) ? 'O' : '')),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, safeStr(row.overtime, 50))),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, safeStr(row.otCorp, 50))),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, isChecked(row.subAnother) ? 'O' : '')),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, safeStr(row.incident, 50))),
+              React.createElement(View, { style: s.cell }, React.createElement(Text, null, safeStr(row.notes, 500))),
+            )
+          );
+        }
+      });
+    });
+
+    // Doctor 테이블 헤더
+    const doctorPresentCount = doctorData.filter(d => d.present === true).length;
+    const doctorHeaderRow1 = React.createElement(View, { key: 'doctor-header-1', style: [s.row, s.cellBold] },
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Name')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Present')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Check In')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Lunch Out')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Lunch In')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Check Out')),
+    );
+    const doctorHeaderRow2 = React.createElement(View, { key: 'doctor-header-2', style: [s.row, s.cellGray] },
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, 'Doctor')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, String(doctorPresentCount))),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+    );
+
+    // Doctor 테이블 데이터 행
+    const doctorRows = doctorData.map((row, idx) => {
+      const safeName = safeStr(row.name, 100);
+      if (!safeName || !safeName.trim()) return null;
+      return React.createElement(View, { key: `doctor-${idx}`, style: s.row },
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, safeName)),
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, isChecked(row.present) ? 'O' : '')),
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, formatTimeToAMPM(safeStr(row.checkIn, 10)))),
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, formatTimeToAMPM(safeStr(row.lunchOut, 10)))),
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, formatTimeToAMPM(safeStr(row.lunchIn, 10)))),
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, formatTimeToAMPM(safeStr(row.checkOut, 10)))),
+      );
+    }).filter(Boolean) as React.ReactElement[];
+
+    // Daily Recap 계산
+    let totalStaffPresent = 0;
+    Object.keys(staffByPosition).forEach(pos => {
+      totalStaffPresent += staffByPosition[pos].filter(r => r.present === true).length;
+    });
+    const totalPresent = totalStaffPresent + doctorPresentCount;
+
+    const header = React.createElement(View, { style: s.header },
+      React.createElement(Text, { style: s.headerTitle }, `${safeOffice} Attendance Tract`),
+      React.createElement(Text, { style: s.headerSub }, `Date: ${safeDate} | Filled Out By: ${safeFilledBy} | Management that Checked Times Today on Time Clock: ${safeCheckedBy}`),
+    );
+
+    const staffTable = React.createElement(View, { key: 'staff-table' }, staffHeaderRow, ...staffRows);
+    const doctorTable = React.createElement(View, { key: 'doctor-table', style: { marginTop: 10 } }, doctorHeaderRow1, doctorHeaderRow2, ...doctorRows);
+    const dailyRecap = React.createElement(View, { style: s.dailyRecap }, React.createElement(Text, null, `Daily Recap: ${totalPresent}`));
+    const footer = React.createElement(View, { style: s.footer }, React.createElement(Text, null, `Generated: ${generatedDate}`));
+
+    return React.createElement(Document, null,
+      React.createElement(Page, { size: 'LETTER', orientation: 'landscape', style: s.page }, header, staffTable, doctorTable, dailyRecap, footer),
+    );
+  }
 
   // 날짜 상태 (캘리포니아 시간대)
   const [trackDate, setTrackDate] = useState(() => {
@@ -164,7 +345,7 @@ export default function AttendanceTrack() {
   }>>([]);
 
   // Office 옵션
-  const officeOptions = ['Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
+  const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
   const incidentOptions = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'];
 
   // 오피스 선택 핸들러 (비밀번호 확인 포함)
@@ -500,13 +681,11 @@ export default function AttendanceTrack() {
     
     // 🔒 보안: 날짜 형식 검증
     if (!validateDate(date)) {
-      console.error('Invalid date format:', date);
       return;
     }
 
     // 🔒 보안: 오피스 값 검증
     if (!validateOffice(selectedOffice)) {
-      console.error('Invalid office value:', selectedOffice);
       return;
     }
     
@@ -588,7 +767,6 @@ export default function AttendanceTrack() {
         lastSavedDataRef.current = '';
       }
     } catch (error) {
-      console.error('Error loading attendance data:', error);
       // 🔒 보안: 상세한 에러 메시지 노출 최소화
       alert('Error loading attendance data. Please try again.');
     } finally {
@@ -718,7 +896,6 @@ export default function AttendanceTrack() {
       lastSavedDataRef.current = JSON.stringify({ tableRows, doctorRows, filledBy, checkedBy });
       
     } catch (error) {
-      console.error('Error saving attendance data:', error);
       if (!silent) {
         // 🔒 보안: 상세한 에러 메시지 노출 최소화
         alert('Error saving attendance data. Please try again.');
@@ -763,13 +940,13 @@ export default function AttendanceTrack() {
       const safeCheckedBy = validateInput(checkedBy, 100);
       
       // 🔒 보안: Rate limiting - API 호출은 최소 5초 간격
-      const now = Date.now();
-      if (now - lastApiCallTimeRef.current < 5000) {
+      const currentTime = Date.now();
+      if (currentTime - lastApiCallTimeRef.current < 5000) {
         alert('Please wait a moment before submitting again.');
         setLoading(false);
         return;
       }
-      lastApiCallTimeRef.current = now;
+      lastApiCallTimeRef.current = currentTime;
 
       // 1. 현재 테이블 데이터를 Firestore에 저장 (입력 검증 포함)
       const staffData: AttendanceRow[] = tableRows.map(row => {
@@ -833,43 +1010,48 @@ export default function AttendanceTrack() {
         createdAt: Timestamp.now()
       });
 
-      // 2. PDF 생성
-      const response = await fetch('/api/generate-attendance-pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          date: trackDate,
-          office: selectedOffice,
-          filledBy: safeFilledBy,
-          checkedBy: safeCheckedBy,
-          staffData,
-          doctorData
-        }),
+      // 2. PDF 생성 (client-side)
+      const currentDate = new Date();
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
       });
+      const generatedDate = formatter.format(currentDate);
 
-      if (response.ok) {
-        // PDF blob 받기
-        const blob = await response.blob();
-        
-        if (!blob || blob.size === 0) {
-          throw new Error('PDF blob is empty');
+      // 🔒 보안: 파일명 및 경로 검증 (특수문자 제거)
+      const safeDate = trackDate.replace(/[^a-zA-Z0-9_-]/g, '');
+      const safeOffice = selectedOffice.replace(/[^a-zA-Z0-9_-]/g, '');
+
+      try {
+        const pdfBuffer = await pdf(createAttendancePDFDocument({
+          safeDate: trackDate,
+          safeOffice: selectedOffice,
+          safeFilledBy,
+          safeCheckedBy,
+          staffData,
+          doctorData,
+          generatedDate,
+        })).toBlob();
+
+        if (!pdfBuffer || pdfBuffer.size === 0) {
+          throw new Error('PDF is empty');
         }
-        
+
         // PDF를 Firebase Storage에 저장
         try {
           const storage = getStorage();
-          
-          // 🔒 보안: 파일명 및 경로 검증 (특수문자 제거)
-          const safeDate = trackDate.replace(/[^a-zA-Z0-9_-]/g, '');
-          const safeOffice = selectedOffice.replace(/[^a-zA-Z0-9_-]/g, '');
           const filename = `3) ${safeDate}_${safeOffice}_Attendance Tract.pdf`;
           const safeStoragePath = `endofday-pdfs/${safeOffice}/${safeDate}/${filename}`.replace(/[^a-zA-Z0-9_/.-]/g, '');
           const storageRef = ref(storage, safeStoragePath);
           
           // PDF 업로드
-          await uploadBytes(storageRef, blob);
+          await uploadBytes(storageRef, pdfBuffer);
           
           // 다운로드 URL 가져오기
           const downloadUrl = await getDownloadURL(storageRef);
@@ -887,29 +1069,14 @@ export default function AttendanceTrack() {
           });
           
         } catch (storageError: any) {
-          console.error('Storage error:', storageError);
           const errorMsg = storageError?.message || '알 수 없는 오류';
-          throw new Error(`PDF 저장 중 오류가 발생했습니다: ${errorMsg}`);
+          throw new Error(`An error occurred while submitting. Please try again.: ${errorMsg}`);
         }
-      } else {
-        // 에러 처리
-        let errorMessage = 'PDF generation failed';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch {
-          try {
-            const errorText = await response.text();
-            errorMessage = errorText || errorMessage;
-          } catch (e) {
-            errorMessage = `Status: ${response.status}`;
-          }
-        }
-        console.error('PDF generation failed:', response.status, errorMessage);
-        throw new Error(`PDF generation failed: ${response.status} - ${errorMessage}`);
+      } catch (pdfError: any) {
+        throw new Error(`An error occurred while submitting. Please try again.: ${pdfError?.message || 'Unknown error'}`);
       }
 
-      alert('PDF generated and saved successfully to End of Day!');
+      alert('Complete!');
       
       // 3. database에서 attendance-data 삭제
       // 🔒 보안: 문서 ID 검증 (위에서 선언한 safeDocId 재사용)
@@ -941,9 +1108,8 @@ export default function AttendanceTrack() {
       // 자동 저장 useEffect의 초기 로드 로직이 1초 후에 현재 상태를 lastSavedDataRef에 저장함
       // 따라서 별도로 lastSavedDataRef를 업데이트할 필요 없음
     } catch (error) {
-      console.error('Error submitting:', error);
       // 🔒 보안: 상세한 에러 메시지 노출 최소화
-      alert('Error submitting. Please try again.');
+      alert('An error occurred while submitting. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -988,7 +1154,6 @@ export default function AttendanceTrack() {
         setTableRows([]);
       }
     }, (error) => {
-      console.error('Error listening to staff list:', error);
       alert('Error loading staff list. Please try again.');
     });
     
@@ -1044,6 +1209,96 @@ export default function AttendanceTrack() {
 
     return () => clearTimeout(timer);
   }, [tableRows, doctorRows, filledBy, checkedBy, trackDate, selectedOffice, officePasswordVerified, saveAttendanceData]);
+
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
+  useEffect(() => {
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in');
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'manager') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          // 다른 페이지로 리다이렉트하거나 홈으로 이동
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+      } catch (error: any) {
+        alert('An error occurred while verifying authentication.');
+        setIsAuthorized(false);
+      }
+    });
+
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
+  if (isAuthorized === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+        fontFamily: 'Arial, sans-serif'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
+          <div style={{ fontSize: '18px', color: '#333' }}>Verifying authentication…</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+        fontFamily: 'Arial, sans-serif'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
+          <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
