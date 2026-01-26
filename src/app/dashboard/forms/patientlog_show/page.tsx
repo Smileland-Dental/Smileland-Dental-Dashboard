@@ -2,27 +2,120 @@
 
 import React, { useState, useEffect, useRef } from "react";
 import { doc, setDoc, collection, getDocs, getDoc, updateDoc, deleteDoc, query, where } from "firebase/firestore";
-import { db } from "@/lib/firebase.config";
-import { 
-  enableAllSecurityMeasures, 
-  sanitizeFirebaseDataClient, 
-  sanitizeFirebaseDocIdClient,
-  secureFetch,
-  checkAuthState,
-  getCurrentUser
-} from "@/lib/security-client";
+import { db, auth } from "@/lib/firebase.config";
+import { onAuthStateChanged } from 'firebase/auth';
+// Firebase Storage
+import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
+
+// Firebase 데이터 sanitize 함수 (강화된 버전)
+function sanitizeFirebaseDataClient(data: any, depth: number = 0): any {
+  // 깊이 제한 (순환 참조 및 깊은 중첩 방지)
+  if (depth > 20) return null;
+  
+  // 기본적인 데이터 검증
+  if (data === null || data === undefined) return null;
+  
+  // 원시 타입 처리
+  if (typeof data !== 'object') {
+    // 문자열인 경우 길이 제한 및 특수 문자 제거
+    if (typeof data === 'string') {
+      // Firebase 문자열 필드 최대 크기: 1MB (안전하게 900KB로 제한)
+      if (data.length > 900 * 1024) {
+        return data.slice(0, 900 * 1024);
+      }
+      // 위험한 문자 제거 (XSS 방지)
+      return data.replace(/[\x00-\x1F\x7F-\x9F]/g, '').trim();
+    }
+    // 숫자, 불린 등은 그대로 반환
+    if (typeof data === 'number' && (isNaN(data) || !isFinite(data))) {
+      return 0;
+    }
+    return data;
+  }
+  
+  // 배열 처리
+  if (Array.isArray(data)) {
+    // 배열 크기 제한 (Firebase 제한 고려)
+    if (data.length > 10000) {
+      return data.slice(0, 10000).map(item => sanitizeFirebaseDataClient(item, depth + 1));
+    }
+    return data.map(item => sanitizeFirebaseDataClient(item, depth + 1));
+  }
+  
+  // 객체 처리
+  const sanitized: any = {};
+  let keyCount = 0;
+  const maxKeys = 1000; // Firebase 문서 필드 수 제한 고려
+  
+  for (const key in data) {
+    if (Object.prototype.hasOwnProperty.call(data, key)) {
+      // 키 개수 제한
+      if (keyCount >= maxKeys) break;
+      
+      // 키 길이 제한 (Firebase 제한)
+      if (key.length > 1500 || key.length === 0) continue;
+      
+      // 키에 허용되지 않은 문자 제거
+      const safeKey = key.replace(/[.$[\]#\/]/g, '_').slice(0, 1500);
+      
+      // 값 sanitize
+      sanitized[safeKey] = sanitizeFirebaseDataClient(data[key], depth + 1);
+      keyCount++;
+    }
+  }
+  
+  return sanitized;
+}
+
+// Firebase Document ID sanitize 함수
+function sanitizeFirebaseDocIdClient(docId: string): string {
+  // Firebase Document ID 제한: 1-1500자, 특수문자 제한
+  return docId
+    .replace(/[\/\s]/g, '_') // 슬래시와 공백을 언더스코어로
+    .replace(/[^a-zA-Z0-9_-]/g, '') // 허용된 문자만 유지
+    .slice(0, 1500); // 길이 제한
+}
 
 export default function ShowCheckSystem() {
-  // 보안 조치 활성화
-  useEffect(() => {
-    enableAllSecurityMeasures({
-      disableConsole: true,
-      disableRightClick: true,
-      disableShortcuts: true,
-      disableCopy: false,
-      disableSelection: false,
-      monitorDevTools: false
-    });
+  // 입력 값 검증 함수
+  const validateInput = React.useCallback((field: string, value: any): any => {
+    // 문자열 필드 길이 제한
+    if (typeof value === 'string') {
+      const maxLengths: { [key: string]: number } = {
+        name: 100,
+        startDate: 20,
+        endDate: 20,
+        selectedOffice: 50
+      };
+      
+      const maxLength = maxLengths[field] || 500;
+      if (value.length > maxLength) {
+        return value.slice(0, maxLength);
+      }
+      
+      // 날짜 필드 형식 검증 (YYYY-MM-DD)
+      if ((field === 'startDate' || field === 'endDate') && value) {
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!dateRegex.test(value)) {
+          // 잘못된 형식이면 빈 문자열 반환
+          return '';
+        }
+      }
+      
+      // Office 값 whitelist 검증
+      if (field === 'selectedOffice' && value && value !== 'All') {
+        const validOffices = ['A', 'B', 'C', 'D'];
+        if (!validOffices.includes(value)) {
+          return '';
+        }
+      }
+      
+      // 제어 문자 제거 (XSS 방지)
+      return value.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+    }
+    
+    return value;
   }, []);
 
   // 상태 관리
@@ -37,20 +130,207 @@ export default function ShowCheckSystem() {
   const [pdfLoading, setPdfLoading] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+
+  // Rate limiting을 위한 ref
+  const lastUpdateStatusCall = useRef<number>(0);
+  const lastLoadAppointmentsCall = useRef<number>(0);
+  const lastGeneratePDFCall = useRef<number>(0);
+  const loadAppointmentsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Office 옵션
-  const officeOptions = ['All', 'Bernard', 'Call Center', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+  const officeOptions = ['All', 'A', 'B', 'C', 'D'];
 
-  // 컴포넌트 마운트 시 데이터 로드 (Firebase Auth 초기화 대기)
+  // --- PDF 생성 관련 상수/스타일 ---
+  const pdfStyles = StyleSheet.create({
+    page: { padding: 20, fontFamily: 'Helvetica', fontSize: 9 },
+    header: { marginBottom: 15, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 8, alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+    infoSection: { marginBottom: 15, padding: 8, borderWidth: 1, borderColor: '#ccc', flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap' },
+    infoItem: { fontSize: 8, marginBottom: 4 },
+    stats: { marginBottom: 15, padding: 8, borderWidth: 1, borderColor: '#ccc', backgroundColor: '#f9f9f9', flexDirection: 'row', justifyContent: 'center', gap: 30 },
+    statItem: { alignItems: 'center' },
+    statValue: { fontSize: 14, fontWeight: 'bold', marginBottom: 2 },
+    statLabel: { fontSize: 9, fontWeight: 'bold' },
+    table: { marginTop: 10 },
+    tableRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
+    tableHeader: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#333', backgroundColor: '#f0f0f0', fontWeight: 'bold' },
+    tableCell: { padding: 4, fontSize: 7, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    footer: { marginTop: 15, paddingTop: 8, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 8, color: '#666' },
+  });
+
+  // PDF 생성 유틸 함수
+  function safeStr(v: unknown, max: number): string {
+    if (v == null) return '';
+    return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+  }
+
+  // 시간을 12시간 형식으로 변환하는 함수
+  function convertTo12Hour(timeStr: string): string {
+    if (!timeStr || timeStr === '-') return '-';
+    try {
+      const [hours, minutes] = timeStr.split(':');
+      const hour = parseInt(hours);
+      const min = minutes || '00';
+      if (hour === 0) return `12:${min} AM`;
+      if (hour < 12) return `${hour}:${min} AM`;
+      if (hour === 12) return `12:${min} PM`;
+      return `${hour - 12}:${min} PM`;
+    } catch {
+      return timeStr;
+    }
+  }
+
+  function createShowCheckPDFDocument(props: {
+    safeStartDate: string;
+    safeEndDate: string;
+    safeSelectedOffice: string;
+    safeGeneratedBy: string;
+    safeAppointments: any[];
+    showCount: number;
+    noShowCount: number;
+    showRate: string;
+    generatedDate: string;
+  }) {
+    const { safeStartDate, safeEndDate, safeSelectedOffice, safeGeneratedBy, safeAppointments, showCount, noShowCount, showRate, generatedDate } = props;
+    const s = pdfStyles;
+
+    const dateRange = safeStartDate === safeEndDate ? safeStartDate : `${safeStartDate} to ${safeEndDate}`;
+
+    // 헤더
+    const header = React.createElement(View, { style: s.header },
+      React.createElement(Text, { style: s.headerTitle }, 'Attendance Show Check'),
+    );
+
+    // 정보 섹션
+    const infoSection = React.createElement(View, { style: s.infoSection },
+      React.createElement(Text, { style: s.infoItem }, `Appointment Date Range: ${dateRange}`),
+      React.createElement(Text, { style: s.infoItem }, `Appointment Office: ${safeSelectedOffice}`),
+      React.createElement(Text, { style: s.infoItem }, `Checked by: ${safeGeneratedBy}`),
+      React.createElement(Text, { style: s.infoItem }, `Total Appointments: ${safeAppointments.length}`),
+    );
+
+    // 통계 섹션
+    const stats = React.createElement(View, { style: s.stats },
+      React.createElement(View, { style: s.statItem },
+        React.createElement(Text, { style: s.statValue }, String(showCount)),
+        React.createElement(Text, { style: s.statLabel }, 'Show'),
+      ),
+      React.createElement(View, { style: s.statItem },
+        React.createElement(Text, { style: s.statValue }, String(noShowCount)),
+        React.createElement(Text, { style: s.statLabel }, 'No Show'),
+      ),
+      React.createElement(View, { style: s.statItem },
+        React.createElement(Text, { style: s.statValue }, `${showRate}%`),
+        React.createElement(Text, { style: s.statLabel }, 'Show Rate'),
+      ),
+    );
+
+    // 테이블 헤더
+    const tableHeader = React.createElement(View, { style: s.tableHeader },
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'No.')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Name')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Office')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Appt. Date')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Time')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Visit Type')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Status')),
+    );
+
+    // 테이블 데이터 행
+    const tableRows = safeAppointments.map((apt: any, index: number) => {
+      const safeName = safeStr(apt.name, 100);
+      const safeOffice = safeStr(apt.office, 50);
+      const safeApptDate = safeStr(apt.appt_date, 20);
+      const safeTime = safeStr(apt.time, 20);
+      const safeVisitType = safeStr(apt.visit_type, 50);
+      const safeShowStatus = apt.showStatus === 'show' ? 'Show' : 'No Show';
+
+      return React.createElement(View, { key: index, style: s.tableRow },
+        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, String(index + 1))),
+        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeName || '-')),
+        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeOffice || '-')),
+        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeApptDate || '-')),
+        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, convertTo12Hour(safeTime))),
+        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeVisitType || '-')),
+        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeShowStatus)),
+      );
+    });
+
+    // 테이블
+    const table = safeAppointments.length > 0
+      ? React.createElement(View, { style: s.table }, tableHeader, ...tableRows)
+      : React.createElement(View, { style: { padding: 40, alignItems: 'center' } },
+          React.createElement(Text, { style: { fontSize: 10, color: '#666' } }, 'No appointments found for the selected criteria.'),
+        );
+
+    // 푸터
+    const footer = React.createElement(View, { style: s.footer },
+      React.createElement(Text, null, `Generated: ${generatedDate}`),
+    );
+
+    return React.createElement(Document, null,
+      React.createElement(Page, { size: 'A4', orientation: 'portrait', style: s.page }, header, infoSection, stats, table, footer),
+    );
+  }
+
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
-    // Firebase Auth 초기화를 기다린 후 데이터 로드
-    const initAndLoad = async () => {
-      // 짧은 지연 후 로드 (Firebase Auth 초기화 시간 확보)
-      await new Promise(resolve => setTimeout(resolve, 100));
-      await loadAppointments();
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'admin') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          // 다른 페이지로 리다이렉트하거나 홈으로 이동
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+        
+        // 인증 성공 후 데이터 로드
+        await loadAppointments();
+      } catch (error: any) {
+        alert('error');
+        setIsAuthorized(false);
+      }
+    });
+
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+      // Rate limiting timeout 정리
+      if (loadAppointmentsTimeoutRef.current) {
+        clearTimeout(loadAppointmentsTimeoutRef.current);
+      }
     };
-    
-    initAndLoad();
   }, []);
 
   // 필터 변경 시 데이터 필터링
@@ -86,22 +366,27 @@ export default function ShowCheckSystem() {
     };
   }, [pdfLoading]);
 
-  // Firebase에서 모든 환자 로그 불러오기 (보안 강화)
+  // Firebase에서 모든 환자 로그 불러오기 (Rate limiting 적용)
   const loadAppointments = async () => {
     try {
-      // 인증 상태 확인 (보안 강화 - 초기화 대기 포함)
-      const isAuthenticated = await checkAuthState(true); // waitForInit = true
-      if (!isAuthenticated) {
-        // 알림을 표시하지 않고 조용히 실패 (새로고침 시 Firebase Auth 초기화 중일 수 있음)
-        // 사용자가 실제로 로그인하지 않은 경우에만 알림 표시
-        // Firebase Security Rules가 이미 접근을 제어하므로 여기서는 조용히 실패
+      // Rate limiting: 최근 1.5초 내 호출 방지
+      // (필터 변경 후 빠르게 새로고침할 수 있도록 허용하되, 과도한 호출 방지)
+      const now = Date.now();
+      if (now - lastLoadAppointmentsCall.current < 1500) {
+        return;
+      }
+      lastLoadAppointmentsCall.current = now;
+
+      // 인증 상태 확인
+      const currentUser = auth.currentUser;
+      
+      if (!currentUser) {
+        // Firebase Security Rules가 이미 접근을 제어하므로 조용히 실패
         return;
       }
 
-      // 현재 사용자 정보 가져오기
-      const currentUser = await getCurrentUser();
-      if (!currentUser) {
-        alert('⚠️ 사용자 정보를 가져올 수 없습니다. 로그인 상태를 확인해주세요.');
+      // 이미 로딩 중이면 중복 호출 방지
+      if (loading) {
         return;
       }
 
@@ -144,16 +429,29 @@ export default function ShowCheckSystem() {
         if (data.patientRows) {
           data.patientRows.forEach((row: any, index: number) => {
             if (row.appt_date && row.name) {
+              // 기본적인 데이터 sanitization (XSS 방지)
+              const sanitizedRow = {
+                name: typeof row.name === 'string' ? row.name.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '',
+                office: typeof row.office === 'string' ? row.office.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '',
+                appt_date: typeof row.appt_date === 'string' ? row.appt_date.slice(0, 20) : '',
+                visit_type: typeof row.visit_type === 'string' ? row.visit_type.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '',
+                time: typeof row.time === 'string' ? row.time.slice(0, 20) : '',
+                remark: typeof row.remark === 'string' ? row.remark.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 200) : '',
+                other_duty: typeof row.other_duty === 'string' ? row.other_duty.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 200) : '',
+                call_in: Boolean(row.call_in),
+                call_out: Boolean(row.call_out),
+                showStatus: (row.showStatus === 'show' || row.showStatus === 'no-show' || row.showStatus === 'pending') ? row.showStatus : 'pending'
+              };
+              
               allAppointments.push({
-            ...row,
-                docId: doc.id,
+                ...sanitizedRow,
+                docId: sanitizeFirebaseDocIdClient(doc.id),
                 rowIndex: index,
-                dutyDate: data.dutyDate,
-                userName: data.userName,
-                workOffice: data.workOffice,
-                workHoursFrom: data.workHoursFrom,
-                workHoursTo: data.workHoursTo,
-                showStatus: row.showStatus || 'pending' // pending, show, no-show
+                dutyDate: typeof data.dutyDate === 'string' ? data.dutyDate.slice(0, 50) : '',
+                userName: typeof data.userName === 'string' ? data.userName.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '',
+                workOffice: typeof data.workOffice === 'string' ? data.workOffice.slice(0, 50) : '',
+                workHoursFrom: typeof data.workHoursFrom === 'string' ? data.workHoursFrom.slice(0, 20) : '',
+                workHoursTo: typeof data.workHoursTo === 'string' ? data.workHoursTo.slice(0, 20) : ''
               });
             }
           });
@@ -163,11 +461,8 @@ export default function ShowCheckSystem() {
       setAppointments(allAppointments);
       appointmentsRef.current = allAppointments;
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Error loading appointments:", error);
-      }
-      alert('❌ 데이터 로드 중 오류가 발생했습니다.');
+      // 로그 제거 (보안 강화)
+      alert('error');
     } finally {
       setLoading(false);
     }
@@ -195,20 +490,41 @@ export default function ShowCheckSystem() {
     setFilteredAppointments(filtered);
   };
 
-  // Show/No Show 상태 업데이트 (보안 강화)
+  // Show/No Show 상태 업데이트 (Rate limiting 적용)
   const updateShowStatus = async (appointment: any, newStatus: string) => {
     try {
-      // 인증 상태 확인 (보안 강화)
-      const isAuthenticated = await checkAuthState();
-      if (!isAuthenticated) {
-        alert('⚠️ 로그인이 필요합니다. 로그인 후 다시 시도해주세요.');
+      // Rate limiting: 최근 800ms 내 동일한 appointment에 대한 호출 방지
+      // (같은 appointment를 실수로 빠르게 여러 번 클릭하는 것 방지)
+      const now = Date.now();
+      const appointmentKey = `${appointment.docId}-${appointment.rowIndex}`;
+      const lastCallKey = `lastUpdate_${appointmentKey}`;
+      
+      // 로컬 스토리지에 마지막 호출 시간 저장 (브라우저 재시작 시 초기화됨)
+      const lastCall = (window as any)[lastCallKey] || 0;
+      if (now - lastCall < 800) {
+        return; // 800ms 내 중복 호출 방지
+      }
+      (window as any)[lastCallKey] = now;
+
+      // 전역 rate limiting: 모든 업데이트에 대해 300ms 제한
+      // (여러 appointment를 빠르게 업데이트할 수 있도록 허용하되, 과도한 호출 방지)
+      if (now - lastUpdateStatusCall.current < 300) {
         return;
       }
+      lastUpdateStatusCall.current = now;
 
-      // 현재 사용자 정보 가져오기
-      const currentUser = await getCurrentUser();
+      // 상태 값 whitelist 검증 (show, no-show, pending만 허용)
+      const validStatuses = ['show', 'no-show', 'pending'];
+      if (!validStatuses.includes(newStatus)) {
+        alert('⚠️ Invalid value.');
+        return;
+      }
+      
+      // 인증 상태 확인
+      const currentUser = auth.currentUser;
+      
       if (!currentUser) {
-        alert('⚠️ 사용자 정보를 가져올 수 없습니다. 로그인 상태를 확인해주세요.');
+        alert('⚠️ Please log in.');
         return;
       }
 
@@ -226,7 +542,7 @@ export default function ShowCheckSystem() {
       
       // 보안 강화: 데이터 소유권 확인
       if (currentData && currentData.userId && currentData.userId !== currentUser.uid) {
-        alert('⚠️ 권한이 없습니다. 다른 사용자의 데이터를 수정할 수 없습니다.');
+        alert('⚠️ You do not have access to this page.');
         return;
       }
       
@@ -286,22 +602,30 @@ export default function ShowCheckSystem() {
           return updated;
         });
         
-        // Production에서는 로깅 비활성화
-        if (process.env.NODE_ENV !== 'production') {
-          console.log(`✅ ${appointment.name}의 상태가 ${newStatus}로 업데이트되었습니다.`);
-        }
+        // 로그 제거 (보안 강화)
       }
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Error updating show status:", error);
-      }
-      alert('❌ 상태 업데이트 중 오류가 발생했습니다.');
+      // 로그 제거 (보안 강화)
+      alert('error');
     }
   };
 
-  // PDF 생성 및 제출 (보안 강화)
+  // PDF 생성 및 제출 (보안 강화 + Rate limiting)
   const handleGeneratePDF = async () => {
+    // Rate limiting: 최근 3초 내 호출 방지 (PDF 생성은 무거운 작업)
+    // (실수로 두 번 클릭하는 것을 방지하되, 사용자 경험을 해치지 않도록)
+    const now = Date.now();
+    if (now - lastGeneratePDFCall.current < 3000) {
+      alert('⚠️ Please try again.');
+      return;
+    }
+    lastGeneratePDFCall.current = now;
+
+    // 이미 PDF 생성 중이면 중복 호출 방지
+    if (pdfLoading) {
+      return;
+    }
+
     if (filteredAppointments.length === 0) {
       alert('⚠️ No appointments to generate PDF.');
       return;
@@ -320,33 +644,19 @@ export default function ShowCheckSystem() {
       return;
     }
 
-    // 인증 상태 확인 (보안 강화)
-    const isAuthenticated = await checkAuthState();
-    if (!isAuthenticated) {
-      alert('⚠️ 로그인이 필요합니다. 로그인 후 다시 시도해주세요.');
-      return;
-    }
-
-    // 현재 사용자 정보 가져오기 (토큰 갱신 포함)
-    const currentUser = await getCurrentUser();
+    // 인증 상태 확인
+    const currentUser = auth.currentUser;
+    
     if (!currentUser) {
-      alert('⚠️ 사용자 정보를 가져올 수 없습니다. 로그인 상태를 확인해주세요.');
+      alert('⚠️ Please log in again.');
       return;
     }
     
     // 토큰 미리 갱신 (서버 요청 전에 토큰이 최신인지 확인)
     try {
-      const { getAuth } = await import('firebase/auth');
-      const auth = getAuth();
-      if (auth.currentUser) {
-        // 토큰을 미리 갱신하여 최신 상태로 유지
-        await auth.currentUser.getIdToken(true);
-      }
+      await currentUser.getIdToken(true);
     } catch (tokenError) {
-      // 토큰 갱신 실패는 무시 (secureFetch에서 재시도할 것)
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('Token refresh warning:', tokenError);
-      }
+      // 토큰 갱신 실패는 무시 (로그 제거)
     }
 
     try {
@@ -355,7 +665,7 @@ export default function ShowCheckSystem() {
       setProgress(10);
 
       // PDF용 데이터 준비
-      setSubmitStatus('Generating PDF...');
+      setSubmitStatus('Processing...');
       setProgress(30);
       
       // 최신 appointments state를 기반으로 필터링 (클로저 문제 방지)
@@ -388,480 +698,135 @@ export default function ShowCheckSystem() {
       
       // PDF 생성 전에 데이터가 있는지 확인
       if (appointmentsForPdf.length === 0) {
-        alert('⚠️ PDF에 포함할 appointment가 없습니다. Show 또는 No Show를 선택한 appointment가 필요합니다.');
+        alert('⚠️ Please select show or no show.');
         setPdfLoading(false);
         setSubmitStatus('');
         setProgress(0);
         return;
       }
       
-      const pdfData = {
-        startDate,
-        endDate,
-        selectedOffice: selectedOffice || 'All Offices',
-        appointments: appointmentsForPdf,
-        generatedBy: name || 'Supervisor',
-        timestamp: new Date().toISOString(),
-        // 보안 강화: 사용자 정보 추가
-        userId: currentUser.uid,
-        ...(currentUser.email && { userEmail: currentUser.email })
-      };
+      // 통계 계산
+      const showCount = appointmentsForPdf.filter(apt => apt.showStatus === 'show').length;
+      const noShowCount = appointmentsForPdf.filter(apt => apt.showStatus === 'no-show').length;
+      const showRate = appointmentsForPdf.length > 0 ? ((showCount / (showCount + noShowCount)) * 100).toFixed(1) : '0';
 
-      // API로 PDF 생성 (보안 강화 - secureFetch 사용, 인증 필수)
-      let response: Response;
+      // 생성 날짜 포맷팅
+      const currentDate = new Date();
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+      const generatedDate = formatter.format(currentDate);
+
+      // 데이터 검증 및 sanitization
+      const safeStartDate = startDate.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
+      const safeEndDate = endDate.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20);
+      const safeSelectedOffice = (selectedOffice || 'All').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 100);
+      const safeGeneratedBy = (name || 'Supervisor').replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100);
+
+      // PDF 생성 (client-side)
+      setSubmitStatus('Processing...');
+      setProgress(60);
+      
       try {
-        // 인증 상태 재확인 (요청 전)
-        const isAuthReady = await checkAuthState(true);
-        if (!isAuthReady) {
-          throw new Error('인증이 필요합니다. 로그인 후 다시 시도해주세요.');
-        }
-        
-        // 토큰 미리 갱신 (요청 전에 최신 토큰 확보)
-        const { getAuth } = await import('firebase/auth');
-        const auth = getAuth();
-        if (auth.currentUser) {
-          await auth.currentUser.getIdToken(true); // 강제 갱신
-        }
-        
-        response = await secureFetch('/api/generate-show-check-pdf', {
-          method: 'POST',
-          body: JSON.stringify({ showCheckData: pdfData }),
-        }, true); // requireAuth = true
-      } catch (fetchError: any) {
-        // secureFetch 자체에서 발생한 에러 (인증 실패 등)
-        const errorMsg = fetchError.message || '요청 전송 중 오류가 발생했습니다.';
-        
-        // 인증 관련 에러인지 확인
-        if (errorMsg.includes('Authentication') || 
-            errorMsg.includes('token') || 
-            errorMsg.includes('인증') ||
-            errorMsg.includes('로그인')) {
-          // 인증 에러인 경우 재시도 로직으로 넘어가도록 특별 처리
-          // response 객체를 생성하여 401 상태로 처리
-          response = new Response(
-            JSON.stringify({ 
-              success: false, 
-              error: '인증이 필요합니다. 로그인 후 다시 시도해주세요.' 
-            }),
-            { 
-              status: 401,
-              statusText: 'Unauthorized',
-              headers: { 'Content-Type': 'application/json' }
-            }
-          );
-        } else {
-          // 인증이 아닌 다른 에러
-          throw new Error(errorMsg);
-        }
-      }
+        const pdfBlob = await pdf(createShowCheckPDFDocument({
+          safeStartDate: startDate,
+          safeEndDate: endDate,
+          safeSelectedOffice: selectedOffice || 'All',
+          safeGeneratedBy,
+          safeAppointments: appointmentsForPdf,
+          showCount,
+          noShowCount,
+          showRate,
+          generatedDate,
+        })).toBlob();
 
-      if (response.ok) {
-        // HTML 받기
-        setSubmitStatus('Opening print view...');
-        setProgress(60);
-        const htmlContent = await response.text();
+        if (!pdfBlob || pdfBlob.size === 0) {
+          throw new Error('error');
+        }
         
-        setSubmitStatus('Complete!');
-        setProgress(100);
+        // 파일명 생성 (강화된 검증)
+        const safeDateRange = startDate === endDate 
+          ? startDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50)
+          : `${startDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50)}_to_${endDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50)}`;
+        const safeOfficeName = (selectedOffice || 'All_Offices').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+        const filename = `${safeDateRange}_${safeOfficeName}_Show Check.pdf`.slice(0, 255);
+        // 제출 날짜(현재 날짜)를 폴더 이름으로 사용
+        const submissionDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD 형식
+        const date = submissionDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50); // 저장 경로에 사용할 날짜 (제출 날짜 사용)
+        const office = 'Appointment Show'; // 저장 경로의 office는 "Appointment Show"로 고정
         
-        // 새 창에서 HTML 열기 (인쇄 대화상자가 자동으로 열림)
-        const printWindow = window.open('', '_blank');
-        if (printWindow) {
-          printWindow.document.write(htmlContent);
-          printWindow.document.close();
+        // Firebase에 자동 저장
+        setSubmitStatus('Saving to archive...');
+        setProgress(70);
+        
+        try {
+          // PDF를 Firebase Storage에 저장
+          const storage = getStorage();
+          const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
           
-          // 인쇄 완료 메시지 리스너 등록
-          const handlePrintComplete = async (event: MessageEvent) => {
-            if (event.data === 'print-completed') {
-              // 인쇄 완료 후 데이터 삭제
-              setSubmitStatus('Cleaning up...');
-              setProgress(80);
-              
-              try {
-                // PDF 생성에 사용된 데이터를 전달하여 삭제
-                await deleteProcessedAppointments(appointmentsForPdf);
-              } catch (deleteError) {
-                // Production에서는 에러 로깅 비활성화
-                if (process.env.NODE_ENV !== 'production') {
-                  console.error('Error deleting processed data:', deleteError);
-                }
-              }
-              
-              // 리스너 제거
-              window.removeEventListener('message', handlePrintComplete);
-              
-              // 2초 후 모달 닫기
-              setTimeout(() => {
-                setPdfLoading(false);
-                setSubmitStatus('');
-                setProgress(0);
-              }, 2000);
-            }
-          };
+          // PDF 업로드
+          await uploadBytes(storageRef, pdfBlob);
           
-          window.addEventListener('message', handlePrintComplete);
+          // 다운로드 URL 가져오기
+          const downloadUrl = await getDownloadURL(storageRef);
           
-          // 창이 닫히면 리스너 제거 (인쇄하지 않고 닫은 경우)
-          const checkClosed = setInterval(() => {
-            if (printWindow.closed) {
-              clearInterval(checkClosed);
-              window.removeEventListener('message', handlePrintComplete);
-              // 창이 닫혔지만 인쇄하지 않았을 수 있으므로 데이터는 유지
-              setPdfLoading(false);
-              setSubmitStatus('');
-              setProgress(0);
-            }
-          }, 1000);
-        } else {
-          alert('⚠️ 팝업이 차단되었습니다. 팝업을 허용한 후 다시 시도해주세요.');
+          // Firestore에 메타데이터 저장
+          const safeMetadata = sanitizeFirebaseDataClient({
+            filename: filename,
+            office: office,
+            date: date,
+            name: name || 'Supervisor',
+            type: 'Show Check',
+            source: 's_route',
+          });
+          
+          await setDoc(doc(db, 'pdf-documents', `${date}_${safeOfficeName}_showcheck_${Date.now()}`), {
+            ...safeMetadata,
+            url: downloadUrl,
+            storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
+            createdAt: new Date(),
+          });
+          
+          setSubmitStatus('Saved Successfully!');
+          setProgress(80);
+          
+          // 데이터 삭제
+          setSubmitStatus('Cleaning up...');
+          setProgress(90);
+          
+          try {
+            await deleteProcessedAppointments(appointmentsForPdf);
+          } catch (deleteError) {
+            // 로그 제거 (보안 강화)
+          }
+          
+          setSubmitStatus('Complete!');
+          setProgress(100);
+          
+          setTimeout(() => {
+            setPdfLoading(false);
+            setSubmitStatus('');
+            setProgress(0);
+          }, 2000);
+        } catch (storageError: any) {
+          alert('error');
           setPdfLoading(false);
           setSubmitStatus('');
           setProgress(0);
         }
-      } else {
-        // 에러 응답 처리 (보안 강화)
-        let errorMessage = 'PDF 생성 중 오류가 발생했습니다.';
-        let isAuthError = false;
-        
-        // 먼저 에러 메시지 파싱 시도
-        try {
-          const contentType = response.headers.get('content-type');
-          if (contentType && contentType.includes('application/json')) {
-            const errorData = await response.json();
-            errorMessage = errorData.error || errorMessage;
-            
-            // 인증 관련 에러 메시지인지 확인
-            if (errorMessage.includes('인증') || 
-                errorMessage.includes('Authentication') ||
-                errorMessage.includes('token') ||
-                errorMessage.includes('로그인') ||
-                errorMessage.includes('인증 토큰')) {
-              isAuthError = true;
-            }
-          }
-        } catch (parseError) {
-          // JSON 파싱 실패 시 상태 코드로 판단
-          if (response.status === 401) {
-            isAuthError = true;
-          }
-        }
-        
-        // 401 에러이거나 인증 관련 에러인 경우 특별 처리 (강화된 재시도)
-        if (response.status === 401 || isAuthError) {
-          // 토큰 갱신을 여러 번 시도 (최대 3회)
-          let retrySuccess = false;
-          const maxRetries = 3;
-          
-          for (let retryCount = 0; retryCount < maxRetries && !retrySuccess; retryCount++) {
-            try {
-              const { getAuth } = await import('firebase/auth');
-              const auth = getAuth();
-              
-              // 인증 상태 재확인
-              if (!auth.currentUser) {
-                // 사용자가 로그아웃된 경우
-                errorMessage = '로그인 세션이 만료되었습니다. 다시 로그인해주세요.';
-                break;
-              }
-              
-              // 토큰 강제 갱신 (매번 새로 갱신)
-              const newToken = await auth.currentUser.getIdToken(true);
-              if (!newToken) {
-                if (retryCount < maxRetries - 1) {
-                  // 재시도 전 짧은 대기
-                  await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)));
-                  continue;
-                }
-                errorMessage = '토큰을 가져올 수 없습니다. 다시 로그인해주세요.';
-                break;
-              }
-              
-              // 갱신된 토큰으로 재시도
-              setSubmitStatus(`재시도 중... (${retryCount + 1}/${maxRetries})`);
-              const retryResponse = await secureFetch('/api/generate-show-check-pdf', {
-                method: 'POST',
-                body: JSON.stringify({ showCheckData: pdfData }),
-              }, true);
-              
-              if (retryResponse.ok) {
-                // 재시도 성공 - 원래 로직 계속
-                retrySuccess = true;
-                const htmlContent = await retryResponse.text();
-                
-                setSubmitStatus('Complete!');
-                setProgress(100);
-                
-                // 새 창에서 HTML 열기 (인쇄 대화상자가 자동으로 열림)
-                const printWindow = window.open('', '_blank');
-                if (printWindow) {
-                  printWindow.document.write(htmlContent);
-                  printWindow.document.close();
-                  
-                  // 인쇄 완료 메시지 리스너 등록
-                  const handlePrintComplete = async (event: MessageEvent) => {
-                    if (event.data === 'print-completed') {
-                      // 인쇄 완료 후 데이터 삭제
-                      setSubmitStatus('Cleaning up...');
-                      setProgress(80);
-                      
-                      try {
-                        // PDF 생성에 사용된 데이터를 전달하여 삭제
-                        await deleteProcessedAppointments(appointmentsForPdf);
-                      } catch (deleteError) {
-                        if (process.env.NODE_ENV !== 'production') {
-                          console.error('Error deleting processed data:', deleteError);
-                        }
-                      }
-                      
-                      // 리스너 제거
-                      window.removeEventListener('message', handlePrintComplete);
-                      
-                      setTimeout(() => {
-                        setPdfLoading(false);
-                        setSubmitStatus('');
-                        setProgress(0);
-                      }, 2000);
-                    }
-                  };
-                  
-                  window.addEventListener('message', handlePrintComplete);
-                  
-                  // 창이 닫히면 리스너 제거
-                  const checkClosed = setInterval(() => {
-                    if (printWindow.closed) {
-                      clearInterval(checkClosed);
-                      window.removeEventListener('message', handlePrintComplete);
-                      setPdfLoading(false);
-                      setSubmitStatus('');
-                      setProgress(0);
-                    }
-                  }, 1000);
-                } else {
-                  alert('⚠️ 팝업이 차단되었습니다. 팝업을 허용한 후 다시 시도해주세요.');
-                  setPdfLoading(false);
-                  setSubmitStatus('');
-                  setProgress(0);
-                }
-                return; // 성공적으로 완료
-              } else if (retryResponse.status !== 401) {
-                // 401이 아닌 다른 에러면 재시도 중단
-                const contentType = retryResponse.headers.get('content-type');
-                if (contentType && contentType.includes('application/json')) {
-                  try {
-                    const errorData = await retryResponse.json();
-                    errorMessage = errorData.error || errorMessage;
-                  } catch {
-                    errorMessage = 'PDF 생성 중 오류가 발생했습니다.';
-                  }
-                }
-                break;
-              }
-              // 401이면 계속 재시도
-              
-            } catch (retryError: any) {
-              // 재시도 실패 - 다음 시도로
-              if (process.env.NODE_ENV !== 'production') {
-                console.warn(`Token refresh retry ${retryCount + 1} failed:`, retryError);
-              }
-              
-              if (retryCount < maxRetries - 1) {
-                // 재시도 전 대기
-                await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)));
-              } else {
-                // 모든 재시도 실패
-                errorMessage = '인증 오류가 지속됩니다. 페이지를 새로고침한 후 다시 시도해주세요.';
-              }
-            }
-          }
-          
-          // 모든 재시도 실패
-          if (!retrySuccess) {
-            errorMessage = errorMessage || '인증이 만료되었습니다. 페이지를 새로고침한 후 다시 시도해주세요.';
-          }
-        } else {
-          // 401이 아닌 다른 에러 처리
-          try {
-            const contentType = response.headers.get('content-type');
-            if (contentType && contentType.includes('application/json')) {
-              const errorData = await response.json();
-              errorMessage = errorData.error || errorMessage;
-              
-              // 인증 관련 에러 메시지인지 확인
-              if (errorMessage.includes('인증') || 
-                  errorMessage.includes('Authentication') ||
-                  errorMessage.includes('token') ||
-                  errorMessage.includes('로그인') ||
-                  errorMessage.includes('인증 토큰')) {
-                // 인증 에러인 경우 재시도 로직으로 처리
-                // 401 상태로 변경하여 재시도 로직 실행
-                isAuthError = true;
-                response = new Response(
-                  JSON.stringify({ 
-                    success: false, 
-                    error: errorMessage 
-                  }),
-                  { 
-                    status: 401,
-                    statusText: 'Unauthorized',
-                    headers: { 'Content-Type': 'application/json' }
-                  }
-                );
-                // 재시도 로직으로 넘어가도록 다시 처리
-                // (아래 재시도 로직이 실행되도록)
-              }
-            } else {
-              // JSON이 아닌 경우 상태 코드에 따른 메시지
-              if (response.status === 403) {
-                errorMessage = '권한이 없습니다. 접근이 거부되었습니다.';
-              } else if (response.status === 429) {
-                errorMessage = '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.';
-              } else if (response.status >= 500) {
-                errorMessage = '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
-              } else if (response.status === 400) {
-                errorMessage = '잘못된 요청입니다. 입력 데이터를 확인해주세요.';
-              }
-            }
-          } catch (parseError) {
-            // JSON 파싱 실패 시 상태 코드 기반 메시지 사용
-            if (response.status === 403) {
-              errorMessage = '권한이 없습니다. 접근이 거부되었습니다.';
-            }
-          }
-          
-          // 인증 에러로 감지된 경우 재시도 로직 실행
-          if (isAuthError) {
-            // 토큰 갱신을 여러 번 시도 (최대 3회)
-            let retrySuccess = false;
-            const maxRetries = 3;
-            
-            for (let retryCount = 0; retryCount < maxRetries && !retrySuccess; retryCount++) {
-              try {
-                const { getAuth } = await import('firebase/auth');
-                const auth = getAuth();
-                
-                // 인증 상태 재확인
-                if (!auth.currentUser) {
-                  errorMessage = '로그인 세션이 만료되었습니다. 다시 로그인해주세요.';
-                  break;
-                }
-                
-                // 토큰 강제 갱신
-                const newToken = await auth.currentUser.getIdToken(true);
-                if (!newToken) {
-                  if (retryCount < maxRetries - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)));
-                    continue;
-                  }
-                  errorMessage = '토큰을 가져올 수 없습니다. 다시 로그인해주세요.';
-                  break;
-                }
-                
-                // 갱신된 토큰으로 재시도
-                setSubmitStatus(`재시도 중... (${retryCount + 1}/${maxRetries})`);
-                const retryResponse = await secureFetch('/api/generate-show-check-pdf', {
-                  method: 'POST',
-                  body: JSON.stringify({ showCheckData: pdfData }),
-                }, true);
-                
-                if (retryResponse.ok) {
-                  retrySuccess = true;
-                  const htmlContent = await retryResponse.text();
-                  
-                  setSubmitStatus('Complete!');
-                  setProgress(100);
-                  
-                  // 새 창에서 HTML 열기 (인쇄 대화상자가 자동으로 열림)
-                  const printWindow = window.open('', '_blank');
-                  if (printWindow) {
-                    printWindow.document.write(htmlContent);
-                    printWindow.document.close();
-                    
-                    // 인쇄 완료 메시지 리스너 등록
-                    const handlePrintComplete = async (event: MessageEvent) => {
-                      if (event.data === 'print-completed') {
-                        // 인쇄 완료 후 데이터 삭제
-                        setSubmitStatus('Cleaning up...');
-                        setProgress(80);
-                        
-                        try {
-                          // PDF 생성에 사용된 데이터를 전달하여 삭제
-                          await deleteProcessedAppointments(appointmentsForPdf);
-                        } catch (deleteError) {
-                          if (process.env.NODE_ENV !== 'production') {
-                            console.error('Error deleting processed data:', deleteError);
-                          }
-                        }
-                        
-                        // 리스너 제거
-                        window.removeEventListener('message', handlePrintComplete);
-                        
-                        setTimeout(() => {
-                          setPdfLoading(false);
-                          setSubmitStatus('');
-                          setProgress(0);
-                        }, 2000);
-                      }
-                    };
-                    
-                    window.addEventListener('message', handlePrintComplete);
-                    
-                    // 창이 닫히면 리스너 제거
-                    const checkClosed = setInterval(() => {
-                      if (printWindow.closed) {
-                        clearInterval(checkClosed);
-                        window.removeEventListener('message', handlePrintComplete);
-                        setPdfLoading(false);
-                        setSubmitStatus('');
-                        setProgress(0);
-                      }
-                    }, 1000);
-                  } else {
-                    alert('⚠️ 팝업이 차단되었습니다. 팝업을 허용한 후 다시 시도해주세요.');
-                    setPdfLoading(false);
-                    setSubmitStatus('');
-                    setProgress(0);
-                  }
-                  return; // 성공적으로 완료
-                } else if (retryResponse.status !== 401) {
-                  const contentType = retryResponse.headers.get('content-type');
-                  if (contentType && contentType.includes('application/json')) {
-                    try {
-                      const errorData = await retryResponse.json();
-                      errorMessage = errorData.error || errorMessage;
-                    } catch {
-                      errorMessage = 'PDF 생성 중 오류가 발생했습니다.';
-                    }
-                  }
-                  break;
-                }
-              } catch (retryError: any) {
-                if (process.env.NODE_ENV !== 'production') {
-                  console.warn(`Token refresh retry ${retryCount + 1} failed:`, retryError);
-                }
-                
-                if (retryCount < maxRetries - 1) {
-                  await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)));
-                } else {
-                  errorMessage = '인증 오류가 지속됩니다. 페이지를 새로고침한 후 다시 시도해주세요.';
-                }
-              }
-            }
-            
-            if (!retrySuccess) {
-              errorMessage = errorMessage || '인증이 만료되었습니다. 페이지를 새로고침한 후 다시 시도해주세요.';
-            }
-          }
-        }
-        
-        throw new Error(errorMessage);
+      } catch (pdfError: any) {
+        throw new Error('error');
       }
 
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('PDF generation error:', error);
-      }
-      setSubmitStatus('❌ PDF generation failed: ' + ((error as any).message || 'Unknown error'));
+      // 로그 제거 (보안 강화)
+      setSubmitStatus('error');
       setProgress(0);
       setTimeout(() => {
         setPdfLoading(false);
@@ -888,8 +853,8 @@ export default function ShowCheckSystem() {
         documentsToCheck.get(docId).push(appointment.rowIndex);
       });
 
-      const deletedDocuments = [];
-      const updatedDocuments = [];
+      const deletedDocuments: string[] = [];
+      const updatedDocuments: string[] = [];
 
       // 각 document 확인 및 처리
       for (const [docId, processedRowIndices] of documentsToCheck) {
@@ -921,15 +886,9 @@ export default function ShowCheckSystem() {
             // 약속이 있었고 모든 약속이 처리됨 → 전체 document 삭제
             await deleteDoc(docRef);
             deletedDocuments.push(docId);
-            // Production에서는 로깅 비활성화
-            if (process.env.NODE_ENV !== 'production') {
-              console.log(`🗑️ Document ${docId} completely deleted (all ${allAppointmentRows.length} appointments processed)`);
-            }
+            // 로그 제거 (보안 강화)
           } else if (allAppointmentRows.length === 0) {
-            // 애초에 약속이 없는 document → 삭제하지 않음
-            if (process.env.NODE_ENV !== 'production') {
-              console.log(`📋 Document ${docId} has no appointments, keeping as is`);
-            }
+            // 애초에 약속이 없는 document → 삭제하지 않음 (로그 제거)
           } else {
             // 아직 처리 안 된 약속이 있음 → 처리된 것들만 빈 상태로 초기화
             // showStatus를 pending으로 설정하지 않고 필드를 제거하거나 undefined로 설정
@@ -958,9 +917,7 @@ export default function ShowCheckSystem() {
             });
             await updateDoc(docRef, safeUpdateData);
             updatedDocuments.push(docId);
-            if (process.env.NODE_ENV !== 'production') {
-              console.log(`📝 Document ${docId} updated (${unprocessedAppointments.length} appointments remaining)`);
-            }
+            // 로그 제거 (보안 강화)
           }
         }
       }
@@ -976,15 +933,10 @@ export default function ShowCheckSystem() {
       
       setFilteredAppointments([]);
       
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(`✅ Processing complete: ${deletedDocuments.length} documents deleted, ${updatedDocuments.length} documents updated`);
-      }
+      // 로그 제거 (보안 강화)
 
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('Error deleting processed appointments:', error);
-      }
+      // 로그 제거 (보안 강화)
       throw error;
     }
   };
@@ -1093,6 +1045,44 @@ export default function ShowCheckSystem() {
     }
   };
 
+  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
+  if (isAuthorized === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'linear-gradient(to bottom, #a2d2ff, #f0f8ff)',
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
+          <div style={{ fontSize: '18px', color: '#023047' }}>인증 확인 중...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'linear-gradient(to bottom, #a2d2ff, #f0f8ff)',
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>접근 권한이 없습니다</div>
+          <div style={{ fontSize: '14px', color: '#666' }}>관리자 권한이 필요합니다</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <style>{`
@@ -1119,81 +1109,44 @@ export default function ShowCheckSystem() {
             <div style={{
               backgroundColor: "white",
               padding: "40px",
-              borderRadius: "12px",
+              borderRadius: "20px",
               textAlign: "center",
-              boxShadow: "0 10px 30px rgba(0, 0, 0, 0.3)",
+              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.3)",
               maxWidth: "400px",
               width: "90%"
             }}>
               <div style={{
-                border: "4px solid #f3f3f3",
-                borderTop: "4px solid #4a90e2",
-                borderRadius: "50%",
-                width: "50px",
-                height: "50px",
-                animation: "spin 1s linear infinite",
-                margin: "0 auto 20px"
-              }}></div>
-              <h3 style={{
-                color: "#333",
-                fontSize: "1.2rem",
+                fontSize: "18px",
                 fontWeight: "600",
-                margin: "0 0 10px 0"
-              }}>
-                {submitStatus || "Processing..."}
-              </h3>
-              <p style={{
-                color: "#666",
-                fontSize: "0.9rem",
-                margin: "0 0 20px 0",
-                lineHeight: "1.4"
-              }}>
-                {submitStatus === 'Saving...'}
-                {submitStatus === 'Generating PDF...'}
-                {submitStatus === 'Processing PDF...'}
-                {submitStatus === 'Cleaning up...'}
-                {submitStatus === 'Complete!'}
-                {!submitStatus && 'Processing... Please wait'}
-              </p>
-              {/* 진행률 바 */}
-              <div style={{
-                width: "100%",
-                backgroundColor: "#e9ecef",
-                borderRadius: "10px",
-                overflow: "hidden",
+                color: "#4a6fa1",
                 marginBottom: "20px"
               }}>
-                <div style={{
-                  width: `${progress}%`,
-                  height: "8px",
-                  backgroundColor: "#4a90e2",
-                  borderRadius: "10px",
-                  transition: "width 0.3s ease",
-                  background: "linear-gradient(90deg, #4a90e2, #357abd)"
-                }}></div>
+                {submitStatus || "Processing..."}
               </div>
-              <p style={{
-                color: "#495057",
-                fontSize: "0.8rem",
-                margin: "0 0 20px 0",
-                fontWeight: "500"
-              }}>
-                {progress}% Complete
-              </p>
-              <div style={{
-                backgroundColor: "#f8f9fa",
-                padding: "15px",
-                borderRadius: "8px",
-                border: "1px solid #e9ecef"
-              }}>
-                <p style={{
-                  color: "#495057",
-                  fontSize: "0.8rem",
-                  margin: 0,
-                  fontWeight: "500"
+              {progress > 0 && (
+                <div style={{
+                  width: "100%",
+                  height: "8px",
+                  backgroundColor: "#f0f0f0",
+                  borderRadius: "4px",
+                  overflow: "hidden",
+                  marginBottom: "10px"
                 }}>
-                  ⚠️ Please do not close
-                </p>
+                  <div style={{
+                    width: `${progress}%`,
+                    height: "100%",
+                    background: "linear-gradient(90deg, #4a90e2, #51cf66)",
+                    transition: "width 0.3s ease",
+                    borderRadius: "4px"
+                  }} />
+                </div>
+              )}
+              <div style={{
+                fontSize: "14px",
+                color: "#666",
+                marginTop: "10px"
+              }}>
+                {progress}%
               </div>
             </div>
           </div>
@@ -1221,7 +1174,10 @@ export default function ShowCheckSystem() {
               <input
                 type="text"
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                onChange={(e) => {
+                  const validatedValue = validateInput('name', e.target.value);
+                  setName(validatedValue);
+                }}
                 placeholder="Enter your name"
                 style={inputStyle}
               />
@@ -1241,7 +1197,10 @@ export default function ShowCheckSystem() {
               <input
                 type="date"
                 value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
+                onChange={(e) => {
+                  const validatedValue = validateInput('startDate', e.target.value);
+                  setStartDate(validatedValue);
+                }}
                 style={inputStyle}
               />
             </div>
@@ -1253,7 +1212,10 @@ export default function ShowCheckSystem() {
               <input
                 type="date"
                 value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
+                onChange={(e) => {
+                  const validatedValue = validateInput('endDate', e.target.value);
+                  setEndDate(validatedValue);
+                }}
                 style={inputStyle}
               />
             </div>
@@ -1264,7 +1226,10 @@ export default function ShowCheckSystem() {
               </label>
               <select
                 value={selectedOffice}
-                onChange={(e) => setSelectedOffice(e.target.value)}
+                onChange={(e) => {
+                  const validatedValue = validateInput('selectedOffice', e.target.value);
+                  setSelectedOffice(validatedValue);
+                }}
                 style={inputStyle}
               >
                 {officeOptions.map((office: string) => (
@@ -1479,7 +1444,7 @@ export default function ShowCheckSystem() {
                 }}
                 title={hasPendingStatus ? '⚠️ Please select Show or No Show for all appointments before submitting.' : ''}
               >
-                {pdfLoading ? '📄 Generating PDF...' : '📄 Submit + Generate PDF'}
+                {pdfLoading ? '📄 Submitting...' : '📄 Submit'}
               </button>
             );
           })()}
