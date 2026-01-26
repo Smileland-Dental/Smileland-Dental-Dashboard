@@ -2,9 +2,11 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { enableAllSecurityMeasures, sanitizeFirebaseDataClient } from "@/lib/security-client";
-import { db } from '@/lib/firebase.config';
-import { doc, setDoc, getDoc, onSnapshot, addDoc, collection, deleteDoc } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase.config';
+import { doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 // 서비스 목록 상수
 const SERVICE_OPTIONS = [
@@ -20,6 +22,455 @@ const SERVICE_OPTIONS = [
   'Dismissed patient consists of: explained treatment, gave post op instructions, gave tooth brush bag and points',
   'Postcard'
 ];
+
+// 🔒 보안: 입력 검증 함수
+function safeStr(v: unknown, max: number): string {
+  if (v == null) return '';
+  return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+}
+
+// 24시간제를 12시간제로 변환하는 함수
+const formatTime12Hour = (time24: string): string => {
+  if (!time24 || typeof time24 !== 'string' || time24.trim() === '') return '';
+  
+  // 입력 길이 제한
+  const limitedTime = time24.trim().substring(0, 10);
+  
+  // 시간 형식이 HH:MM 또는 H:MM인지 확인
+  const timeMatch = limitedTime.match(/^(\d{1,2}):(\d{2})$/);
+  if (!timeMatch) return '';
+  
+  const hours = parseInt(timeMatch[1], 10);
+  const minutes = timeMatch[2];
+  
+  // 시간 범위 검증
+  if (hours < 0 || hours > 23 || parseInt(minutes, 10) < 0 || parseInt(minutes, 10) > 59) {
+    return '';
+  }
+  
+  if (hours === 0) {
+    return `12:${minutes} AM`;
+  } else if (hours < 12) {
+    return `${hours}:${minutes} AM`;
+  } else if (hours === 12) {
+    return `12:${minutes} PM`;
+  } else {
+    return `${hours - 12}:${minutes} PM`;
+  }
+};
+
+// 날짜 포맷팅
+const formatDate = (dateString: string) => {
+  if (!dateString || typeof dateString !== 'string') return '';
+  
+  // 날짜 형식 검증
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateString)) return '';
+  
+  const [year, month, day] = dateString.split('-').map(Number);
+  
+  // 날짜 범위 검증
+  if (isNaN(year) || isNaN(month) || isNaN(day) || 
+      year < 1900 || year > 2100 || 
+      month < 1 || month > 12 || 
+      day < 1 || day > 31) {
+    return '';
+  }
+  
+  const date = new Date(year, month - 1, day);
+  
+  // 유효한 날짜인지 확인
+  if (isNaN(date.getTime())) return '';
+  
+  return date.toLocaleDateString('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+};
+
+// RDA Treatment PDF 생성 함수
+function createRDATreatmentPDFDocument(props: {
+  safeDate: string;
+  safeOffice: string;
+  safeRdaName: string;
+  filteredData: any[];
+  allSealantDetails: any[];
+  serviceCounts: Array<[string, number]>;
+  generatedDate: string;
+}) {
+  const { safeDate, safeOffice, safeRdaName, filteredData, allSealantDetails, serviceCounts, generatedDate } = props;
+
+  const pdfStyles = StyleSheet.create({
+    page: {
+      padding: 20,
+      fontFamily: 'Helvetica',
+      fontSize: 8
+    },
+    header: {
+      marginBottom: 15,
+      borderBottomWidth: 2,
+      borderColor: '#000',
+      paddingBottom: 8,
+      alignItems: 'center'
+    },
+    headerTitle: {
+      fontSize: 16,
+      fontWeight: 'bold',
+      marginBottom: 4
+    },
+    infoSection: {
+      marginBottom: 15,
+      padding: 8,
+      borderWidth: 1,
+      borderColor: '#ccc',
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      flexWrap: 'wrap',
+      backgroundColor: '#f8f9fa'
+    },
+    infoItem: {
+      fontSize: 9,
+      marginBottom: 4
+    },
+    serviceCounts: {
+      marginBottom: 12,
+      fontSize: 8,
+      flexDirection: 'row',
+      flexWrap: 'wrap'
+    },
+    serviceCountItem: {
+      marginRight: 8,
+      marginBottom: 2,
+      padding: 2,
+      backgroundColor: '#f0f0f0',
+      borderRadius: 3
+    },
+    table: {
+      marginTop: 10
+    },
+    tableHeader: {
+      flexDirection: 'row',
+      borderBottomWidth: 1,
+      borderColor: '#000',
+      backgroundColor: '#f8f9fa',
+      fontWeight: 'bold'
+    },
+    tableRow: {
+      flexDirection: 'row',
+      borderBottomWidth: 0.5,
+      borderColor: '#000'
+    },
+    tableCell: {
+      padding: 4,
+      fontSize: 7,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellChart: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.09,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellDob: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.09,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellTooth: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.08,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellRedo: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.08,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellAcct: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.09,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellPayable: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.09,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellDxDr: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.10,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellDrAmount: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.09,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellRdaAmount: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.09,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellNo: {
+      padding: 4,
+      fontSize: 8,
+      flex: 0.05,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'center',
+      alignItems: 'center',
+      fontWeight: 'bold'
+    },
+    tableCellName: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.12,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellTime: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.10,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellRoom: {
+      padding: 4,
+      fontSize: 7,
+      flex: 0.10,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellServices: {
+      padding: 4,
+      fontSize: 6,
+      flex: 0.28,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    tableCellExplanation: {
+      padding: 4,
+      fontSize: 6,
+      flex: 0.35,
+      borderRightWidth: 0.5,
+      borderColor: '#000',
+      justifyContent: 'flex-start',
+      alignItems: 'flex-start'
+    },
+    sealantSection: {
+      marginTop: 20
+    },
+    sealantTitle: {
+      fontSize: 10,
+      fontWeight: 'bold',
+      marginBottom: 10,
+      borderBottomWidth: 1,
+      borderColor: '#000',
+      paddingBottom: 4
+    },
+    footer: {
+      fontSize: 7,
+      color: '#666',
+      marginTop: 15,
+      textAlign: 'center',
+      borderTopWidth: 1,
+      borderColor: '#ccc',
+      paddingTop: 8
+    }
+  });
+
+  const s = pdfStyles;
+  const formattedDate = formatDate(safeDate);
+
+  // 헤더
+  const header = React.createElement(View, { style: s.header },
+    React.createElement(Text, { style: s.headerTitle }, 'RDA/DA Treatment(Sealant)')
+  );
+
+  // 정보 섹션
+  const infoSection = React.createElement(View, { style: s.infoSection },
+    React.createElement(Text, { style: s.infoItem }, `Date: ${formattedDate}`),
+    React.createElement(Text, { style: s.infoItem }, `Office: ${safeOffice}`),
+    React.createElement(Text, { style: s.infoItem }, `RDA/DA Name: ${safeRdaName}`)
+  );
+
+  // 서비스 카운트
+  const serviceCountsSection = serviceCounts.length > 0
+    ? React.createElement(View, { style: s.serviceCounts },
+        ...serviceCounts.map(([service, count]) =>
+          React.createElement(View, { key: service, style: s.serviceCountItem },
+            React.createElement(Text, null, `${safeStr(service, 100)}: ${count}`)
+          )
+        )
+      )
+    : null;
+
+  // 메인 테이블 헤더
+  const mainTableHeader = React.createElement(View, { style: s.tableHeader },
+    React.createElement(View, { style: s.tableCellNo }, React.createElement(Text, { style: { fontWeight: 'bold' } }, '#')),
+    React.createElement(View, { style: s.tableCellName }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'PT Name')),
+    React.createElement(View, { style: s.tableCellTime }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Start Time')),
+    React.createElement(View, { style: s.tableCellRoom }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Room #')),
+    React.createElement(View, { style: s.tableCellServices }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Treatment or Services Performed')),
+    React.createElement(View, { style: s.tableCellExplanation }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Explanation of Treatment/Services or Amount Performed'))
+  );
+
+  // 메인 테이블 행
+  const mainTableRows = filteredData.map((row, index) => {
+    const safePatientName = safeStr(row.patientName, 100);
+    const safeStartTime = formatTime12Hour(String(row.startTime || ''));
+    const safeRoomNumber = safeStr(row.roomNumber, 10);
+    const safeExplanation = safeStr(row.explanation, 500);
+
+    // 서비스 목록
+    const servicesList = row.services && Array.isArray(row.services) && row.services.length > 0
+      ? row.services.slice(0, 50).filter((service: any) => 
+          typeof service === 'string' && SERVICE_OPTIONS.includes(service)
+        ).map((service: string, idx: number) =>
+          React.createElement(Text, { key: idx, style: { marginBottom: 2 } }, `• ${safeStr(service, 200)}`)
+        )
+      : [React.createElement(Text, { key: 0 }, '-')];
+
+    return React.createElement(View, { key: index, style: s.tableRow },
+      React.createElement(View, { style: s.tableCellNo }, React.createElement(Text, null, String(index + 1))),
+      React.createElement(View, { style: s.tableCellName }, React.createElement(Text, null, safePatientName || '-')),
+      React.createElement(View, { style: s.tableCellTime }, React.createElement(Text, null, safeStartTime || '-')),
+      React.createElement(View, { style: s.tableCellRoom }, React.createElement(Text, null, safeRoomNumber || '-')),
+      React.createElement(View, { style: s.tableCellServices }, ...servicesList),
+      React.createElement(View, { style: s.tableCellExplanation }, React.createElement(Text, null, safeExplanation || '-'))
+    );
+  });
+
+  // 메인 테이블
+  const mainTable = React.createElement(View, { style: s.table },
+    mainTableHeader,
+    ...mainTableRows
+  );
+
+  // Sealant 테이블 헤더
+  const sealantTableHeader = allSealantDetails.length > 0
+    ? React.createElement(View, { style: s.tableHeader },
+        React.createElement(View, { style: s.tableCellNo }, React.createElement(Text, { style: { fontWeight: 'bold' } }, '#')),
+        React.createElement(View, { style: s.tableCellName }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'PT Name')),
+        React.createElement(View, { style: s.tableCellChart }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Chart #')),
+        React.createElement(View, { style: s.tableCellDob }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'DOB')),
+        React.createElement(View, { style: s.tableCellTooth }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Tooth #')),
+        React.createElement(View, { style: s.tableCellRedo }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Redo')),
+        React.createElement(View, { style: s.tableCellAcct }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Acct Type')),
+        React.createElement(View, { style: s.tableCellPayable }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Payable')),
+        React.createElement(View, { style: s.tableCellDxDr }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'DX Dr.')),
+        React.createElement(View, { style: s.tableCellDrAmount }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'DR $')),
+        React.createElement(View, { style: s.tableCellRdaAmount }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'RDA $'))
+      )
+    : null;
+
+  // Sealant 테이블 행
+  const sealantTableRows = allSealantDetails.map((item, index) => {
+    const safePatientName = safeStr(item.patientName, 100);
+    const safeChartNumber = safeStr(item.detail.chartNumber, 50);
+    const safeDob = safeStr(item.detail.dob, 20);
+    const safeToothNumber = safeStr(item.detail.toothNumber, 10);
+    const safeRedo = safeStr(item.detail.redo, 10);
+    const safeAcctType = safeStr(item.detail.acctType, 10);
+    const safePayable = safeStr(item.detail.payable, 10);
+    const safeDxDr = safeStr(item.detail.dxDr, 50);
+    const safeDrAmount = safeStr(item.detail.drAmount, 20);
+    const safeRdaAmount = safeStr(item.detail.rdaAmount, 20);
+
+    return React.createElement(View, { key: index, style: s.tableRow },
+      React.createElement(View, { style: s.tableCellNo }, React.createElement(Text, null, String(index + 1))),
+      React.createElement(View, { style: s.tableCellName }, React.createElement(Text, null, safePatientName || '-')),
+      React.createElement(View, { style: s.tableCellChart }, React.createElement(Text, null, safeChartNumber || '-')),
+      React.createElement(View, { style: s.tableCellDob }, React.createElement(Text, null, safeDob || '-')),
+      React.createElement(View, { style: s.tableCellTooth }, React.createElement(Text, null, safeToothNumber || '-')),
+      React.createElement(View, { style: s.tableCellRedo }, React.createElement(Text, null, safeRedo || '-')),
+      React.createElement(View, { style: s.tableCellAcct }, React.createElement(Text, null, safeAcctType || '-')),
+      React.createElement(View, { style: s.tableCellPayable }, React.createElement(Text, null, safePayable || '-')),
+      React.createElement(View, { style: s.tableCellDxDr }, React.createElement(Text, null, safeDxDr || '-')),
+      React.createElement(View, { style: s.tableCellDrAmount }, React.createElement(Text, null, safeDrAmount || '-')),
+      React.createElement(View, { style: s.tableCellRdaAmount }, React.createElement(Text, null, safeRdaAmount || '-'))
+    );
+  });
+
+  // Sealant 테이블
+  const sealantTable = allSealantDetails.length > 0
+    ? React.createElement(View, { style: s.sealantSection },
+        React.createElement(Text, { style: s.sealantTitle }, 'Sealant Details'),
+        React.createElement(View, { style: s.table },
+          sealantTableHeader,
+          ...sealantTableRows
+        )
+      )
+    : null;
+
+  // 푸터
+  const footer = React.createElement(View, { style: s.footer },
+    React.createElement(Text, null, `Report generated on ${generatedDate} PDT`)
+  );
+
+  return React.createElement(Document, null,
+    React.createElement(Page, { 
+      size: 'A4', 
+      orientation: 'portrait', 
+      style: s.page
+    }, 
+      header, 
+      infoSection,
+      serviceCountsSection,
+      mainTable,
+      sealantTable,
+      footer
+    )
+  );
+}
 
 // 개별 테이블 행 컴포넌트
 const TreatmentRow = ({ 
@@ -483,9 +934,18 @@ export default function RDATreatmentSheetSystem() {
   const lastAutoSaveTimeRef = useRef<number>(0);
   const lastApiCallTimeRef = useRef<number>(0);
   const autoSaveAttemptsRef = useRef<number>(0);
+  const lastUpdateTreatmentCall = useRef<number>(0);
+  const lastUpdateSealantDetailCall = useRef<number>(0);
+  const lastAddSealantDetailCall = useRef<number>(0);
+  const lastFieldUpdateTimeRef = useRef<Map<string, number>>(new Map());
+  const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingAutoSaveRef = useRef<boolean>(false);
   
   // Hydration 오류 방지를 위한 클라이언트 마운트 상태
   const [isClient, setIsClient] = useState(false);
+  
+  // 인증 상태
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
   
   // 이전 조합 추적 (변경 감지 및 이전 조합 저장용)
   const previousCombinationRef = useRef<{office: string, rdaName: string, date: string} | null>(null);
@@ -824,7 +1284,6 @@ export default function RDATreatmentSheetSystem() {
     if (timeSinceLastSave < 60000) {
       autoSaveAttemptsRef.current++;
       if (autoSaveAttemptsRef.current > 30) {
-        console.warn('Too many auto-save attempts. Rate limiting activated.');
         return;
       }
     } else {
@@ -868,7 +1327,7 @@ export default function RDATreatmentSheetSystem() {
 
     try {
       const docId = createSafeDocId(date, office, rdaName);
-      setAutoSaveStatus('💾 Saving...');
+      setAutoSaveStatus('Saving...');
       
       // 캘리포니아 시간대로 현재 시간 생성
       const currentTime = new Date();
@@ -908,27 +1367,17 @@ export default function RDATreatmentSheetSystem() {
       const deepCopy = JSON.parse(JSON.stringify(currentData));
       setLastSavedData(deepCopy);
       
-      setAutoSaveStatus('💾 Saved ✅');
+      setAutoSaveStatus('Saved ✅');
       setTimeout(() => setAutoSaveStatus(''), 2000);
       
     } catch (error) {
       // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-      if (process.env.NODE_ENV === 'development') {
-        console.error("Auto-save error:", error);
-      }
-      // 에러 메시지에서 민감한 정보 제거
-      setAutoSaveStatus('💾 Save failed ❌');
+      setAutoSaveStatus('error');
       setTimeout(() => setAutoSaveStatus(''), 3000);
-      
-      // 에러 로깅 (프로덕션에서는 서버로 전송)
-      if (process.env.NODE_ENV === 'production') {
-        // 서버로 에러 로그 전송 (구현 필요)
-        // fetch('/api/log-error', { method: 'POST', body: JSON.stringify({ type: 'auto-save', timestamp: Date.now() }) });
-      }
     }
   }, [office, rdaName, date, treatmentData, lastSavedData, isUpdatingFromFirebase, userSessionId, isSubmitted, isUnlocked, createSafeDocId]);
 
-  // 데이터 변경 시에만 자동 저장
+  // 데이터 변경 시에만 자동 저장 (Debounce 패턴 적용)
   useEffect(() => {
     // Firebase 업데이트 중이거나 필수 필드가 없거나 Unlock되지 않았으면 저장하지 않음
     if (isUpdatingFromFirebase || !office || !rdaName || !date || !isUnlocked) {
@@ -958,13 +1407,49 @@ export default function RDATreatmentSheetSystem() {
     // view 모드이거나 조합이 변경되지 않은 경우 (같은 데이터 수정) autoSave 실행
     // view 모드에서는 항상 자동 저장 활성화
     if (isViewMode || !combinationChanged) {
-      // 데이터가 있는 경우에만 저장 (빈 데이터도 저장 가능하도록 수정)
-      autoSave();
+      // 기존 타이머가 있으면 취소
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+      
+      // Debounce: 사용자가 입력을 멈춘 후 1초 후에 저장
+      autoSaveTimerRef.current = setTimeout(() => {
+        autoSave();
+        // 저장 후 pending 상태 확인하여 추가 저장 필요 시 실행
+        if (pendingAutoSaveRef.current) {
+          setTimeout(() => {
+            pendingAutoSaveRef.current = false;
+            autoSave();
+          }, 1000);
+        }
+      }, 1000);
     }
+    
+    // cleanup: 컴포넌트 언마운트 시 타이머 정리
+    return () => {
+      if (autoSaveTimerRef.current) {
+        clearTimeout(autoSaveTimerRef.current);
+      }
+    };
   }, [treatmentData, autoSave, office, rdaName, date, isUpdatingFromFirebase, isUnlocked, unlockedCombination]);
 
   // 치료 데이터 업데이트
   const updateTreatment = useCallback((rowIndex: number, field: string, value: string | string[] | boolean) => {
+    // Rate limiting: 전역 throttle (50ms)
+    const now = Date.now();
+    if (now - lastUpdateTreatmentCall.current < 50) {
+      return;
+    }
+    lastUpdateTreatmentCall.current = now;
+    
+    // Rate limiting: 개별 필드 throttle (100ms)
+    const fieldKey = `${rowIndex}-${field}`;
+    const lastFieldUpdate = lastFieldUpdateTimeRef.current.get(fieldKey) || 0;
+    if (now - lastFieldUpdate < 100) {
+      return;
+    }
+    lastFieldUpdateTimeRef.current.set(fieldKey, now);
+    
     setTreatmentData(prev => {
       // rowIndex 범위 검증 (보안 강화: 음수 및 범위 초과 방지)
       if (!Number.isInteger(rowIndex) || rowIndex < 0 || rowIndex >= prev.length || rowIndex >= 10000) {
@@ -1073,6 +1558,21 @@ export default function RDATreatmentSheetSystem() {
 
   // Sealant 상세 정보 업데이트
   const updateSealantDetail = useCallback((rowIndex: number, detailIndex: number, field: string, value: string) => {
+    // Rate limiting: 전역 throttle (50ms)
+    const now = Date.now();
+    if (now - lastUpdateSealantDetailCall.current < 50) {
+      return;
+    }
+    lastUpdateSealantDetailCall.current = now;
+    
+    // Rate limiting: 개별 필드 throttle (100ms)
+    const fieldKey = `sealant-${rowIndex}-${detailIndex}-${field}`;
+    const lastFieldUpdate = lastFieldUpdateTimeRef.current.get(fieldKey) || 0;
+    if (now - lastFieldUpdate < 100) {
+      return;
+    }
+    lastFieldUpdateTimeRef.current.set(fieldKey, now);
+    
     setTreatmentData(prev => {
       // rowIndex 범위 검증
       if (rowIndex < 0 || rowIndex >= prev.length) {
@@ -1167,6 +1667,13 @@ export default function RDATreatmentSheetSystem() {
 
   // Sealant 상세 정보 추가
   const addSealantDetail = useCallback((rowIndex: number) => {
+    // Rate limiting: 최소 500ms 간격으로 추가 (중복 추가 방지)
+    const now = Date.now();
+    if (now - lastAddSealantDetailCall.current < 500) {
+      return;
+    }
+    lastAddSealantDetailCall.current = now;
+    
     // 전역 처리 중 체크
     if (isProcessingRef.current) {
       return;
@@ -1283,9 +1790,6 @@ export default function RDATreatmentSheetSystem() {
       await setDoc(doc(db, "rda-treatment-sheets", prevDocId), dataToSave);
     } catch (error) {
       // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-      if (process.env.NODE_ENV === 'development') {
-        console.error("Error saving previous combination:", error);
-      }
     }
   }, [userSessionId, isSubmitted, createSafeDocId]);
 
@@ -1320,7 +1824,7 @@ export default function RDATreatmentSheetSystem() {
         // submitted가 true인 경우 view mode에서만 로드 가능
         // 일반 사용자가 제출된 데이터 조합을 입력하면 데이터를 로드하지 않고 빈 시트로 초기화
         if (data.submitted === true && !isViewMode) {
-          setAutoSaveStatus('This data has been submitted. Only accessible via View page.');
+          setAutoSaveStatus('This data has been submitted.');
           // 새 시트 초기화 (제출된 데이터는 로드하지 않음)
           setIsUpdatingFromFirebase(true);
           const emptyRows = Array.from({ length: 20 }, () => ({
@@ -1354,7 +1858,7 @@ export default function RDATreatmentSheetSystem() {
         }
         
         // submitted가 false이거나 undefined인 경우 (아직 제출되지 않은 데이터) - 로드 가능
-        setAutoSaveStatus('Loading existing data...');
+        setAutoSaveStatus('Loading data...');
         setIsUpdatingFromFirebase(true);
         
         // 치료 데이터를 정규화하여 sealantDetails가 없는 경우 빈 배열로 초기화
@@ -1436,10 +1940,7 @@ export default function RDATreatmentSheetSystem() {
       }
     } catch (error: any) {
       // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-      if (process.env.NODE_ENV === 'development') {
-        console.error("Error loading data:", error);
-      }
-      setAutoSaveStatus('Error loading data');
+      setAutoSaveStatus('error');
       setTimeout(() => setAutoSaveStatus(''), 3000);
     }
   }, [office, rdaName, date]);
@@ -1651,6 +2152,15 @@ export default function RDATreatmentSheetSystem() {
     if (loading) {
       return;
     }
+    
+    // Rate limiting: 최소 3초 간격으로 저장 (서버 부하 방지)
+    const now = Date.now();
+    const timeSinceLastSave = now - lastAutoSaveTimeRef.current;
+    if (timeSinceLastSave < 3000) {
+      alert('⚠️ Please try again.');
+      return;
+    }
+    lastAutoSaveTimeRef.current = now;
 
     try {
       setLoading(true);
@@ -1699,7 +2209,7 @@ export default function RDATreatmentSheetSystem() {
       // 제출 상태 업데이트
       setIsSubmitted(true);
       
-      alert('✅ Treatment sheet submitted successfully!');
+      alert('Submitted successfully!');
       
       // 성공적으로 저장된 후 화면 초기화
       setOffice('');
@@ -1725,10 +2235,7 @@ export default function RDATreatmentSheetSystem() {
       
     } catch (error) {
       // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Error saving treatment sheet:', error);
-      }
-      alert('❌ Failed to save treatment sheet. Please try again.');
+      alert('error');
     } finally {
       setLoading(false);
     }
@@ -1736,7 +2243,7 @@ export default function RDATreatmentSheetSystem() {
 
   // 폼 초기화
   const handleClear = useCallback(() => {
-    if (confirm('Are you sure you want to clear all data?')) {
+    if (confirm('Would you like to submit?')) {
       setOffice('');
       setRdaName('');
       // 캘리포니아 시간대의 현재 날짜를 YYYY-MM-DD 형식으로 반환
@@ -1785,10 +2292,26 @@ export default function RDATreatmentSheetSystem() {
     const handleURLChange = (isPopState = false) => {
       if (typeof window !== 'undefined') {
         const urlParams = new URLSearchParams(window.location.search);
-        const urlOffice = urlParams.get('office');
-        const urlRdaName = urlParams.get('rdaName');
-        const urlDate = urlParams.get('date');
+        const urlOffice = urlParams.get('office') || '';
+        const urlRdaName = urlParams.get('rdaName') || '';
+        const urlDate = urlParams.get('date') || '';
         const isViewMode = urlParams.get('view') === 'true';
+        
+        // URL 파라미터 검증 및 sanitization (보안 강화)
+        const safeOffice = urlOffice.trim().replace(/[^A-Za-z0-9]/g, '').substring(0, 10);
+        const safeRdaName = urlRdaName.trim().replace(/[^A-Za-z0-9\s]/g, '').substring(0, 50);
+        let safeDate = urlDate.trim().replace(/[^0-9-]/g, '');
+        if (safeDate && !/^\d{4}-\d{2}-\d{2}$/.test(safeDate)) {
+          safeDate = '';
+        }
+        // 날짜 범위 검증 (1900-01-01 ~ 2100-12-31)
+        if (safeDate) {
+          const dateObj = new Date(safeDate + 'T00:00:00');
+          const year = dateObj.getFullYear();
+          if (isNaN(year) || year < 1900 || year > 2100) {
+            safeDate = '';
+          }
+        }
         
         // Generate PDF 후에는 데이터를 로드하지 않음
         if (pdfGeneratedRef.current) {
@@ -1797,10 +2320,10 @@ export default function RDATreatmentSheetSystem() {
         }
         
         // 초기 로드이고 view 모드이면 데이터 로드 (뒤로가기가 아닌 경우)
-        if (isInitialLoadRef.current && urlOffice && urlRdaName && urlDate && isViewMode) {
-          setOffice(urlOffice);
-          setRdaName(urlRdaName);
-          setDate(urlDate);
+        if (isInitialLoadRef.current && safeOffice && safeRdaName && safeDate && isViewMode) {
+          setOffice(safeOffice);
+          setRdaName(safeRdaName);
+          setDate(safeDate);
           isInitialLoadRef.current = false;
           return;
         }
@@ -1921,6 +2444,63 @@ export default function RDATreatmentSheetSystem() {
     }
   }, [isClient, office, rdaName, date, isOfficeUnlocked, isUnlocked, loadData]);
 
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
+  useEffect(() => {
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+      return;
+    }
+
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'manager') {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+      } catch (error: any) {
+        setIsAuthorized(false);
+        if (typeof window !== 'undefined') {
+          window.location.href = '/';
+        }
+      }
+    });
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   // 보안 조치 활성화
   useEffect(() => {
     enableAllSecurityMeasures({
@@ -2020,6 +2600,21 @@ export default function RDATreatmentSheetSystem() {
     boxSizing: 'border-box',
     height: '32px'
   };
+
+  // 인증 확인 중이거나 인증 실패 시 처리
+  if (isAuthorized === null) {
+    return (
+      <div style={bodyStyle}>
+        <div style={{ textAlign: 'center', padding: '50px', fontSize: '18px' }}>
+          Verifying authentication...
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return null; // 리다이렉트 중이므로 아무것도 렌더링하지 않음
+  }
 
   return (
     <div style={bodyStyle}>
@@ -2459,9 +3054,38 @@ export default function RDATreatmentSheetSystem() {
                 
                 // 바로 PDF 생성
                 setLoading(true);
-                setAutoSaveStatus('Generating PDF...');
+                setAutoSaveStatus('Processing...');
 
                 try {
+                  // 🔒 보안: 입력값 검증 및 정리
+                  const safeOffice = String(office).trim().replace(/[^A-Za-z0-9]/g, '').substring(0, 10);
+                  const safeRdaName = String(rdaName).trim().replace(/[^A-Za-z0-9\s]/g, '').substring(0, 50);
+                  const safeDate = String(date).trim().replace(/[^0-9-]/g, '');
+                  
+                  // 날짜 형식 검증 (YYYY-MM-DD)
+                  if (!/^\d{4}-\d{2}-\d{2}$/.test(safeDate)) {
+                    alert('Invalid date format');
+                    setLoading(false);
+                    setAutoSaveStatus('');
+                    return;
+                  }
+                  
+                  // 데이터 타입 검증
+                  if (!Array.isArray(treatmentData)) {
+                    alert('Invalid treatment data format');
+                    setLoading(false);
+                    setAutoSaveStatus('');
+                    return;
+                  }
+                  
+                  // 배열 크기 제한 (DoS 공격 방지)
+                  if (treatmentData.length > 1000) {
+                    alert('Treatment data array too large');
+                    setLoading(false);
+                    setAutoSaveStatus('');
+                    return;
+                  }
+
                   // Sealant가 없는 행의 sealantDetails를 빈 배열로 명시적으로 설정
                   const normalizedTreatmentData = treatmentData.map((row: any) => {
                     const hasSealant = row.services && Array.isArray(row.services) && row.services.includes('Sealant');
@@ -2470,70 +3094,142 @@ export default function RDATreatmentSheetSystem() {
                       sealantDetails: hasSealant ? (row.sealantDetails || []) : []
                     };
                   });
-                  
-                  // PDF 생성 API 호출
-                  const response = await fetch('/api/generate-rda-pdf', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                      office,
-                      rdaName,
-                      date,
-                      treatmentData: normalizedTreatmentData
-                    }),
+
+                  // 치료 데이터 필터링 및 검증 (빈 행 제외)
+                  const filteredData = normalizedTreatmentData
+                    .filter((row: any) => {
+                      if (!row || typeof row !== 'object' || Array.isArray(row)) {
+                        return false;
+                      }
+                      return row.patientName || row.startTime || row.roomNumber || 
+                             (row.services && Array.isArray(row.services) && row.services.length > 0) || 
+                             row.explanation ||
+                             (row.sealantDetails && Array.isArray(row.sealantDetails) && row.sealantDetails.length > 0);
+                    })
+                    .slice(0, 1000);
+
+                  // Sealant Details 수집
+                  const allSealantDetails: Array<{
+                    patientName: string;
+                    detail: any;
+                    rowIndex: number;
+                  }> = [];
+
+                  filteredData.forEach((row, rowIndex) => {
+                    if (row.sealantDetails && Array.isArray(row.sealantDetails) && row.sealantDetails.length > 0) {
+                      const limitedDetails = row.sealantDetails.slice(0, 100);
+                      limitedDetails.forEach((detail: any) => {
+                        if (detail && typeof detail === 'object' && !Array.isArray(detail) && detail.constructor === Object) {
+                          const sanitizedDetail: any = {};
+                          const allowedFields = ['ptName', 'chartNumber', 'dob', 'toothNumber', 'redo', 'acctType', 'payable', 'dxDr', 'drAmount', 'rdaAmount'];
+                          
+                          allowedFields.forEach(field => {
+                            if (detail.hasOwnProperty(field)) {
+                              const value = detail[field];
+                              if (value === null || value === undefined) {
+                                sanitizedDetail[field] = '';
+                              } else if (typeof value === 'string' || typeof value === 'number') {
+                                sanitizedDetail[field] = String(value);
+                              } else {
+                                sanitizedDetail[field] = '';
+                              }
+                            } else {
+                              sanitizedDetail[field] = '';
+                            }
+                          });
+                          
+                          allSealantDetails.push({
+                            patientName: row.patientName || '',
+                            detail: sanitizedDetail,
+                            rowIndex: rowIndex
+                          });
+                        }
+                      });
+                    }
                   });
 
-                  if (response.ok) {
-                    setAutoSaveStatus('Processing PDF...');
-                    const blob = await response.blob();
+                  // 서비스별 체크 개수 계산
+                  const calculateServiceCounts = () => {
+                    const serviceCounts: { [key: string]: number } = {};
+                    SERVICE_OPTIONS.forEach(service => {
+                      serviceCounts[service] = 0;
+                    });
+                    
+                    filteredData.forEach((row: any) => {
+                      if (row && typeof row === 'object' && row.services && Array.isArray(row.services)) {
+                        row.services.forEach((service: any) => {
+                          if (typeof service === 'string' && serviceCounts.hasOwnProperty(service)) {
+                            serviceCounts[service]++;
+                          }
+                        });
+                      }
+                    });
+                    
+                    return Object.entries(serviceCounts)
+                      .filter(([_, count]) => count > 0)
+                      .sort((a, b) => b[1] - a[1]);
+                  };
+
+                  const serviceCounts = calculateServiceCounts();
+                  const generatedDate = new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' });
+
+                  // PDF 생성 (클라이언트 사이드)
+                  setAutoSaveStatus('Processing...');
+                  const pdfDoc = createRDATreatmentPDFDocument({
+                    safeDate,
+                    safeOffice,
+                    safeRdaName,
+                    filteredData,
+                    allSealantDetails,
+                    serviceCounts,
+                    generatedDate
+                  });
+
+                  const pdfBlob = await pdf(pdfDoc).toBlob();
+
+                  if (!pdfBlob || pdfBlob.size === 0) {
+                    throw new Error('error');
+                  }
                     
                     // PDF를 Firebase Storage에 저장
-                    setAutoSaveStatus('Saving PDF to archive...');
+                    setAutoSaveStatus('Submitting...');
                     try {
                       const storage = getStorage();
-                      const filename = `8) ${date}_${office}_${rdaName}_RDA/DA Treatment(Sealant) Sheet.pdf`;
-                      const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
+                      const filename = `8) ${safeDate}_${safeOffice}_${safeRdaName}_RDA/DA Treatment(Sealant) Sheet.pdf`;
+                      const storageRef = ref(storage, `endofday-pdfs/${safeOffice}/${safeDate}/${filename}`);
                       
                       // PDF 업로드
-                      await uploadBytes(storageRef, blob);
+                      await uploadBytes(storageRef, pdfBlob);
                       
                       // 다운로드 URL 가져오기
                       const downloadUrl = await getDownloadURL(storageRef);
                       
                       // Firestore에 메타데이터 저장
-                      await setDoc(doc(db, 'pdf-documents', `${date}_${office}_${rdaName}_rda-treatment_${Date.now()}`), {
+                      await setDoc(doc(db, 'pdf-documents', `${safeDate}_${safeOffice}_${safeRdaName}_rda-treatment_${Date.now()}`), {
                         filename,
-                        office: office,
-                        date: date,
+                        office: safeOffice,
+                        date: safeDate,
                         type: 'RDA Treatment Sheet',
                         url: downloadUrl,
-                        storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
+                        storagePath: `endofday-pdfs/${safeOffice}/${safeDate}/${filename}`,
                         createdAt: new Date(),
                       });
                       
                       setAutoSaveStatus('✅ PDF saved to archive successfully!');
                     } catch (storageError: any) {
                       // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-                      if (process.env.NODE_ENV === 'development') {
-                        console.error('Storage error:', storageError);
-                      }
-                      alert('PDF 저장 중 오류가 발생했습니다.');
-                      setAutoSaveStatus('❌ PDF 저장 실패');
+                      alert('error');
+                      setAutoSaveStatus('error');
                     }
                     
                     // PDF 생성 성공 후 데이터베이스에서 삭제
                     try {
-                      setAutoSaveStatus('Deleting data from database...');
-                      const docId = createSafeDocId(date, office, rdaName);
+                      setAutoSaveStatus('Processing...');
+                      const docId = createSafeDocId(safeDate, safeOffice, safeRdaName);
                       await deleteDoc(doc(db, 'rda-treatment-sheets', docId));
-                      setAutoSaveStatus('✅ PDF generated and saved to archive successfully!');
+                      setAutoSaveStatus('Submitted successfully!');
                     } catch (deleteError) {
-                      if (process.env.NODE_ENV === 'development') {
-                        console.error('Error deleting document:', deleteError);
-                      }
-                      setAutoSaveStatus('⚠️ PDF generated but failed to delete data from database');
+                      setAutoSaveStatus('error');
                     }
                     
                     // Generate PDF 완료 플래그 설정
@@ -2569,23 +3265,10 @@ export default function RDATreatmentSheetSystem() {
                       window.history.pushState(null, '', '/dashboard/forms/rda-treatment-sheet/view');
                       window.location.replace('/dashboard/forms/rda-treatment-sheet/view');
                     }, 3000);
-                  } else {
-                    let errorMessage = 'PDF generation failed';
-                    try {
-                      const errorData = await response.json();
-                      errorMessage = errorData.error || errorMessage;
-                    } catch (e) {
-                      errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-                    }
-                    throw new Error(errorMessage);
-                  }
-
                 } catch (error: any) {
                   // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-                  if (process.env.NODE_ENV === 'development') {
-                    console.error('PDF generation error:', error);
-                  }
-                  setAutoSaveStatus('❌ PDF generation failed');
+                  alert('error');
+                  setAutoSaveStatus('error');
                   setTimeout(() => {
                     setLoading(false);
                     setAutoSaveStatus('');
@@ -2603,7 +3286,7 @@ export default function RDATreatmentSheetSystem() {
                 marginRight: '20px'
               }}
             >
-              {loading ? '⏳ Generating PDF...' : '📄 Generate PDF'}
+              {loading ? 'Submitting...' : '📄 Submit'}
             </button>
           ) : (
             <>
@@ -2620,7 +3303,7 @@ export default function RDATreatmentSheetSystem() {
                   marginRight: '20px'
                 }}
               >
-                {loading ? '⏳ Submitting...' : '📤 Submit'}
+                {loading ? 'Submitting...' : '📤 Submit'}
               </button>
               <button
                 onClick={handleClear}
