@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
-import { db } from "@/lib/firebase.config";
+import { db, auth } from "@/lib/firebase.config";
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 // 🔒 보안: 입력 검증 함수
 const validateInput = (value: string, maxLength: number = 500): string => {
@@ -27,9 +29,32 @@ const validateDate = (date: string): boolean => {
 // 🔒 보안: 오피스 값 검증
 const validateOffice = (office: string): boolean => {
   if (!office || typeof office !== 'string') return false;
-  const allowedOffices = ['Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
+  const allowedOffices = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
   return allowedOffices.includes(office);
 };
+
+// 고정된 폼 이름 배열 (재사용)
+const FIXED_FORM_NAMES = [
+            'Daily Front Office Duties',
+            'Attendance Tract Sheet',
+            'Clock Adjustment',
+            'Excuse Note',
+            'Time Off Request',
+            'Request for Sched. Change',
+            'Written Warning',
+            'Record of Conversation',
+            'Incident Notice',
+            'Restroom Log',
+            'Add on Treatment Log',
+            'Scheduled Appts Log',
+            'Mileage Log',
+            'Lobby Inspection Log',
+            'RDA Sheets',
+            'X-Ray/IOPs Before Treatment',
+            'Covid-19 Daily Screening Log',
+            'Other:',
+            'Other:'
+          ];
 
 export default function FaxCoverPage() {
   // 시간 형식 변환 헬퍼 함수 (24시간제 -> 12시간제)
@@ -98,11 +123,308 @@ export default function FaxCoverPage() {
     return '';
   };
 
+  // --- PDF 생성 관련 상수/스타일 ---
+  const pdfStyles = StyleSheet.create({
+    page: { padding: 20, fontFamily: 'Helvetica', fontSize: 9 },
+    header: { marginBottom: 10, borderBottomWidth: 1, borderColor: '#333', paddingBottom: 5, alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 3 },
+    headerSubtitle: { fontSize: 10, color: '#666' },
+    infoSection: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8, fontSize: 9 },
+    infoItem: { flexDirection: 'row', gap: 4 },
+    infoLabel: { fontWeight: 'bold' },
+    table: { marginTop: 8, marginBottom: 8 },
+    tableRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
+    tableCell: { padding: 4, fontSize: 8, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    tableCellNo: { flex: 0.3 },
+    tableCellName: { flex: 2 },
+    tableCellQty: { flex: 0.8 },
+    tableHeader: { backgroundColor: '#f0f0f0', fontWeight: 'bold' },
+    section: { marginTop: 10, marginBottom: 8 },
+    sectionTitle: { fontSize: 12, fontWeight: 'bold', marginBottom: 4, borderBottomWidth: 1, borderColor: '#ddd', paddingBottom: 2 },
+    sectionContent: { fontSize: 9, marginBottom: 3 },
+    sectionRow: { flexDirection: 'row', marginBottom: 3 },
+    sectionLabel: { fontWeight: 'bold', marginRight: 5 },
+    footer: { marginTop: 15, paddingTop: 8, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 7, color: '#666' },
+  });
+
+  // PDF 생성 유틸 함수
+  function safeStr(v: unknown, max: number): string {
+    if (v == null) return '';
+    return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+  }
+
+  function createFaxCoverPDFDocument(props: {
+    safeFaxDate: string;
+    safeSelectedOffice: string;
+    formData: {
+      date: string;
+      officeTimeCheckIn: string;
+      officeName: string;
+      timeCheckOut: string;
+      name: string;
+    };
+    tableData: Array<{
+      nameOfForm: string;
+      otherText: string;
+      qty: string;
+    }>;
+    productionData: Array<{
+      date: string;
+      note: string;
+      status: string;
+    }>;
+    todayData: {
+      addOns: string;
+      noShows: string;
+      seen: string;
+    };
+    nextDayData: {
+      opener: string;
+      closer: string;
+    };
+    callLogData: {
+      whoCalled: string;
+      appointmentsMade: string;
+    };
+    supervisorData: {
+      officeSupervisorManager: string;
+      spokeWith: string;
+      checkOutBy: string;
+    };
+    generatedDate: string;
+  }) {
+    const { safeFaxDate, safeSelectedOffice, formData, tableData, productionData, todayData, nextDayData, callLogData, supervisorData, generatedDate } = props;
+    const s = pdfStyles;
+
+    // Header
+    const header = React.createElement(View, { style: s.header },
+      React.createElement(Text, { style: s.headerTitle }, 'End of Day Fax Cover'),
+      React.createElement(Text, { style: s.headerSubtitle }, '(Check out only when leaving the office)'),
+    );
+
+    // Info Section 1: Date, Office
+    const infoSection1 = React.createElement(View, { style: s.infoSection },
+      React.createElement(View, { style: s.infoItem },
+        React.createElement(Text, { style: s.infoLabel }, 'Date: '),
+        React.createElement(Text, null, safeStr(formData.date, 20)),
+      ),
+      React.createElement(View, { style: s.infoItem },
+        React.createElement(Text, { style: s.infoLabel }, 'Office: '),
+        React.createElement(Text, null, safeSelectedOffice),
+      ),
+    );
+
+    // Info Section 2: Time Check In, Name, Time Check Out, Name
+    const infoSection2 = React.createElement(View, { style: s.infoSection },
+      React.createElement(View, { style: s.infoItem },
+        React.createElement(Text, { style: s.infoLabel }, 'Time Check In: '),
+        React.createElement(Text, null, safeStr(formData.officeTimeCheckIn, 20)),
+      ),
+      React.createElement(View, { style: s.infoItem },
+        React.createElement(Text, { style: s.infoLabel }, 'Name: '),
+        React.createElement(Text, null, safeStr(formData.officeName, 100)),
+      ),
+      React.createElement(View, { style: s.infoItem },
+        React.createElement(Text, { style: s.infoLabel }, 'Time Check Out: '),
+        React.createElement(Text, null, safeStr(formData.timeCheckOut, 20)),
+      ),
+      React.createElement(View, { style: s.infoItem },
+        React.createElement(Text, { style: s.infoLabel }, 'Name: '),
+        React.createElement(Text, null, safeStr(formData.name, 100)),
+      ),
+    );
+
+    // Table Header
+    const tableHeader = React.createElement(View, { style: [s.tableRow, s.tableHeader] },
+      React.createElement(View, { style: [s.tableCell, s.tableCellNo] }, React.createElement(Text, null, 'No.')),
+      React.createElement(View, { style: [s.tableCell, s.tableCellName] }, React.createElement(Text, null, 'Name of Form')),
+      React.createElement(View, { style: [s.tableCell, s.tableCellQty] }, React.createElement(Text, null, 'Qty')),
+    );
+
+    // Table Rows
+    const tableRows = tableData.map((row, index) => {
+      const formName = row.nameOfForm === 'Other:' 
+        ? `Other: ${safeStr(row.otherText, 200)}`
+        : safeStr(row.nameOfForm, 200);
+      return React.createElement(View, { key: index, style: s.tableRow },
+        React.createElement(View, { style: [s.tableCell, s.tableCellNo] }, React.createElement(Text, null, String(index + 1))),
+        React.createElement(View, { style: [s.tableCell, s.tableCellName] }, React.createElement(Text, null, formName)),
+        React.createElement(View, { style: [s.tableCell, s.tableCellQty] }, React.createElement(Text, null, safeStr(row.qty, 20))),
+      );
+    });
+
+    // Total Pages Row
+    const totalPages = tableData.reduce((sum, row) => {
+      const qty = parseFloat(safeStr(row.qty, 20)) || 0;
+      return Math.max(0, Math.min(sum + qty, 999999));
+    }, 0);
+    const totalRow = React.createElement(View, { style: [s.tableRow, { backgroundColor: '#f8f9fa' }] },
+      React.createElement(View, { style: [s.tableCell, s.tableCellNo, { flex: 2.3 }] }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Total Pages')),
+      React.createElement(View, { style: [s.tableCell, s.tableCellQty] }, React.createElement(Text, { style: { fontWeight: 'bold' } }, String(totalPages))),
+    );
+
+    const table = React.createElement(View, { style: s.table }, tableHeader, ...tableRows, totalRow);
+
+    // Production Section
+    const productionHeader = React.createElement(View, { style: [s.tableRow, s.tableHeader] },
+      React.createElement(View, { style: [s.tableCell, { flex: 1 }] }, React.createElement(Text, null, 'Date')),
+      React.createElement(View, { style: [s.tableCell, { flex: 2 }] }, React.createElement(Text, null, 'Note')),
+      React.createElement(View, { style: [s.tableCell, { flex: 0.8 }] }, React.createElement(Text, null, 'Status')),
+    );
+    const productionRows = productionData.map((row, index) => 
+      React.createElement(View, { key: index, style: s.tableRow },
+        React.createElement(View, { style: [s.tableCell, { flex: 1 }] }, React.createElement(Text, null, safeStr(row.date, 20))),
+        React.createElement(View, { style: [s.tableCell, { flex: 2 }] }, React.createElement(Text, null, safeStr(row.note, 500))),
+        React.createElement(View, { style: [s.tableCell, { flex: 0.8 }] }, React.createElement(Text, null, safeStr(row.status, 50))),
+      )
+    );
+    const productionTable = React.createElement(View, { style: s.table }, productionHeader, ...productionRows);
+
+    // Today Section
+    const todaySection = React.createElement(View, { style: s.section },
+      React.createElement(Text, { style: s.sectionTitle }, 'Today'),
+      React.createElement(View, { style: s.sectionContent },
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Add On\'s: '),
+          React.createElement(Text, null, safeStr(todayData.addOns, 500)),
+        ),
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'No Shows: '),
+          React.createElement(Text, null, safeStr(todayData.noShows, 500)),
+        ),
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Seen: '),
+          React.createElement(Text, null, safeStr(todayData.seen, 500)),
+        ),
+      ),
+    );
+
+    // Next Day Section
+    const nextDaySection = React.createElement(View, { style: s.section },
+      React.createElement(Text, { style: s.sectionTitle }, 'Next Day'),
+      React.createElement(View, { style: s.sectionContent },
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Opener: '),
+          React.createElement(Text, null, safeStr(nextDayData.opener, 200)),
+        ),
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Closer: '),
+          React.createElement(Text, null, safeStr(nextDayData.closer, 200)),
+        ),
+      ),
+    );
+
+    // Call Log Section
+    const callLogSection = React.createElement(View, { style: s.section },
+      React.createElement(Text, { style: s.sectionTitle }, 'Call Log'),
+      React.createElement(View, { style: s.sectionContent },
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Who called: '),
+          React.createElement(Text, null, safeStr(callLogData.whoCalled, 500)),
+        ),
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Appointments made: '),
+          React.createElement(Text, null, safeStr(callLogData.appointmentsMade, 500)),
+        ),
+      ),
+    );
+
+    // Supervisor Section
+    const supervisorSection = React.createElement(View, { style: s.section },
+      React.createElement(Text, { style: s.sectionTitle }, 'Office Supervisor/Manager'),
+      React.createElement(View, { style: s.sectionContent },
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Supervisor/Manager: '),
+          React.createElement(Text, null, safeStr(supervisorData.officeSupervisorManager, 200)),
+        ),
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Spoke with: '),
+          React.createElement(Text, null, safeStr(supervisorData.spokeWith, 200)),
+        ),
+        React.createElement(View, { style: s.sectionRow },
+          React.createElement(Text, { style: s.sectionLabel }, 'Check out by: '),
+          React.createElement(Text, null, safeStr(supervisorData.checkOutBy, 200)),
+        ),
+      ),
+    );
+
+    const footer = React.createElement(View, { style: s.footer }, React.createElement(Text, null, `Generated: ${generatedDate}`));
+
+    return React.createElement(Document, null,
+      React.createElement(Page, { size: 'A4', orientation: 'portrait', style: s.page }, 
+        header, 
+        infoSection1, 
+        infoSection2, 
+        table, 
+        productionTable, 
+        todaySection, 
+        nextDaySection, 
+        callLogSection, 
+        supervisorSection, 
+        footer
+      ),
+    );
+  }
+
+  function sanitizeFilename(filename: string): string {
+    return filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 255);
+  }
+
+  // 초기 데이터 생성 함수 (중복 제거)
+  const createInitialData = () => {
+    const now = new Date();
+    const californiaTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+    const formattedDate = californiaTime.toLocaleDateString('en-US', {
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric'
+    });
+
+    return {
+      formData: {
+        date: formattedDate,
+        officeTimeCheckIn: '',
+        officeName: '',
+        timeCheckOut: '',
+        name: '',
+      },
+      tableData: FIXED_FORM_NAMES.map(nameOfForm => ({
+        nameOfForm,
+        otherText: '',
+        qty: ''
+      })),
+      productionData: [
+        { date: '', note: '', status: '' },
+        { date: '', note: '', status: '' },
+        { date: '', note: '', status: '' }
+      ],
+      todayData: {
+        addOns: '',
+        noShows: '',
+        seen: ''
+      },
+      nextDayData: {
+        opener: '',
+        closer: ''
+      },
+      callLogData: {
+        whoCalled: '',
+        appointmentsMade: ''
+      },
+      supervisorData: {
+        officeSupervisorManager: '',
+        spokeWith: '',
+        checkOutBy: ''
+      }
+    };
+  };
+
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
   
   // 🔒 보안: 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   // 더 안전한 UUID 생성 방식을 사용하는 것을 권장합니다 (예: crypto.randomUUID)
@@ -127,6 +449,22 @@ export default function FaxCoverPage() {
   // 마지막 저장된 데이터 추적
   const [lastSavedData, setLastSavedData] = useState({});
   
+  // 현재 캘리포니아 시간 가져오기
+  const getCurrentCaliforniaTime = () => {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    const parts = formatter.formatToParts(now);
+    const year = parts.find(p => p.type === 'year')?.value || '';
+    const month = parts.find(p => p.type === 'month')?.value || '';
+    const day = parts.find(p => p.type === 'day')?.value || '';
+    return `${year}-${month}-${day}`;
+  };
+  
   // 날짜 상태
   const [faxDate, setFaxDate] = useState(() => {
     const now = new Date();
@@ -142,7 +480,7 @@ export default function FaxCoverPage() {
   const [pendingOffice, setPendingOffice] = useState('');
 
   // 오피스 옵션
-  const officeOptions = ['Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
+  const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
   // 🔒 보안: Office의 첫 번째 알파벳을 대문자로 반환하는 함수
   // ⚠️ 주의: 클라이언트 측 비밀번호는 보안상 취약합니다. 가능하면 서버 측 인증을 사용하세요.
@@ -206,29 +544,7 @@ export default function FaxCoverPage() {
 
   // 테이블 데이터 상태 (19줄) - 고정된 폼 이름으로 초기화
   const [tableData, setTableData] = useState(() => {
-    const fixedFormNames = [
-      'Daily Front Office Duties',
-      'Attendance Tract Sheet',
-      'Clock Adjustment',
-      'Excuse Note',
-      'Time Off Request',
-      'Request for Sched. Change',
-      'Written Warning',
-      'Record of Conversation',
-      'Incident Notice',
-      'Restroom Log',
-      'Add on Treatment Log',
-      'Scheduled Appts Log',
-      'Mileage Log',
-      'Lobby Inspection Log',
-      'RDA Sheets',
-      'X-Ray/IOPs Before Treatment',
-      'Covide-19 Daily Screening Log',
-      'Other:',
-      'Other:'
-    ];
-    
-    return fixedFormNames.map(nameOfForm => ({
+    return FIXED_FORM_NAMES.map(nameOfForm => ({
       nameOfForm,
       otherText: '',
       qty: ''
@@ -257,13 +573,11 @@ export default function FaxCoverPage() {
 
     // 🔒 보안: 오피스 값 검증
     if (!validateOffice(selectedOffice)) {
-      console.error('Invalid office value');
       return;
     }
 
     // 🔒 보안: 날짜 형식 검증
     if (formData.date && !validateDate(formData.date)) {
-      console.error('Invalid date format');
       return;
     }
 
@@ -342,13 +656,11 @@ export default function FaxCoverPage() {
       const safeIsoDate = isoDate.replace(/[^a-zA-Z0-9_-]/g, '');
       // 경로 탐색 공격 방지
       if (safeOffice.includes('..') || safeIsoDate.includes('..')) {
-        console.error('Invalid document ID: path traversal detected');
         return;
       }
       const docId = `${safeIsoDate}_${safeOffice}_fax_cover`;
       // 문서 ID 길이 제한 (Firebase 제한: 1500 bytes)
       if (docId.length > 1500) {
-        console.error('Document ID too long');
         return;
       }
       await setDoc(doc(db, "fax-cover", docId), dataToSave);
@@ -363,7 +675,7 @@ export default function FaxCoverPage() {
       setLastSavedSupervisorData({ ...supervisorData });
       
     } catch (error) {
-      console.error("Auto-save error:", error);
+      // Auto-save error silently handled
     }
   }, [faxDate, selectedOffice, formData, tableData, productionData, todayData, nextDayData, callLogData, supervisorData, lastSavedData, lastSavedTableData, lastSavedProductionData, lastSavedTodayData, lastSavedNextDayData, lastSavedCallLogData, lastSavedSupervisorData, isUpdatingFromFirebase, userSessionId, officePasswordVerified]);
 
@@ -390,19 +702,16 @@ export default function FaxCoverPage() {
     if (!isoDate) return;
 
     try {
-      console.log("Loading data for date:", isoDate, "office:", selectedOffice);
       setSubmitStatus('Loading data...');
       
       // 🔒 보안: 문서 ID 검증
       const safeOffice = selectedOffice.replace(/[^a-zA-Z0-9_-]/g, '');
       const safeIsoDate = isoDate.replace(/[^a-zA-Z0-9_-]/g, '');
       if (safeOffice.includes('..') || safeIsoDate.includes('..')) {
-        console.error('Invalid document ID: path traversal detected');
         return;
       }
       const docId = `${safeIsoDate}_${safeOffice}_fax_cover`;
       if (docId.length > 1500) {
-        console.error('Document ID too long');
         return;
       }
       const docRef = doc(db, "fax-cover", docId);
@@ -410,7 +719,6 @@ export default function FaxCoverPage() {
       
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Data loaded from Firebase:", data);
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
@@ -438,28 +746,7 @@ export default function FaxCoverPage() {
         // 테이블 데이터 로드
         if (data.tableData && Array.isArray(data.tableData)) {
           // 고정된 폼 이름 유지하면서 데이터 복원
-          const fixedFormNames = [
-            'Daily Front Office Duties',
-            'Attendance Tract Sheet',
-            'Clock Adjustment',
-            'Excuse Note',
-            'Time Off Request',
-            'Request for Sched. Change',
-            'Written Warning',
-            'Record of Conversation',
-            'Incident Notice',
-            'Restroom Log',
-            'Add on Treatment Log',
-            'Scheduled Appts Log',
-            'Mileage Log',
-            'Lobby Inspection Log',
-            'RDA Sheets',
-            'X-Ray/IOPs Before Treatment',
-            'Covide-19 Daily Screening Log',
-            'Other:',
-            'Other:'
-          ];
-          const normalizedTableData = fixedFormNames.map((fixedName, index) => {
+          const normalizedTableData = FIXED_FORM_NAMES.map((fixedName, index) => {
             const savedRow = data.tableData[index];
             return {
               nameOfForm: fixedName,
@@ -473,34 +760,9 @@ export default function FaxCoverPage() {
           setLastSavedTableData([...trimmedData]);
         } else {
           // 고정된 폼 이름으로 초기화
-          const fixedFormNames = [
-            'Daily Front Office Duties',
-            'Attendance Tract Sheet',
-            'Clock Adjustment',
-            'Excuse Note',
-            'Time Off Request',
-            'Request for Sched. Change',
-            'Written Warning',
-            'Record of Conversation',
-            'Incident Notice',
-            'Restroom Log',
-            'Add on Treatment Log',
-            'Scheduled Appts Log',
-            'Mileage Log',
-            'Lobby Inspection Log',
-            'RDA Sheets',
-            'X-Ray/IOPs Before Treatment',
-            'Covide-19 Daily Screening Log',
-            'Other:',
-            'Other:'
-          ];
-          const initialTableData = fixedFormNames.map(nameOfForm => ({
-            nameOfForm,
-            otherText: '',
-            qty: ''
-          }));
-          setTableData(initialTableData);
-          setLastSavedTableData(initialTableData);
+          const initial = createInitialData();
+          setTableData(initial.tableData);
+          setLastSavedTableData(initial.tableData);
         }
 
         // Production 데이터 로드
@@ -616,96 +878,28 @@ export default function FaxCoverPage() {
         setSubmitStatus('Data loaded successfully');
         setTimeout(() => setSubmitStatus(''), 2000);
       } else {
-        console.log("No data found for date:", faxDate);
         // 데이터가 없으면 초기화
-        // 캘리포니아 시간으로 현재 날짜 설정
-        const now = new Date();
-        const californiaTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-        const formattedDate = californiaTime.toLocaleDateString('en-US', {
-          month: '2-digit',
-          day: '2-digit',
-          year: 'numeric'
-        });
-        
-        const initialData = {
-          date: formattedDate,
-          officeTimeCheckIn: '',
-          officeName: '',
-          timeCheckOut: '',
-          name: '',
-        };
-        // 고정된 폼 이름으로 초기화
-        const fixedFormNames = [
-          'Daily Front Office Duties',
-          'Attendance Tract Sheet',
-          'Clock Adjustment',
-          'Excuse Note',
-          'Time Off Request',
-          'Request for Sched. Change',
-          'Written Warning',
-          'Record of Conversation',
-          'Incident Notice',
-          'Restroom Log',
-          'Add on Treatment Log',
-          'Scheduled Appts Log',
-          'Mileage Log',
-          'Lobby Inspection Log',
-          'RDA Sheets',
-          'X-Ray/IOPs Before Treatment',
-          'Covide-19 Daily Screening Log',
-          'Other:',
-          'Other:',
-          '' // 20번째 줄은 빈 값
-        ];
-        const initialTableData = fixedFormNames.map(nameOfForm => ({
-          nameOfForm,
-          otherText: '',
-          qty: ''
-        }));
-        const initialProductionData = [
-          { date: '', note: '', status: '' },
-          { date: '', note: '', status: '' },
-          { date: '', note: '', status: '' }
-        ];
-        setFormData(initialData);
-        setLastSavedData(initialData);
-        setTableData(initialTableData);
-        setLastSavedTableData(initialTableData);
-        const initialTodayData = {
-          addOns: '',
-          noShows: '',
-          seen: ''
-        };
-        setProductionData(initialProductionData);
-        setLastSavedProductionData(initialProductionData);
-        const initialNextDayData = {
-          opener: '',
-          closer: ''
-        };
-        setTodayData(initialTodayData);
-        setLastSavedTodayData(initialTodayData);
-        const initialCallLogData = {
-          whoCalled: '',
-          appointmentsMade: ''
-        };
-        setNextDayData(initialNextDayData);
-        setLastSavedNextDayData(initialNextDayData);
-        const initialSupervisorData = {
-          officeSupervisorManager: '',
-          spokeWith: '',
-          checkOutBy: ''
-        };
-        setCallLogData(initialCallLogData);
-        setLastSavedCallLogData(initialCallLogData);
-        setSupervisorData(initialSupervisorData);
-        setLastSavedSupervisorData(initialSupervisorData);
+        const initial = createInitialData();
+        setFormData(initial.formData);
+        setLastSavedData(initial.formData);
+        setTableData(initial.tableData);
+        setLastSavedTableData(initial.tableData);
+        setProductionData(initial.productionData);
+        setLastSavedProductionData(initial.productionData);
+        setTodayData(initial.todayData);
+        setLastSavedTodayData(initial.todayData);
+        setNextDayData(initial.nextDayData);
+        setLastSavedNextDayData(initial.nextDayData);
+        setCallLogData(initial.callLogData);
+        setLastSavedCallLogData(initial.callLogData);
+        setSupervisorData(initial.supervisorData);
+        setLastSavedSupervisorData(initial.supervisorData);
         setSubmitStatus('No data found - initialized empty form');
         setTimeout(() => setSubmitStatus(''), 2000);
       }
       
     } catch (error) {
       // 🔒 보안: 에러 메시지에 민감한 정보 노출 방지
-      console.error("Error loading data:", error);
       setSubmitStatus('Error loading data. Please try again.');
       setTimeout(() => setSubmitStatus(''), 3000);
     }
@@ -736,27 +930,22 @@ export default function FaxCoverPage() {
     const safeOffice = selectedOffice.replace(/[^a-zA-Z0-9_-]/g, '');
     const safeIsoDate = isoDate.replace(/[^a-zA-Z0-9_-]/g, '');
     if (safeOffice.includes('..') || safeIsoDate.includes('..')) {
-      console.error('Invalid document ID: path traversal detected');
       return;
     }
     const docId = `${safeIsoDate}_${safeOffice}_fax_cover`;
     if (docId.length > 1500) {
-      console.error('Document ID too long');
       return;
     }
-    console.log("Setting up real-time listener for date:", safeIsoDate, "office:", safeOffice);
     const docRef = doc(db, "fax-cover", docId);
     
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Real-time data received:", data);
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
         
         setFormData(prevData => {
-          console.log("Updating formData from:", prevData, "to:", { ...prevData, ...data });
           // 날짜가 없으면 캘리포니아 시간으로 설정
           let dateValue = data.date || '';
           if (!dateValue) {
@@ -839,28 +1028,7 @@ export default function FaxCoverPage() {
         // 테이블 데이터 업데이트
         if (data.tableData && Array.isArray(data.tableData)) {
           // 고정된 폼 이름 유지하면서 데이터 복원
-          const fixedFormNames = [
-            'Daily Front Office Duties',
-            'Attendance Tract Sheet',
-            'Clock Adjustment',
-            'Excuse Note',
-            'Time Off Request',
-            'Request for Sched. Change',
-            'Written Warning',
-            'Record of Conversation',
-            'Incident Notice',
-            'Restroom Log',
-            'Add on Treatment Log',
-            'Scheduled Appts Log',
-            'Mileage Log',
-            'Lobby Inspection Log',
-            'RDA Sheets',
-            'X-Ray/IOPs Before Treatment',
-            'Covide-19 Daily Screening Log',
-            'Other:',
-            'Other:'
-          ];
-          const normalizedTableData = fixedFormNames.map((fixedName, index) => {
+          const normalizedTableData = FIXED_FORM_NAMES.map((fixedName, index) => {
             const savedRow = data.tableData[index];
             return {
               nameOfForm: fixedName,
@@ -907,20 +1075,68 @@ export default function FaxCoverPage() {
           setAutoSaveStatus('🔄 Updated from another user');
           setTimeout(() => setAutoSaveStatus(''), 2000);
         }
-      } else {
-        console.log("Real-time listener: No document exists for date:", faxDate);
       }
     }, (error) => {
-      console.error("Real-time listener error:", error);
-      setAutoSaveStatus('❌ Connection error');
+      setAutoSaveStatus('❌ Error');
       setTimeout(() => setAutoSaveStatus(''), 3000);
     });
 
     return () => {
-      console.log("Cleaning up real-time listener for date:", faxDate, "office:", selectedOffice);
       unsubscribe();
     };
   }, [faxDate, selectedOffice, userSessionId]);
+
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
+  useEffect(() => {
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'manager') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          // 다른 페이지로 리다이렉트하거나 홈으로 이동
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+      } catch (error: any) {
+        alert('An error occurred while verifying authentication.');
+        setIsAuthorized(false);
+      }
+    });
+
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   // 데이터 업데이트 함수
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -963,14 +1179,9 @@ export default function FaxCoverPage() {
       return;
     }
 
-    // 🔒 보안: Submit 비밀번호 확인
-    // ⚠️ 주의: 클라이언트 측 비밀번호는 보안상 취약합니다. 가능하면 서버 측 인증을 사용하세요.
-    // 환경 변수에서 가져오거나 서버 API를 통해 검증하는 것을 권장합니다.
-    const submitPassword = process.env.NEXT_PUBLIC_SUBMIT_PASSWORD || 'Halloween';
-    const password = prompt(`Are you sure you want to submit? Submitting will reset today's data. Enter password to proceed:`);
-    if (password === null) return;
-    if (password !== submitPassword) {
-      alert("Incorrect password. Submission cancelled.");
+    // 확인 다이얼로그
+    const confirmed = confirm('Would you like to submit?');
+    if (!confirmed) {
       return;
     }
 
@@ -1022,59 +1233,52 @@ export default function FaxCoverPage() {
         checkOutBy: validateInput(supervisorData.checkOutBy, 200),
       };
 
-      // 1. PDF 생성
-      setSubmitStatus('Generating PDF...');
-      setProgress(30);
-      
-      // 🔒 보안: API 호출 타임아웃 설정 (30초)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-      
-      let response;
-      try {
-        response = await fetch('/api/generate-fax-cover-pdf', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            faxDate,
-            selectedOffice,
-            formData: validatedFormData,
-            tableData: validatedTableData,
-            productionData: validatedProductionData,
-            todayData: validatedTodayData,
-            nextDayData: validatedNextDayData,
-            callLogData: validatedCallLogData,
-            supervisorData: validatedSupervisorData
-          }),
-          signal: controller.signal,
-        });
-      } catch (fetchError: any) {
-        clearTimeout(timeoutId);
-        if (fetchError.name === 'AbortError') {
-          throw new Error('Request timeout. Please try again.');
-        }
-        throw fetchError;
-      } finally {
-        clearTimeout(timeoutId);
-      }
-
       // ISO 날짜 변환 (한 번만 수행)
       const isoDate = convertDateToISO(validatedFormData.date) || faxDate;
       
       // 🔒 보안: 파일명 및 경로 검증
       const safeOffice = selectedOffice.replace(/[^a-zA-Z0-9_-]/g, '');
       const safeIsoDate = isoDate.replace(/[^a-zA-Z0-9_-]/g, '');
+      const safeFaxDate = safeStr(validatedFormData.date, 20);
 
-      if (response.ok) {
+      // 현재 시간 가져오기 (생성 날짜용)
+      const now = new Date();
+      const californiaTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+      const generatedDate = californiaTime.toLocaleString('en-US', {
+        month: '2-digit',
+        day: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+
+      // 1. PDF 생성
+      setSubmitStatus('Generating PDF...');
+      setProgress(30);
+
+      try {
+        // 클라이언트에서 직접 PDF 생성
+        const pdfBuffer = await pdf(createFaxCoverPDFDocument({
+          safeFaxDate,
+          safeSelectedOffice: safeOffice,
+          formData: validatedFormData,
+          tableData: validatedTableData,
+          productionData: validatedProductionData,
+          todayData: validatedTodayData,
+          nextDayData: validatedNextDayData,
+          callLogData: validatedCallLogData,
+          supervisorData: validatedSupervisorData,
+          generatedDate,
+        })).toBlob();
+
         // PDF blob 받기
-        setSubmitStatus('Processing PDF...');
+        setSubmitStatus('Processing...');
         setProgress(60);
-        const blob = await response.blob();
+        const blob = pdfBuffer;
         
         // PDF를 Firebase Storage에 저장
-        setSubmitStatus('Saving PDF to archive...');
+        setSubmitStatus('Saving...');
         setProgress(70);
         try {
           const storage = getStorage();
@@ -1100,13 +1304,11 @@ export default function FaxCoverPage() {
             createdAt: new Date(),
           });
           
-          console.log('PDF saved successfully to Firebase Storage');
-          setSubmitStatus('✅ PDF saved to archive successfully!');
+          setSubmitStatus('✅ Complete!');
         } catch (storageError: any) {
           // 🔒 보안: 에러 메시지에 민감한 정보 노출 방지
-          console.error('Storage error:', storageError);
-          alert('PDF 저장 중 오류가 발생했습니다. 다시 시도해주세요.');
-          setSubmitStatus('❌ PDF 저장 실패');
+          alert('An error occurred while submitting. Please try again.');
+          setSubmitStatus('❌ Submission failed. Please try again.');
         }
         
         // 2. 데이터 삭제
@@ -1133,96 +1335,29 @@ export default function FaxCoverPage() {
             await deleteDoc(docRef);
           }
         } catch (deleteError) {
-          console.error("Error deleting document:", deleteError);
           // 삭제 실패해도 계속 진행
         }
         
         // 3. 폼 초기화
-        // 캘리포니아 시간으로 현재 날짜 설정
-        const now = new Date();
-        const californiaTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-        const formattedDate = californiaTime.toLocaleDateString('en-US', {
-          month: '2-digit',
-          day: '2-digit',
-          year: 'numeric'
-        });
-        
-        const initialData = {
-          date: formattedDate,
-          officeTimeCheckIn: '',
-          officeName: '',
-          timeCheckOut: '',
-          name: '',
-        };
-        // 고정된 폼 이름으로 초기화
-        const fixedFormNames = [
-          'Daily Front Office Duties',
-          'Attendance Tract Sheet',
-          'Clock Adjustment',
-          'Excuse Note',
-          'Time Off Request',
-          'Request for Sched. Change',
-          'Written Warning',
-          'Record of Conversation',
-          'Incident Notice',
-          'Restroom Log',
-          'Add on Treatment Log',
-          'Scheduled Appts Log',
-          'Mileage Log',
-          'Lobby Inspection Log',
-          'RDA Sheets',
-          'X-Ray/IOPs Before Treatment',
-          'Covide-19 Daily Screening Log',
-          'Other:',
-          'Other:',
-          '' // 20번째 줄은 빈 값
-        ];
-        const initialTableData = fixedFormNames.map(nameOfForm => ({
-          nameOfForm,
-          otherText: '',
-          qty: ''
-        }));
-        const initialProductionData = [
-          { date: '', note: '', status: '' },
-          { date: '', note: '', status: '' },
-          { date: '', note: '', status: '' }
-        ];
-        const initialTodayData = {
-          addOns: '',
-          noShows: '',
-          seen: ''
-        };
-        const initialNextDayData = {
-          opener: '',
-          closer: ''
-        };
-        setFormData(initialData);
-        setTableData(initialTableData);
-        const initialCallLogData = {
-          whoCalled: '',
-          appointmentsMade: ''
-        };
-        setProductionData(initialProductionData);
-        const initialSupervisorData = {
-          officeSupervisorManager: '',
-          spokeWith: '',
-          checkOutBy: ''
-        };
-        setTodayData(initialTodayData);
-        setNextDayData(initialNextDayData);
-        setCallLogData(initialCallLogData);
-        setSupervisorData(initialSupervisorData);
+        const initial = createInitialData();
+        setFormData(initial.formData);
+        setTableData(initial.tableData);
+        setProductionData(initial.productionData);
+        setTodayData(initial.todayData);
+        setNextDayData(initial.nextDayData);
+        setCallLogData(initial.callLogData);
+        setSupervisorData(initial.supervisorData);
 
         // 마지막 저장된 데이터도 초기화하여 자동 저장 방지
-        setLastSavedData(initialData);
-        setLastSavedTableData(initialTableData);
-        setLastSavedProductionData(initialProductionData);
-        setLastSavedTodayData(initialTodayData);
-        setLastSavedNextDayData(initialNextDayData);
-        setLastSavedCallLogData(initialCallLogData);
-        setLastSavedSupervisorData(initialSupervisorData);
+        setLastSavedData(initial.formData);
+        setLastSavedTableData(initial.tableData);
+        setLastSavedProductionData(initial.productionData);
+        setLastSavedTodayData(initial.todayData);
+        setLastSavedNextDayData(initial.nextDayData);
+        setLastSavedCallLogData(initial.callLogData);
+        setLastSavedSupervisorData(initial.supervisorData);
 
-        setSubmitStatus('Complete! PDF saved to archive.');
+        setSubmitStatus('Complete!');
         setProgress(100);
         
         // 자동 저장 재활성화 (약간의 지연 후)
@@ -1236,22 +1371,14 @@ export default function FaxCoverPage() {
           setSubmitStatus('');
           setProgress(0);
         }, 2000);
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'PDF generation failed');
-      }
 
-    } catch (error) {
+      } catch (pdfError: any) {
+        // 🔒 보안: 에러 메시지에 민감한 정보 노출 방지
+        throw new Error('An error occurred while submitting. Please try again.');
+      }
+    } catch (error: any) {
       // 🔒 보안: 에러 메시지에 민감한 정보 노출 방지
-      console.error('Submit error:', error);
-      const isTimeout = error instanceof Error && (
-        error.message.includes('timeout') || 
-        error.message.includes('Timeout') ||
-        error.message.includes('aborted')
-      );
-      setSubmitStatus(isTimeout 
-        ? '❌ Request timeout. Please try again.' 
-        : '❌ Submission failed. Please try again.');
+      setSubmitStatus('❌ Submission failed. Please try again.');
       setProgress(0);
       setTimeout(() => {
         setLoading(false);
@@ -1414,6 +1541,54 @@ export default function FaxCoverPage() {
     };
   }, [loading]);
 
+  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
+  if (isAuthorized === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: `
+          radial-gradient(circle at 10% 20%, rgba(120, 200, 255, 0.1) 0%, transparent 50%),
+          radial-gradient(circle at 90% 80%, rgba(255, 182, 193, 0.1) 0%, transparent 50%),
+          radial-gradient(circle at 50% 50%, rgba(144, 238, 144, 0.05) 0%, transparent 50%),
+          linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)
+        `,
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      } as React.CSSProperties}>
+        <div style={{ textAlign: 'center' } as React.CSSProperties}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' } as React.CSSProperties}>🔐</div>
+          <div style={{ fontSize: '18px', color: '#2c3e50' } as React.CSSProperties}>Verifying authentication...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: `
+          radial-gradient(circle at 10% 20%, rgba(120, 200, 255, 0.1) 0%, transparent 50%),
+          radial-gradient(circle at 90% 80%, rgba(255, 182, 193, 0.1) 0%, transparent 50%),
+          radial-gradient(circle at 50% 50%, rgba(144, 238, 144, 0.05) 0%, transparent 50%),
+          linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)
+        `,
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      } as React.CSSProperties}>
+        <div style={{ textAlign: 'center' } as React.CSSProperties}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' } as React.CSSProperties}>🚫</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' } as React.CSSProperties}>You do not have access to this page.</div>
+          <div style={{ fontSize: '14px', color: '#666' } as React.CSSProperties}>You do not have access to this page.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <style>{`
@@ -1470,8 +1645,8 @@ export default function FaxCoverPage() {
               lineHeight: "1.4"
             }}>
               {submitStatus === 'Saving...'}
-              {submitStatus === 'Generating PDF...'}
-              {submitStatus === 'Processing PDF...'}
+              {submitStatus === 'Submitting...'}
+              {submitStatus === 'Submitting...'}
               {submitStatus === 'Cleaning up...'}
               {submitStatus === 'Complete!'}
               {!submitStatus && 'Processing... Please wait'}
