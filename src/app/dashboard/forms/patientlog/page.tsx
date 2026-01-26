@@ -2,18 +2,11 @@
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { doc, setDoc, collection, getDocs, deleteDoc, getDoc, query, where } from "firebase/firestore";
-import { db } from "@/lib/firebase.config";
-import { 
-  enableAllSecurityMeasures, 
-  sanitizeFirebaseDataClient, 
-  sanitizeFirebaseDocIdClient,
-  secureFetch,
-  validateRequestId,
-  createSecureRequest,
-  checkAuthState,
-  getCurrentUser
-} from "@/lib/security-client";
+import { db, auth } from "@/lib/firebase.config";
+// Firebase 인증 직접 사용
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 // 타입 정의
 interface PatientRowProps {
@@ -174,22 +167,253 @@ const PatientRow = React.memo(({
   );
 });
 
+// Firebase 데이터 sanitize 함수 (강화된 버전)
+function sanitizeFirebaseDataClient(data: any, depth: number = 0): any {
+  // 깊이 제한 (순환 참조 및 깊은 중첩 방지)
+  if (depth > 20) return null;
+  
+  // 기본적인 데이터 검증
+  if (data === null || data === undefined) return null;
+  
+  // 원시 타입 처리
+  if (typeof data !== 'object') {
+    // 문자열인 경우 길이 제한 및 특수 문자 제거
+    if (typeof data === 'string') {
+      // Firebase 문자열 필드 최대 크기: 1MB (안전하게 900KB로 제한)
+      if (data.length > 900 * 1024) {
+        return data.slice(0, 900 * 1024);
+      }
+      // 위험한 문자 제거 (XSS 방지)
+      return data.replace(/[\x00-\x1F\x7F-\x9F]/g, '').trim();
+    }
+    // 숫자, 불린 등은 그대로 반환
+    if (typeof data === 'number' && (isNaN(data) || !isFinite(data))) {
+      return 0;
+    }
+    return data;
+  }
+  
+  // 배열 처리
+  if (Array.isArray(data)) {
+    // 배열 크기 제한 (Firebase 제한 고려)
+    if (data.length > 10000) {
+      return data.slice(0, 10000).map(item => sanitizeFirebaseDataClient(item, depth + 1));
+    }
+    return data.map(item => sanitizeFirebaseDataClient(item, depth + 1));
+  }
+  
+  // 객체 처리
+  const sanitized: any = {};
+  let keyCount = 0;
+  const maxKeys = 1000; // Firebase 문서 필드 수 제한 고려
+  
+  for (const key in data) {
+    if (Object.prototype.hasOwnProperty.call(data, key)) {
+      // 키 개수 제한
+      if (keyCount >= maxKeys) break;
+      
+      // 키 길이 제한 (Firebase 제한)
+      if (key.length > 1500 || key.length === 0) continue;
+      
+      // 키에 허용되지 않은 문자 제거
+      const safeKey = key.replace(/[.$[\]#\/]/g, '_').slice(0, 1500);
+      
+      // 값 sanitize
+      sanitized[safeKey] = sanitizeFirebaseDataClient(data[key], depth + 1);
+      keyCount++;
+    }
+  }
+  
+  return sanitized;
+}
+
+// Firebase Document ID sanitize 함수
+function sanitizeFirebaseDocIdClient(docId: string): string {
+  // Firebase Document ID 제한: 1-1500자, 특수문자 제한
+  return docId
+    .replace(/[\/\s]/g, '_') // 슬래시와 공백을 언더스코어로
+    .replace(/[^a-zA-Z0-9_-]/g, '') // 허용된 문자만 유지
+    .slice(0, 1500); // 길이 제한
+}
+
+// PDF 생성 유틸 함수
+function safeStr(v: unknown, max: number): string {
+  if (v == null) return '';
+  return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+}
+
+// 시간을 12시간 형식으로 변환하는 함수
+function convertTo12Hour(timeStr: string): string {
+  if (!timeStr || timeStr === '-') return '-';
+  try {
+    const [hours, minutes] = timeStr.split(':');
+    const hour = parseInt(hours);
+    const min = minutes || '00';
+    if (hour === 0) return `12:${min} AM`;
+    if (hour < 12) return `${hour}:${min} AM`;
+    if (hour === 12) return `12:${min} PM`;
+    return `${hour - 12}:${min} PM`;
+  } catch {
+    return timeStr;
+  }
+}
+
+// Patient Log PDF 생성 함수
+function createPatientLogPDFDocument(props: {
+  safeDutyDate: string;
+  safeUserName: string;
+  safeWorkOffice: string;
+  safeWorkHoursFrom: string;
+  safeWorkHoursTo: string;
+  safeDailyWorkReport: string;
+  patientList: any[];
+  totalAppointments: number;
+  incomingCalls: number;
+  outgoingCalls: number;
+  generatedDate: string;
+}) {
+  const { 
+    safeDutyDate, 
+    safeUserName, 
+    safeWorkOffice, 
+    safeWorkHoursFrom, 
+    safeWorkHoursTo,
+    safeDailyWorkReport,
+    patientList,
+    totalAppointments,
+    incomingCalls,
+    outgoingCalls,
+    generatedDate 
+  } = props;
+
+  const pdfStyles = StyleSheet.create({
+    page: { padding: 20, fontFamily: 'Helvetica', fontSize: 9 },
+    header: { marginBottom: 15, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 8, alignItems: 'center' },
+    headerTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+    infoSection: { marginBottom: 15, padding: 8, borderWidth: 1, borderColor: '#ccc', flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap' },
+    infoItem: { fontSize: 8, marginBottom: 4 },
+    stats: { marginBottom: 15, padding: 8, borderWidth: 1, borderColor: '#ccc', backgroundColor: '#f9f9f9', flexDirection: 'row', justifyContent: 'center', gap: 30 },
+    statItem: { alignItems: 'center' },
+    statValue: { fontSize: 14, fontWeight: 'bold', marginBottom: 2 },
+    statLabel: { fontSize: 9, fontWeight: 'bold' },
+    table: { marginTop: 10 },
+    tableRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
+    tableHeader: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#333', backgroundColor: '#f0f0f0', fontWeight: 'bold' },
+    tableCell: { padding: 4, fontSize: 7, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    dailyReport: { marginTop: 15, padding: 8, borderWidth: 1, borderColor: '#ccc' },
+    dailyReportTitle: { fontSize: 12, fontWeight: 'bold', marginBottom: 4 },
+    dailyReportContent: { fontSize: 8, lineHeight: 1.4 },
+    footer: { marginTop: 15, paddingTop: 8, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 8, color: '#666' },
+  });
+
+  const s = pdfStyles;
+
+  // 헤더
+  const header = React.createElement(View, { style: s.header },
+    React.createElement(Text, { style: s.headerTitle }, 'Patient Log'),
+  );
+
+  // 정보 섹션
+  const infoSection = React.createElement(View, { style: s.infoSection },
+    React.createElement(Text, { style: s.infoItem }, `Duty Date: ${safeDutyDate || '-'}`),
+    React.createElement(Text, { style: s.infoItem }, `Name: ${safeUserName || '-'}`),
+    React.createElement(Text, { style: s.infoItem }, `Work Office: ${safeWorkOffice || '-'}`),
+    React.createElement(Text, { style: s.infoItem }, `Work Hours: ${convertTo12Hour(safeWorkHoursFrom)} - ${convertTo12Hour(safeWorkHoursTo)}`),
+  );
+
+  // 통계 섹션
+  const stats = React.createElement(View, { style: s.stats },
+    React.createElement(View, { style: s.statItem },
+      React.createElement(Text, { style: s.statValue }, String(totalAppointments)),
+      React.createElement(Text, { style: s.statLabel }, 'Total Appointments'),
+    ),
+    React.createElement(View, { style: s.statItem },
+      React.createElement(Text, { style: s.statValue }, String(incomingCalls)),
+      React.createElement(Text, { style: s.statLabel }, 'Incoming Calls'),
+    ),
+    React.createElement(View, { style: s.statItem },
+      React.createElement(Text, { style: s.statValue }, String(outgoingCalls)),
+      React.createElement(Text, { style: s.statLabel }, 'Outgoing Calls'),
+    ),
+  );
+
+  // 테이블 헤더
+  const tableHeader = React.createElement(View, { style: s.tableHeader },
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'No.')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Name')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Office')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Appt. Date')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Visit Type')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Call In')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Call Out')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Time')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Remark')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Other Duty')),
+  );
+
+  // 테이블 데이터 행
+  const tableRows = patientList.map((row: any, index: number) => {
+    const safeName = safeStr(row?.name, 50);
+    const safeOffice = safeStr(row?.office, 50);
+    const safeApptDate = safeStr(row?.appt_date || row?.apptDate, 20);
+    const safeVisitType = safeStr(row?.visit_type || row?.visitType, 50);
+    const safeTime = safeStr(row?.time, 20);
+    const safeRemark = safeStr(row?.remark, 100);
+    const safeOtherDuty = safeStr(row?.other_duty || row?.otherDuty, 100);
+    // 체크박스 값 확인: call_in 또는 callIn이 true이면 'O', 아니면 빈 문자열
+    const callIn = row?.call_in === true || row?.callIn === true;
+    const callOut = row?.call_out === true || row?.callOut === true;
+
+    return React.createElement(View, { key: index, style: s.tableRow },
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, String(index + 1))),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeName || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeOffice || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeApptDate || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeVisitType || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, callIn ? 'O' : '')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, callOut ? 'O' : '')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, convertTo12Hour(safeTime))),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeRemark || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeOtherDuty || '-')),
+    );
+  });
+
+  // 테이블
+  const table = patientList.length > 0
+    ? React.createElement(View, { style: s.table }, tableHeader, ...tableRows)
+    : React.createElement(View, { style: { padding: 40, alignItems: 'center' } },
+        React.createElement(Text, { style: { fontSize: 10, color: '#666' } }, 'No patient data recorded.'),
+      );
+
+  // Daily Work Report
+  const dailyReport = safeDailyWorkReport
+    ? React.createElement(View, { style: s.dailyReport },
+        React.createElement(Text, { style: s.dailyReportTitle }, 'Daily Work Report'),
+        React.createElement(Text, { style: s.dailyReportContent }, safeDailyWorkReport),
+      )
+    : null;
+
+  // 푸터
+  const footer = React.createElement(View, { style: s.footer },
+    React.createElement(Text, null, `Generated: ${generatedDate}`),
+  );
+
+  return React.createElement(Document, null,
+    React.createElement(Page, { size: 'A4', orientation: 'portrait', style: s.page }, 
+      header, 
+      infoSection, 
+      stats, 
+      table, 
+      dailyReport,
+      footer
+    ),
+  );
+}
+
 function PatientLogSystem(): React.ReactElement {
-  // 보안 조치 활성화
-  useEffect(() => {
-    enableAllSecurityMeasures({
-      disableConsole: true,
-      disableRightClick: true,
-      disableShortcuts: true,
-      disableCopy: false,
-      disableSelection: false,
-      monitorDevTools: false
-    });
-  }, []);
   
   // 기본 상태
   const [loading, setLoading] = useState(false);
-  const [savedLogs, setSavedLogs] = useState<any[]>([]);
   const [autoSaveStatus, setAutoSaveStatus] = useState(''); // 자동 저장 상태 표시
   
   // 마지막 저장된 데이터 추적 (dailyofficeduty 방식)
@@ -213,6 +437,11 @@ function PatientLogSystem(): React.ReactElement {
     workHoursTo: string;
   } | null>(null); // 이전 basic information ref (최신 값 추적)
   const [isUnlocked, setIsUnlocked] = useState(false); // 아래 섹션 lock 상태
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+
+  // Rate limiting을 위한 ref
+  const lastUpdatePatientRowCall = useRef<number>(0);
+  const lastSubmitCall = useRef<number>(0);
 
   // 폼 데이터 상태 (원본과 동일한 구조)
   const [formData, setFormData] = useState({
@@ -339,9 +568,6 @@ function PatientLogSystem(): React.ReactElement {
           }
         } catch (error) {
           // 기존 document를 찾지 못해도 계속 진행
-          if (process.env.NODE_ENV !== 'production') {
-            console.warn("Previous document not found or error:", error);
-          }
         }
       }
 
@@ -367,9 +593,6 @@ function PatientLogSystem(): React.ReactElement {
               await deleteDoc(doc(db, "patient-logs", previousDocIdToDelete));
             } catch (deleteError) {
               // 삭제 실패해도 계속 진행
-              if (process.env.NODE_ENV !== 'production') {
-                console.warn("Error deleting previous document:", deleteError);
-              }
             }
           }
           
@@ -388,10 +611,6 @@ function PatientLogSystem(): React.ReactElement {
           // setAutoSaveStatus('✅ Auto-saved');
         })
         .catch((error) => {
-          // Production에서는 에러 로깅 비활성화
-          if (process.env.NODE_ENV !== 'production') {
-            console.error("Auto-save error:", error);
-          }
           setAutoSaveStatus('❌ Save failed');
           
           // 2초 후 상태 메시지 제거
@@ -401,10 +620,7 @@ function PatientLogSystem(): React.ReactElement {
         });
       
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Auto-save error:", error);
-      }
+      // 에러 발생 시 조용히 처리
     }
   }, [formData, patientRows, isUnlocked]);
 
@@ -453,8 +669,9 @@ function PatientLogSystem(): React.ReactElement {
     }
 
     try {
-      // 인증 상태 확인 (보안 강화)
-      const currentUser = await getCurrentUser();
+      // 인증 상태 확인
+      const auth = getAuth();
+      const currentUser = auth.currentUser;
       
       const currentDocId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
       
@@ -482,9 +699,7 @@ function PatientLogSystem(): React.ReactElement {
             
             // 보안 강화: 데이터 소유권 확인
             if (currentUser && previousData.userId && previousData.userId !== currentUser.uid) {
-              if (process.env.NODE_ENV !== 'production') {
-                console.warn('⚠️ 다른 사용자의 데이터 접근 시도 차단');
-              }
+              // 다른 사용자의 데이터 접근 시도 차단
             } else if (previousData.patientRows && Array.isArray(previousData.patientRows)) {
               // 기존 patientRows를 state에 반영
               const loadedRows = previousData.patientRows.map((row: any, index: number) => ({
@@ -492,7 +707,7 @@ function PatientLogSystem(): React.ReactElement {
                 id: index + 1
               }));
               
-              // 저장된 row 개수와 30 중 더 큰 값으로 배열 생성 (30개 이상도 유지)
+              // 저장된 row 개수와 30 중 더 큰 값으로 배열 생성 (30개 이상도 유지, 최소 30개 보장)
               const minRows = Math.max(loadedRows.length, 30);
               const newRows = Array.from({ length: minRows }, (_, index) => {
                 if (index < loadedRows.length) {
@@ -517,9 +732,6 @@ function PatientLogSystem(): React.ReactElement {
           }
         } catch (error) {
           // 이전 document를 찾지 못해도 계속 진행
-          if (process.env.NODE_ENV !== 'production') {
-            console.warn("Previous document not found or error:", error);
-          }
         }
       }
       
@@ -534,9 +746,6 @@ function PatientLogSystem(): React.ReactElement {
         // 보안 강화: 데이터 소유권 확인 (Firebase Security Rules와 함께)
         if (currentUser && matchingLog.userId && matchingLog.userId !== currentUser.uid) {
           // 다른 사용자의 데이터는 로드하지 않음 (Security Rules에서도 차단됨)
-          if (process.env.NODE_ENV !== 'production') {
-            console.warn('⚠️ 다른 사용자의 데이터 접근 시도 차단');
-          }
           return;
         }
         
@@ -560,7 +769,7 @@ function PatientLogSystem(): React.ReactElement {
             id: index + 1
           }));
           
-          // 저장된 row 개수와 30 중 더 큰 값으로 배열 생성 (30개 이상도 유지)
+          // 저장된 row 개수와 30 중 더 큰 값으로 배열 생성 (30개 이상도 유지, 최소 30개 보장)
           const minRows = Math.max(loadedRows.length, 30);
           const newRows = Array.from({ length: minRows }, (_, index) => {
             if (index < loadedRows.length) {
@@ -605,10 +814,7 @@ function PatientLogSystem(): React.ReactElement {
         previousFormDataRef.current = newPreviousFormData;
       }
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Error loading existing data:", error);
-      }
+      // 에러 발생 시 조용히 처리
     }
   };
 
@@ -665,10 +871,7 @@ function PatientLogSystem(): React.ReactElement {
         setUnsubmittedWarning('');
       }
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Error checking unsubmitted data:", error);
-      }
+      // 에러 발생 시 조용히 처리
     }
   }, [formData.userName, formData.workOffice, formData.dutyDate]);
 
@@ -741,40 +944,101 @@ function PatientLogSystem(): React.ReactElement {
   }, [formData.userName, formData.workOffice, checkUnsubmittedData]);
 
 
-  // 컴포넌트 마운트 시 저장된 로그 불러오기
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
-    loadSavedLogs();
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'manager') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          // 다른 페이지로 리다이렉트하거나 홈으로 이동
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+      } catch (error: any) {
+        alert('An error occurred while verifying authentication.');
+        setIsAuthorized(false);
+      }
+    });
+
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // 저장된 로그 불러오기
-  const loadSavedLogs = async () => {
-    try {
-      const querySnapshot = await getDocs(collection(db, "patient-logs"));
-      const logs: any[] = [];
-      querySnapshot.forEach((doc) => {
-        logs.push({ id: doc.id, ...doc.data() });
-      });
-      setSavedLogs(logs.sort((a: any, b: any) => {
-        const dateA = a.dutyDate ? (new Date(a.dutyDate).getTime() || 0) : 0;
-        const dateB = b.dutyDate ? (new Date(b.dutyDate).getTime() || 0) : 0;
-        return dateB - dateA;
-      }));
-    } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Error loading logs:", error);
-      }
-    }
-  };
 
-  // 폼 데이터 업데이트 (최고 성능 업데이트)
+  // 입력 값 검증 함수
+  const validateInput = useCallback((field: string, value: any): any => {
+    // 문자열 필드 길이 제한
+    if (typeof value === 'string') {
+      const maxLengths: { [key: string]: number } = {
+        dutyDate: 50,
+        userName: 100,
+        workOffice: 100,
+        workHoursFrom: 20,
+        workHoursTo: 20,
+        dailyWorkReport: 2000,
+        name: 100,
+        office: 50,
+        appt_date: 20,
+        visit_type: 50,
+        time: 20,
+        remark: 200,
+        other_duty: 200
+      };
+      
+      const maxLength = maxLengths[field] || 500;
+      if (value.length > maxLength) {
+        return value.slice(0, maxLength);
+      }
+      
+      // 제어 문자 제거 (XSS 방지)
+      return value.replace(/[\x00-\x1F\x7F-\x9F]/g, '');
+    }
+    
+    return value;
+  }, []);
+
+  // 폼 데이터 업데이트 (입력 검증 포함)
   const updateFormData = useCallback((field: string, value: any) => {
+    const validatedValue = validateInput(field, value);
     setFormData(prev => {
       // 값이 같으면 업데이트하지 않음
-      if ((prev as any)[field] === value) return prev;
-      return { ...prev, [field]: value };
+      if ((prev as any)[field] === validatedValue) return prev;
+      return { ...prev, [field]: validatedValue };
     });
-  }, []);
+  }, [validateInput]);
 
 
   // 환자 행 추가 (useCallback 최적화)
@@ -806,8 +1070,29 @@ function PatientLogSystem(): React.ReactElement {
     });
   }, []);
 
-  // 환자 행 업데이트 (최고 성능 업데이트)
+  // 환자 행 업데이트 (입력 검증 포함, Rate limiting 적용)
   const updatePatientRow = useCallback((id: number, field: string, value: any) => {
+    // Rate limiting: 입력 반응성을 위해 완화된 제한 적용
+    // (자동 저장은 별도 debounce로 처리되므로 입력 자체는 빠르게 반응)
+    const now = Date.now();
+    const rowKey = `lastUpdate_${id}_${field}`;
+    const lastCall = (window as any)[rowKey] || 0;
+    
+    // 전역 rate limiting: 모든 업데이트에 대해 50ms 제한 (입력 반응성 향상)
+    if (now - lastUpdatePatientRowCall.current < 50) {
+      return;
+    }
+    lastUpdatePatientRowCall.current = now;
+
+    // 개별 행 rate limiting: 동일 필드에 대해 100ms 제한 (입력 반응성 향상)
+    if (now - lastCall < 100) {
+      return;
+    }
+    (window as any)[rowKey] = now;
+
+    // 입력 값 검증
+    const validatedValue = validateInput(field, value);
+    
     setPatientRows(prevRows => {
       const rowIndex = prevRows.findIndex(row => row.id === id);
       
@@ -818,25 +1103,25 @@ function PatientLogSystem(): React.ReactElement {
       const row = prevRows[rowIndex];
       
       // 값이 같으면 업데이트하지 않음
-      if ((row as any)[field] === value) {
+      if ((row as any)[field] === validatedValue) {
         return prevRows;
       }
       
-      const updatedRow = { ...row, [field]: value };
+      const updatedRow = { ...row, [field]: validatedValue };
       
       // Office가 변경되면 visit_type을 초기화
-      if (field === 'office' && row.office !== value) {
+      if (field === 'office' && row.office !== validatedValue) {
         updatedRow.visit_type = '';
       }
       // Call In 또는 Call Out이 체크되면 현재 시간을 Time에 자동 입력
-      if ((field === 'call_in' || field === 'call_out') && value === true) {
+      if ((field === 'call_in' || field === 'call_out') && validatedValue === true) {
         const now = new Date();
         const timeString = now.toTimeString().slice(0, 5);
         updatedRow.time = timeString;
       }
       // Call In과 Call Out이 모두 체크 해제되면 Time을 비움
-      if ((field === 'call_in' && value === false && !row.call_out) || 
-          (field === 'call_out' && value === false && !row.call_in)) {
+      if ((field === 'call_in' && validatedValue === false && !row.call_out) || 
+          (field === 'call_out' && validatedValue === false && !row.call_in)) {
         updatedRow.time = '';
       }
       
@@ -844,7 +1129,7 @@ function PatientLogSystem(): React.ReactElement {
       newRows[rowIndex] = updatedRow;
       return newRows;
     });
-  }, []);
+  }, [validateInput]);
 
   // 폼 초기화 함수
   const resetForm = () => {
@@ -875,51 +1160,41 @@ function PatientLogSystem(): React.ReactElement {
     setIsUnlocked(false);
   };
 
-  // PDF 생성 및 제출
+  // PDF 생성 및 제출 (Rate limiting 적용)
   const handleSubmit = async () => {
+    // Rate limiting: 최근 3초 내 호출 방지 (PDF 생성은 무거운 작업)
+    // (실수로 두 번 클릭하는 것을 방지하되, 사용자 경험을 해치지 않도록)
+    const now = Date.now();
+    if (now - lastSubmitCall.current < 3000) {
+      alert('⚠️ Please try again.');
+      return;
+    }
+    lastSubmitCall.current = now;
+
+    // 이미 제출 중이면 중복 호출 방지
+    if (loading) {
+      return;
+    }
+
     if (!isBasicInfoComplete()) {
       alert('⚠️ Please fill in all Basic Information fields.');
       return;
     }
 
-    // 인증 상태 확인 (보안 강화 - 초기화 대기 포함)
-    const isAuthenticated = await checkAuthState(true); // waitForInit = true
-    if (!isAuthenticated) {
-      alert('⚠️ 로그인이 필요합니다. 로그인 후 다시 시도해주세요.');
-      return;
-    }
-
-    // 현재 사용자 정보 가져오기 (로깅 및 보안 강화)
-    const currentUser = await getCurrentUser();
+    // 인증 상태 확인
+    const auth = getAuth();
+    const currentUser = auth.currentUser;
     if (!currentUser) {
-      alert('⚠️ 사용자 정보를 가져올 수 없습니다. 로그인 상태를 확인해주세요.');
+      alert('⚠️ Please log in.');
       return;
     }
     
-    // 토큰 미리 갱신 (서버 요청 전에 토큰이 최신인지 확인)
-    try {
-      const { getAuth } = await import('firebase/auth');
-      const auth = getAuth();
-      if (auth.currentUser) {
-        // 토큰을 미리 갱신하여 최신 상태로 유지
-        await auth.currentUser.getIdToken(true);
-      }
-    } catch (tokenError) {
-      // 토큰 갱신 실패는 무시 (secureFetch에서 재시도할 것)
-      if (process.env.NODE_ENV !== 'production') {
-        console.warn('Token refresh warning:', tokenError);
-      }
-    }
-    
-    // 개발 환경에서만 로그 출력
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('✅ 사용자 인증 확인:', { uid: currentUser.uid, email: currentUser.email });
-    }
+    // 로그 제거 (보안 강화)
 
     // 미제출 데이터가 있는지 확인
     if (unsubmittedWarning) {
       const confirmSubmit = window.confirm(
-        `${unsubmittedWarning}\n\n새로운 날짜의 데이터를 제출하시겠습니까?`
+        `${unsubmittedWarning}\n\nWould you like to submit?`
       );
       if (!confirmSubmit) {
         return;
@@ -968,9 +1243,6 @@ function PatientLogSystem(): React.ReactElement {
           }
         } catch (error) {
           // 기존 document를 찾지 못해도 계속 진행
-          if (process.env.NODE_ENV !== 'production') {
-            console.warn("Previous document not found or error:", error);
-          }
         }
       }
       
@@ -997,9 +1269,6 @@ function PatientLogSystem(): React.ReactElement {
           await deleteDoc(doc(db, "patient-logs", previousDocIdToDelete));
         } catch (deleteError) {
           // 삭제 실패해도 계속 진행
-          if (process.env.NODE_ENV !== 'production') {
-            console.warn("Error deleting previous document:", deleteError);
-          }
         }
       }
       
@@ -1016,359 +1285,161 @@ function PatientLogSystem(): React.ReactElement {
       setPreviousFormData(newPreviousFormData);
       previousFormDataRef.current = newPreviousFormData;
 
-      // 2. API로 PDF 생성 (보안 강화 - 인증 필수)
-      setSubmitStatus('Generating PDF...');
+      // 2. 클라이언트 사이드에서 PDF 생성
+      setSubmitStatus('Submitting...');
       setProgress(30);
       
-      // 보안이 강화된 요청 데이터 준비
-      const requestData = {
-        patientData: {
-          ...formData,
-          patientLogs: patientRows.filter(row => 
-            row.name || row.office || row.appt_date || row.visit_type || 
-            row.call_in || row.call_out || row.time || row.remark || row.other_duty
-          )
-        }
-      };
+      // PDF용 데이터 준비
+      const patientListForPdf = patientRows.filter(row => 
+        row.name || row.office || row.appt_date || row.visit_type || 
+        row.call_in || row.call_out || row.time || row.remark || row.other_duty
+      );
       
-      // secureFetch를 사용하여 보안 강화된 요청 전송 (인증 필수)
-      let response: Response;
+      // 통계 계산
+      const totalAppointments = patientListForPdf.filter(row => row.appt_date && row.name).length;
+      const incomingCalls = patientListForPdf.filter(row => row.call_in).length;
+      const outgoingCalls = patientListForPdf.filter(row => row.call_out).length;
+      
+      // 날짜 포맷팅
+      const generatedDate = new Date().toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: true
+      });
+      
+      // 데이터 sanitize
+      const safeDutyDate = (formData.dutyDate || '').trim().slice(0, 50).replace(/[<>]/g, '');
+      const safeUserName = (formData.userName || '').trim().slice(0, 100).replace(/[<>]/g, '');
+      const safeWorkOffice = (formData.workOffice || '').trim().slice(0, 100).replace(/[<>]/g, '');
+      const safeWorkHoursFrom = (formData.workHoursFrom || '').trim().slice(0, 20).replace(/[<>]/g, '');
+      const safeWorkHoursTo = (formData.workHoursTo || '').trim().slice(0, 20).replace(/[<>]/g, '');
+      const safeDailyWorkReport = (formData.dailyWorkReport || '').trim().slice(0, 2000).replace(/[<>]/g, '');
+      
+      // PDF 문서 생성
+      setSubmitStatus('Processing...');
+      setProgress(50);
+      
+      const pdfDoc = createPatientLogPDFDocument({
+        safeDutyDate,
+        safeUserName,
+        safeWorkOffice,
+        safeWorkHoursFrom,
+        safeWorkHoursTo,
+        safeDailyWorkReport,
+        patientList: patientListForPdf,
+        totalAppointments,
+        incomingCalls,
+        outgoingCalls,
+        generatedDate,
+      });
+      
+      // PDF blob 생성
+      setSubmitStatus('Processing...');
+      setProgress(60);
+      
+      const pdfBlob = await pdf(pdfDoc).toBlob();
+      
+      // 파일명 생성 (강화된 검증)
+      const safeDate = (formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }))
+        .replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+      const safeName = (formData.userName || 'Unknown')
+        .replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+      const safeOffice = (formData.workOffice || 'Unknown')
+        .replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
+      const filename = `7) ${safeDate}_${safeOffice}_${safeName}_Patient Log.pdf`.slice(0, 255);
+      const date = safeDate;
+      const name = safeName;
+      const office = safeOffice;
+      
+      // Firebase에 자동 저장
+      setSubmitStatus('Saving...');
+      setProgress(70);
+      
       try {
-        // 인증 상태 재확인 (요청 전)
-        const isAuthReady = await checkAuthState(true);
-        if (!isAuthReady) {
-          throw new Error('인증이 필요합니다. 로그인 후 다시 시도해주세요.');
-        }
+        // PDF를 Firebase Storage에 저장
+        const storage = getStorage();
+        const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
         
-        // 토큰 미리 갱신 (요청 전에 최신 토큰 확보)
-        const { getAuth } = await import('firebase/auth');
-        const auth = getAuth();
-        if (auth.currentUser) {
-          await auth.currentUser.getIdToken(true); // 강제 갱신
-        }
+        // PDF 업로드
+        await uploadBytes(storageRef, pdfBlob);
         
-        response = await secureFetch('/api/generate-pdf', {
-          method: 'POST',
-          body: JSON.stringify(requestData),
-        }, true); // requireAuth = true로 설정
-      } catch (fetchError: any) {
-        // secureFetch 자체에서 발생한 에러 (인증 실패 등)
-        const errorMsg = fetchError.message || '요청 전송 중 오류가 발생했습니다.';
+        // 다운로드 URL 가져오기
+        const downloadUrl = await getDownloadURL(storageRef);
         
-        // 인증 관련 에러인지 확인
-        if (errorMsg.includes('Authentication') || 
-            errorMsg.includes('token') || 
-            errorMsg.includes('인증') ||
-            errorMsg.includes('로그인')) {
-          // 인증 에러인 경우 재시도 로직으로 넘어가도록 특별 처리
-          // response 객체를 생성하여 401 상태로 처리
-          response = new Response(
-            JSON.stringify({ 
-              success: false, 
-              error: '인증이 필요합니다. 로그인 후 다시 시도해주세요.' 
-            }),
-            { 
-              status: 401,
-              statusText: 'Unauthorized',
-              headers: { 'Content-Type': 'application/json' }
-            }
-          );
-        } else {
-          // 인증이 아닌 다른 에러
-          setLoading(false);
-          setSubmitStatus('');
-          alert(`⚠️ 오류: ${errorMsg}`);
-          return;
-        }
-      }
-
-      if (response.ok) {
-        // HTML 응답 받기
-        setSubmitStatus('Generating PDF...');
-        setProgress(60);
+        // Firestore에 메타데이터 저장
+        const safeMetadata = sanitizeFirebaseDataClient({
+          filename: filename,
+          office: office,
+          date: date,
+          name: name,
+          type: 'Patient Log',
+          source: 'p_page',
+        });
         
-        // HTML 텍스트 받기
-        const htmlContent = await response.text();
+        await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
+          ...safeMetadata,
+          url: downloadUrl,
+          storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
+          createdAt: new Date(),
+        });
         
-        // 파일명 생성
-        const date = formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-        const name = formData.userName || 'Unknown';
-        const office = formData.workOffice || 'Unknown';
-        const filename = `7) ${date}_${office}_${name}_Patient Log.pdf`;
+        setSubmitStatus('Submitted Successfully!');
+        setProgress(100);
         
-        // Firebase에 자동 저장 (e.tsx에서 확인 가능)
-        setSubmitStatus('Saving to archive...');
-        setProgress(70);
+        // 미제출 경고 메시지 업데이트
+        await checkUnsubmittedData();
         
-        try {
-          // HTML을 Blob으로 변환하여 Firebase에 저장
-          const htmlBlob = new Blob([htmlContent], { type: 'text/html' });
-          const storage = getStorage();
-          // 파일명은 .pdf로 유지 (확장자는 실제로는 HTML이지만 표시는 PDF로)
-          const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
-          
-          // HTML 업로드
-          await uploadBytes(storageRef, htmlBlob);
-          
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // Firestore에 메타데이터 저장 (HTML도 함께 저장)
-          const safeMetadata = sanitizeFirebaseDataClient({
-            filename: filename, // .pdf 확장자 유지
-            office: office,
-            date: date,
-            name: name,
-            type: 'Patient Log',
-            source: 'p_route',
-          });
-          
-          // HTML이 너무 크면 Firestore 제한(1MB)을 고려하여 저장
-          // HTML이 900KB 이하인 경우에만 직접 저장 (안전 마진)
-          const htmlSize = new Blob([htmlContent]).size;
-          const maxHtmlSize = 900 * 1024; // 900KB
-          
-          await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
-            ...safeMetadata,
-            url: downloadUrl,
-            storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
-            // HTML이 작으면 Firestore에 직접 저장, 크면 URL만 저장
-            ...(htmlSize <= maxHtmlSize ? { html: htmlContent } : {}),
-            createdAt: new Date(),
-          });
-          
-          setSubmitStatus('✅ Submitted Successfully!');
-          setProgress(100);
-          
-          // 미제출 경고 메시지 업데이트
-          await checkUnsubmittedData();
-          
-          // 폼 초기화
-          resetForm();
-          
-          setTimeout(() => {
-            setLoading(false);
-            setSubmitStatus('');
-            setProgress(0);
-          }, 2000);
-        } catch (storageError: any) {
-          const errorMsg = storageError?.message || '알 수 없는 오류';
-          alert(`저장 중 오류가 발생했습니다: ${errorMsg}`);
+        // 폼 초기화
+        resetForm();
+        
+        setTimeout(() => {
           setLoading(false);
           setSubmitStatus('');
           setProgress(0);
-        }
-      } else {
-        // 에러 응답 처리 (보안 강화)
-        let errorMessage = 'PDF 생성 중 오류가 발생했습니다.';
-        let isAuthError = false;
+        }, 2000);
+      } catch (storageError: any) {
+        // 에러 메시지 추출 및 보안 강화
+        const errorMessage = storageError?.message || 'Error';
         
-        // 먼저 에러 메시지 파싱 시도
-        try {
-          // response를 텍스트로 먼저 읽기 (한 번만 읽을 수 있음)
-          const responseText = await response.text();
-          
-          if (responseText) {
-            try {
-              const errorData = JSON.parse(responseText);
-              errorMessage = errorData.error || errorMessage;
-              
-              // 인증 관련 에러 메시지인지 확인
-              if (errorMessage.includes('인증') || 
-                  errorMessage.includes('Authentication') ||
-                  errorMessage.includes('token') ||
-                  errorMessage.includes('로그인') ||
-                  errorMessage.includes('인증 토큰')) {
-                isAuthError = true;
-              }
-            } catch (jsonError) {
-              // JSON 파싱 실패 시 텍스트 자체를 에러 메시지로 사용
-              if (responseText.length < 500) {
-                errorMessage = responseText;
-              }
-            }
-          } else {
-            // 응답 본문이 없는 경우 상태 코드로 판단
-            if (response.status === 401) {
-              isAuthError = true;
-              errorMessage = '인증이 필요합니다. 로그인 후 다시 시도해주세요.';
-            } else if (response.status === 400) {
-              errorMessage = '잘못된 요청입니다. 입력 데이터를 확인해주세요.';
-            } else if (response.status === 403) {
-              errorMessage = '권한이 없습니다. 접근이 거부되었습니다.';
-            } else if (response.status >= 500) {
-              errorMessage = '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
-            }
-          }
-        } catch (parseError) {
-          // 파싱 실패 시 상태 코드로 판단
-          if (response.status === 401) {
-            isAuthError = true;
-            errorMessage = '인증이 필요합니다. 로그인 후 다시 시도해주세요.';
-          } else if (response.status === 400) {
-            errorMessage = '잘못된 요청입니다. 입력 데이터를 확인해주세요.';
-          } else if (response.status === 403) {
-            errorMessage = '권한이 없습니다. 접근이 거부되었습니다.';
-          } else if (response.status >= 500) {
-            errorMessage = '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
-          }
-        }
+        // 민감한 정보 필터링
+        const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
+        const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
+          errorMessage.toLowerCase().includes(keyword.toLowerCase())
+        );
         
-        // 401 에러이거나 인증 관련 에러인 경우 특별 처리 (강화된 재시도)
-        if (response.status === 401 || isAuthError) {
-          // 토큰 갱신을 여러 번 시도 (최대 3회)
-          let retrySuccess = false;
-          const maxRetries = 3;
-          
-          for (let retryCount = 0; retryCount < maxRetries && !retrySuccess; retryCount++) {
-            try {
-              const { getAuth } = await import('firebase/auth');
-              const auth = getAuth();
-              
-              // 인증 상태 재확인
-              if (!auth.currentUser) {
-                errorMessage = '로그인 세션이 만료되었습니다. 다시 로그인해주세요.';
-                break;
-              }
-              
-              // 토큰 강제 갱신 (매번 새로 갱신)
-              const newToken = await auth.currentUser.getIdToken(true);
-              if (!newToken) {
-                if (retryCount < maxRetries - 1) {
-                  await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)));
-                  continue;
-                }
-                errorMessage = '토큰을 가져올 수 없습니다. 다시 로그인해주세요.';
-                break;
-              }
-              
-              // 갱신된 토큰으로 재시도
-              setSubmitStatus(`재시도 중... (${retryCount + 1}/${maxRetries})`);
-              const retryResponse = await secureFetch('/api/generate-pdf', {
-                method: 'POST',
-                body: JSON.stringify(requestData),
-              }, true);
-              
-              if (retryResponse.ok) {
-                retrySuccess = true;
-                
-                // PDF blob 받기
-                const pdfBlob = await retryResponse.blob();
-                
-                const date = formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
-                const name = formData.userName || 'Unknown';
-                const office = formData.workOffice || 'Unknown';
-                const filename = `7) ${date}_${office}_${name}_Patient Log.pdf`;
-                
-                // PDF를 Firebase Storage에 저장
-                setSubmitStatus('Saving PDF to archive...');
-                setProgress(70);
-                
-                try {
-                  const storage = getStorage();
-                  const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
-                  
-                  // PDF 업로드
-                  await uploadBytes(storageRef, pdfBlob);
-                  
-                  // 다운로드 URL 가져오기
-                  const downloadUrl = await getDownloadURL(storageRef);
-                  
-                  // Firestore에 메타데이터 저장
-                  const safeMetadata = sanitizeFirebaseDataClient({
-                    filename,
-                    office: office,
-                    date: date,
-                    name: name,
-                    type: 'Patient Log',
-                    source: 'p_route',
-                  });
-                  
-                  await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
-                    ...safeMetadata,
-                    url: downloadUrl,
-                    storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
-                    createdAt: new Date(),
-                  });
-                } catch (storageError: any) {
-                  const errorMsg = storageError?.message || '알 수 없는 오류';
-                  alert(`PDF 저장 중 오류가 발생했습니다: ${errorMsg}`);
-                }
-                
-                setSubmitStatus('✅ Submitted Successfully! PDF saved to archive.');
-                setProgress(100);
-                await checkUnsubmittedData();
-                resetForm();
-                
-                setTimeout(() => {
-                  setLoading(false);
-                  setSubmitStatus('');
-                  setProgress(0);
-                }, 2000);
-                return; // 성공적으로 완료
-              } else if (retryResponse.status !== 401) {
-                // 재시도 응답에서 에러 메시지 추출
-                try {
-                  const retryResponseText = await retryResponse.text();
-                  if (retryResponseText) {
-                    try {
-                      const errorData = JSON.parse(retryResponseText);
-                      errorMessage = errorData.error || errorMessage;
-                    } catch {
-                      // JSON 파싱 실패 시 텍스트 자체를 사용
-                      if (retryResponseText.length < 500) {
-                        errorMessage = retryResponseText;
-                      }
-                    }
-                  }
-                } catch {
-                  errorMessage = 'PDF 생성 중 오류가 발생했습니다.';
-                }
-                break;
-              }
-            } catch (retryError: any) {
-              if (process.env.NODE_ENV !== 'production') {
-                console.warn(`Token refresh retry ${retryCount + 1} failed:`, retryError);
-              }
-              
-              if (retryCount < maxRetries - 1) {
-                await new Promise(resolve => setTimeout(resolve, 500 * (retryCount + 1)));
-              } else {
-                errorMessage = '인증 오류가 지속됩니다. 페이지를 새로고침한 후 다시 시도해주세요.';
-              }
-            }
-          }
-          
-          if (!retrySuccess) {
-            errorMessage = errorMessage || '인증이 만료되었습니다. 페이지를 새로고침한 후 다시 시도해주세요.';
-          }
-        } else {
-          // 401이 아닌 다른 에러 처리
-          // 위에서 이미 response.text()로 읽었으므로, 여기서는 상태 코드 기반으로만 처리
-          if (response.status === 403) {
-            errorMessage = '권한이 없습니다. 접근이 거부되었습니다.';
-          } else if (response.status === 429) {
-            errorMessage = '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.';
-          } else if (response.status >= 500) {
-            errorMessage = '서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.';
-          } else if (response.status === 400) {
-            errorMessage = '잘못된 요청입니다. 입력 데이터를 확인해주세요.';
-          }
-        }
+        const safeErrorMessage = hasSensitiveInfo 
+          ? 'Error.' 
+          : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
         
-        throw new Error(errorMessage);
+        alert(`Error: ${safeErrorMessage}`);
+        setLoading(false);
+        setSubmitStatus('');
+        setProgress(0);
       }
 
     } catch (error) {
-      // 에러 메시지 추출
-      const errorMessage = (error as any).message || '알 수 없는 오류가 발생했습니다.';
+      // 에러 메시지 추출 및 보안 강화
+      const errorMessage = (error as any).message || 'Error';
+      
+      // 민감한 정보 필터링
+      const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
+      const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
+        errorMessage.toLowerCase().includes(keyword.toLowerCase())
+      );
+      
+      const safeErrorMessage = hasSensitiveInfo 
+        ? 'An error occurred while submitting.' 
+        : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
       
       // 화면에 에러 메시지 표시
-      setSubmitStatus('❌ Submission failed: ' + errorMessage);
+      setSubmitStatus('❌ Submission failed: ' + safeErrorMessage);
       setProgress(0);
       
       // 사용자에게 alert로도 표시 (콘솔이 막혀있으므로)
-      alert('❌ 제출 실패\n\n' + errorMessage + '\n\n자세한 내용은 로딩 화면의 메시지를 확인해주세요.');
+      alert('❌ Submission failed. Please try again.');
       
       setTimeout(() => {
         setLoading(false);
@@ -1476,6 +1547,48 @@ function PatientLogSystem(): React.ReactElement {
     boxShadow: '0 4px 8px rgba(0, 0, 0, 0.1)'
   };
 
+  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
+  if (isAuthorized === null) {
+    return (
+      <div style={bodyStyle}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+          background: 'linear-gradient(to bottom, #a2d2ff, #f0f8ff)',
+          fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
+            <div style={{ fontSize: '18px', color: '#023047' }}>Verifying authentication...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div style={bodyStyle}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+          background: 'linear-gradient(to bottom, #a2d2ff, #f0f8ff)',
+          fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
+            <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
+            <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <style>{`
@@ -1502,80 +1615,44 @@ function PatientLogSystem(): React.ReactElement {
             <div style={{
               backgroundColor: "white",
               padding: "40px",
-              borderRadius: "12px",
+              borderRadius: "20px",
               textAlign: "center",
-              boxShadow: "0 10px 30px rgba(0, 0, 0, 0.3)",
+              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.3)",
               maxWidth: "400px",
               width: "90%"
             }}>
               <div style={{
-                border: "4px solid #f3f3f3",
-                borderTop: "4px solid #4a90e2",
-                borderRadius: "50%",
-                width: "50px",
-                height: "50px",
-                animation: "spin 1s linear infinite",
-                margin: "0 auto 20px"
-              }}></div>
-              <h3 style={{
-                color: "#333",
-                fontSize: "1.2rem",
+                fontSize: "18px",
                 fontWeight: "600",
-                margin: "0 0 10px 0"
-              }}>
-                {submitStatus || "Processing..."}
-              </h3>
-              <p style={{
-                color: "#666",
-                fontSize: "0.9rem",
-                margin: "0 0 20px 0",
-                lineHeight: "1.4"
-              }}>
-                {submitStatus === 'Saving...'}
-                {submitStatus === 'Generating PDF...'}
-                {submitStatus === 'Processing PDF...'}
-                {submitStatus === 'Complete!'}
-                {!submitStatus && 'Processing... Please wait'}
-              </p>
-              {/* 진행률 바 */}
-              <div style={{
-                width: "100%",
-                backgroundColor: "#e9ecef",
-                borderRadius: "10px",
-                overflow: "hidden",
+                color: "#4a6fa1",
                 marginBottom: "20px"
               }}>
-                <div style={{
-                  width: `${progress}%`,
-                  height: "8px",
-                  backgroundColor: "#4a90e2",
-                  borderRadius: "10px",
-                  transition: "width 0.3s ease",
-                  background: "linear-gradient(90deg, #4a90e2, #357abd)"
-                }}></div>
+                {submitStatus}
               </div>
-              <p style={{
-                color: "#495057",
-                fontSize: "0.8rem",
-                margin: "0 0 20px 0",
-                fontWeight: "500"
-              }}>
-                {progress}% Complete
-              </p>
-              <div style={{
-                backgroundColor: "#f8f9fa",
-                padding: "15px",
-                borderRadius: "8px",
-                border: "1px solid #e9ecef"
-              }}>
-                <p style={{
-                  color: "#495057",
-                  fontSize: "0.8rem",
-                  margin: 0,
-                  fontWeight: "500"
+              {progress > 0 && (
+                <div style={{
+                  width: "100%",
+                  height: "8px",
+                  backgroundColor: "#f0f0f0",
+                  borderRadius: "4px",
+                  overflow: "hidden",
+                  marginBottom: "10px"
                 }}>
-                  ⚠️ Please do not close
-                </p>
+                  <div style={{
+                    width: `${progress}%`,
+                    height: "100%",
+                    background: "linear-gradient(90deg, #4a90e2, #51cf66)",
+                    transition: "width 0.3s ease",
+                    borderRadius: "4px"
+                  }} />
+                </div>
+              )}
+              <div style={{
+                fontSize: "14px",
+                color: "#666",
+                marginTop: "10px"
+              }}>
+                {progress}%
               </div>
             </div>
           </div>
@@ -1885,7 +1962,7 @@ function PatientLogSystem(): React.ReactElement {
 
         {/* 일일 업무 보고서 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>📝 Daily Work Report</h2>
+          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>Daily Work Report</h2>
           {!isUnlocked ? (
             <div style={{
               padding: '20px',
