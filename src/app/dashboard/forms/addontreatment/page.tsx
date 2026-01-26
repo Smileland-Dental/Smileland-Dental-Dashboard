@@ -2,8 +2,10 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
-import { db } from "@/lib/firebase.config";
+import { db, auth } from "@/lib/firebase.config";
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 // 🔒 보안: 입력 검증 함수
 const validateInput = (value: string, maxLength: number = 500): string => {
   if (typeof value !== 'string') return '';
@@ -62,6 +64,7 @@ export default function AddOnTreatment() {
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
   
   // 🔒 보안: 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   // 더 안전한 UUID 생성 방식을 사용하는 것을 권장합니다 (예: crypto.randomUUID)
@@ -86,8 +89,8 @@ export default function AddOnTreatment() {
   // 마지막 저장된 데이터 추적
   const [lastSavedData, setLastSavedData] = useState({});
   
-  // 날짜 상태
-  const [dutyDate, setDutyDate] = useState(() => {
+  // 현재 캘리포니아 시간 가져오기
+  const getCurrentCaliforniaTime = () => {
     const now = new Date();
     const formatter = new Intl.DateTimeFormat('en-US', {
       timeZone: 'America/Los_Angeles',
@@ -100,27 +103,25 @@ export default function AddOnTreatment() {
     const month = parts.find(p => p.type === 'month')?.value || '';
     const day = parts.find(p => p.type === 'day')?.value || '';
     return `${year}-${month}-${day}`;
-  });
+  };
+  
+  // 날짜 상태
+  const [dutyDate, setDutyDate] = useState('');
 
   // 오피스 선택 상태
   const [selectedOffice, setSelectedOffice] = useState('');
   
   // 오피스 옵션
-  const officeOptions = ['Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
+  const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
   // 환자 데이터 상태 - 동적으로 관리
   const [patientData, setPatientData] = useState<Record<string, string>>({});
   const [rowCount, setRowCount] = useState(20);
 
-  // 현재 캘리포니아 시간 가져오기
-  const getCurrentCaliforniaTime = () => {
-    const now = new Date();
-    return new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-  };
-
   // 12시간 형식 시간 가져오기
   const getCurrentTime12Hour = () => {
-    const californiaTime = getCurrentCaliforniaTime();
+    const now = new Date();
+    const californiaTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
     let hours = californiaTime.getHours();
     const minutes = californiaTime.getMinutes();
     const ampm = hours >= 12 ? 'PM' : 'AM';
@@ -152,6 +153,90 @@ export default function AddOnTreatment() {
       return timeStr;
     }
   };
+
+  // --- PDF 생성 관련 상수/스타일 ---
+  const pdfStyles = StyleSheet.create({
+    page: { padding: 22, fontFamily: 'Helvetica', fontSize: 8 },
+    header: { marginBottom: 10, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 6, alignItems: 'center' },
+    headerTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
+    infoSection: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 15, fontSize: 10 },
+    row: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
+    cell: { padding: 4, fontSize: 8, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    cellNo: { flex: 0.3 },
+    cellName: { flex: 2 },
+    cellDob: { flex: 1.5 },
+    cellTime: { flex: 1 },
+    cellBold: { fontWeight: 'bold' },
+    cellGray: { backgroundColor: '#f0f0f0' },
+    footer: { marginTop: 15, paddingTop: 8, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 7, color: '#666' },
+  });
+
+  // PDF 생성 유틸 함수
+  function safeStr(v: unknown, max: number): string {
+    if (v == null) return '';
+    return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+  }
+
+  function createAddOnTreatmentPDFDocument(props: {
+    safeDutyDate: string;
+    safeSelectedOffice: string;
+    patientRows: Array<{
+      rowNumber: number;
+      patientName: string;
+      dob: string;
+      time: string;
+    }>;
+    generatedDate: string;
+  }) {
+    const { safeDutyDate, safeSelectedOffice, patientRows, generatedDate } = props;
+    const s = pdfStyles;
+
+    // Header
+    const header = React.createElement(View, { style: s.header },
+      React.createElement(Text, { style: s.headerTitle }, 'Add-On Treatment'),
+    );
+
+    // Info Section
+    const infoSection = React.createElement(View, { style: s.infoSection },
+      React.createElement(Text, null, `Date: ${safeDutyDate}`),
+      React.createElement(Text, null, `Location: ${safeSelectedOffice}`),
+      React.createElement(Text, null, `Generated: ${generatedDate}`),
+    );
+
+    // Table Header
+    const tableHeader = React.createElement(View, { key: 'header', style: [s.row, s.cellGray] },
+      React.createElement(View, { style: [s.cell, s.cellNo, s.cellBold] }, React.createElement(Text, null, 'No.')),
+      React.createElement(View, { style: [s.cell, s.cellName, s.cellBold] }, React.createElement(Text, null, 'Name of Patient')),
+      React.createElement(View, { style: [s.cell, s.cellDob, s.cellBold] }, React.createElement(Text, null, 'DOB')),
+      React.createElement(View, { style: [s.cell, s.cellTime, s.cellBold] }, React.createElement(Text, null, 'Time')),
+    );
+
+    // Data Rows
+    const dataRows = patientRows.map((row, index) => {
+      const safePatientName = safeStr(row.patientName, 100);
+      const safeDob = safeStr(row.dob, 20);
+      const safeTime = safeStr(convertTo12Hour(row.time), 20);
+      
+      return React.createElement(View, { key: index, style: s.row },
+        React.createElement(View, { style: [s.cell, s.cellNo] }, React.createElement(Text, null, String(index + 1))),
+        React.createElement(View, { style: [s.cell, s.cellName] }, React.createElement(Text, null, safePatientName || '-')),
+        React.createElement(View, { style: [s.cell, s.cellDob] }, React.createElement(Text, null, safeDob || '-')),
+        React.createElement(View, { style: [s.cell, s.cellTime] }, React.createElement(Text, null, safeTime || '-')),
+      );
+    });
+
+    const table = React.createElement(View, null, tableHeader, ...dataRows);
+
+    const footer = React.createElement(View, { style: s.footer }, React.createElement(Text, null, `Generated: ${generatedDate}`));
+
+    return React.createElement(Document, null,
+      React.createElement(Page, { size: 'A4', orientation: 'portrait', style: s.page }, header, infoSection, table, footer),
+    );
+  }
+
+  function sanitizeFilename(filename: string): string {
+    return filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 255);
+  }
 
   // 행 추가 함수
   const addRow = () => {
@@ -194,13 +279,11 @@ export default function AddOnTreatment() {
       const safeDutyDate = dutyDate.replace(/[^a-zA-Z0-9_-]/g, '');
       // 경로 탐색 공격 방지
       if (safeOffice.includes('..') || safeDutyDate.includes('..')) {
-        console.error('Invalid document ID: path traversal detected');
         return;
       }
       const docId = sanitizeDocId(`${safeDutyDate}_${safeOffice}_addon_treatment`);
       // 문서 ID 길이 제한 (Firebase 제한: 1500 bytes)
       if (docId.length > 1500) {
-        console.error('Document ID too long');
         return;
       }
       const safeDataToSave = sanitizeFirebaseData(dataToSave);
@@ -210,10 +293,7 @@ export default function AddOnTreatment() {
       setLastSavedData(currentData);
       
     } catch (error) {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Auto-save error:", error);
-      }
+      // Auto-save error silently handled
     }
   }, [dutyDate, selectedOffice, patientData, rowCount, lastSavedData, isUpdatingFromFirebase, userSessionId]);
 
@@ -230,22 +310,16 @@ export default function AddOnTreatment() {
     if (!dutyDate || !selectedOffice) return;
 
     try {
-      // Production에서는 로그 출력 안 함
-      if (process.env.NODE_ENV !== 'production') {
-        console.log("Loading data for date:", dutyDate, "office:", selectedOffice);
-      }
       setSubmitStatus('Loading data...');
       
       // 🔒 보안: 문서 ID 검증
       const safeOffice = selectedOffice.replace(/[^a-zA-Z0-9_-]/g, '');
       const safeDutyDate = dutyDate.replace(/[^a-zA-Z0-9_-]/g, '');
       if (safeOffice.includes('..') || safeDutyDate.includes('..')) {
-        console.error('Invalid document ID: path traversal detected');
         return;
       }
       const docId = sanitizeDocId(`${safeDutyDate}_${safeOffice}_addon_treatment`);
       if (docId.length > 1500) {
-        console.error('Document ID too long');
         return;
       }
       const docSnap = await getDocs(collection(db, "addon-treatment")).then(snapshot => {
@@ -265,11 +339,6 @@ export default function AddOnTreatment() {
           setSubmitStatus('No data found - initialized empty form');
           setTimeout(() => setSubmitStatus(''), 2000);
           return;
-        }
-        
-        // Production에서는 로그 출력 안 함
-        if (process.env.NODE_ENV !== 'production') {
-          console.log("Data loaded from Firebase:", data);
         }
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
@@ -296,7 +365,6 @@ export default function AddOnTreatment() {
         setSubmitStatus('Data loaded successfully');
         setTimeout(() => setSubmitStatus(''), 2000);
       } else {
-        console.log("No data found for date:", dutyDate);
         // 데이터가 없으면 초기화
         setPatientData({});
         setRowCount(20);
@@ -307,10 +375,6 @@ export default function AddOnTreatment() {
       
     } catch (error) {
       // 🔒 보안: 에러 메시지에 민감한 정보 노출 방지
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Error loading data:", error);
-      }
       setSubmitStatus('Error loading data. Please try again.');
       setTimeout(() => setSubmitStatus(''), 3000);
     }
@@ -325,20 +389,14 @@ export default function AddOnTreatment() {
   useEffect(() => {
     if (!dutyDate || !selectedOffice) return;
 
-    // Production에서는 로그 출력 안 함
-    if (process.env.NODE_ENV !== 'production') {
-      console.log("Setting up real-time listener for date:", dutyDate, "office:", selectedOffice);
-    }
     // 🔒 보안: 문서 ID 검증
     const safeOffice = selectedOffice.replace(/[^a-zA-Z0-9_-]/g, '');
     const safeDutyDate = dutyDate.replace(/[^a-zA-Z0-9_-]/g, '');
     if (safeOffice.includes('..') || safeDutyDate.includes('..')) {
-      console.error('Invalid document ID: path traversal detected');
       return;
     }
     const docId = sanitizeDocId(`${safeDutyDate}_${safeOffice}_addon_treatment`);
     if (docId.length > 1500) {
-      console.error('Document ID too long');
       return;
     }
     const docRef = doc(db, "addon-treatment", docId);
@@ -346,19 +404,11 @@ export default function AddOnTreatment() {
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        // Production에서는 로그 출력 안 함
-        if (process.env.NODE_ENV !== 'production') {
-          console.log("Real-time data received:", data);
-        }
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
         
         setPatientData(prevData => {
-          // Production에서는 로그 출력 안 함
-          if (process.env.NODE_ENV !== 'production') {
-            console.log("Updating patientData from:", prevData, "to:", { ...prevData, ...data });
-          }
           return {
             ...prevData,
             ...data
@@ -386,26 +436,13 @@ export default function AddOnTreatment() {
           setAutoSaveStatus('🔄 Updated from another user');
           setTimeout(() => setAutoSaveStatus(''), 2000);
         }
-      } else {
-        // Production에서는 로그 출력 안 함
-        if (process.env.NODE_ENV !== 'production') {
-          console.log("Real-time listener: No document exists for date:", dutyDate);
-        }
       }
     }, (error) => {
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error("Real-time listener error:", error);
-      }
       setAutoSaveStatus('❌ Connection error');
       setTimeout(() => setAutoSaveStatus(''), 3000);
     });
 
     return () => {
-      // Production에서는 로그 출력 안 함
-      if (process.env.NODE_ENV !== 'production') {
-        console.log("Cleaning up real-time listener for date:", dutyDate, "office:", selectedOffice);
-      }
       unsubscribe();
     };
   }, [dutyDate, selectedOffice]);
@@ -465,14 +502,9 @@ export default function AddOnTreatment() {
       return;
     }
     
-    // 🔒 보안: Submit 비밀번호 확인
-    // ⚠️ 주의: 클라이언트 측 비밀번호는 보안상 취약합니다. 가능하면 서버 측 인증을 사용하세요.
-    // 환경 변수에서 가져오거나 서버 API를 통해 검증하는 것을 권장합니다.
-    const submitPassword = process.env.NEXT_PUBLIC_SUBMIT_PASSWORD || 'Halloween';
-    const password = prompt(`Are you sure you want to submit? Submitting will reset today's data. Enter password to proceed:`);
-    if (password === null) return;
-    if (password !== submitPassword) {
-      alert("Incorrect password. Submission cancelled.");
+    // 확인 다이얼로그
+    const confirmed = confirm('Would you like to submit?');
+    if (!confirmed) {
       return;
     }
 
@@ -481,8 +513,43 @@ export default function AddOnTreatment() {
       setSubmitStatus('Saving...');
       setProgress(10);
 
+      // 입력 검증
+      if (!dutyDate || !selectedOffice) {
+        throw new Error('Please fill out all required fields.');
+      }
+
+      if (typeof dutyDate !== 'string' || typeof selectedOffice !== 'string') {
+        throw new Error('Invalid input format');
+      }
+
+      // 날짜 형식 검증 (YYYY-MM-DD)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dutyDate)) {
+        throw new Error('Invalid date format');
+      }
+
+      // 날짜 유효성 검증
+      const dateObj = new Date(dutyDate + 'T00:00:00');
+      if (isNaN(dateObj.getTime())) {
+        throw new Error('Invalid date format');
+      }
+
+      const [dateYear, dateMonth, dateDay] = dutyDate.split('-').map(Number);
+      if (dateYear < 1900 || dateYear > 2100 || dateMonth < 1 || dateMonth > 12 || dateDay < 1 || dateDay > 31) {
+        throw new Error('Invalid date format');
+      }
+
+      const reconstructedDate = `${dateYear}-${String(dateMonth).padStart(2, '0')}-${String(dateDay).padStart(2, '0')}`;
+      if (reconstructedDate !== dutyDate) {
+        throw new Error('Invalid date format');
+      }
+
+      // 오피스 선택 검증
+      if (!['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'].includes(selectedOffice)) {
+        throw new Error('Invalid office selection');
+      }
+
       // 1. PDF 생성
-      setSubmitStatus('Generating PDF...');
+      setSubmitStatus('Submitting...');
       setProgress(30);
       
       // 환자 데이터를 배열 형태로 변환
@@ -506,128 +573,100 @@ export default function AddOnTreatment() {
           });
         }
       }
+
+      // 환자 행 데이터 검증
+      if (patientRows.length > 1000) {
+        throw new Error('Too many patient rows');
+      }
+
+      for (const row of patientRows) {
+        if (typeof row.rowNumber !== 'number' || row.rowNumber < 1 || row.rowNumber > 10000) {
+          throw new Error('Invalid patient data format');
+        }
+        if (typeof row.patientName !== 'string' || row.patientName.length > 100) {
+          throw new Error('Invalid patient data format');
+        }
+        if (typeof row.dob !== 'string' || row.dob.length > 20) {
+          throw new Error('Invalid patient data format');
+        }
+        if (typeof row.time !== 'string' || row.time.length > 20) {
+          throw new Error('Invalid patient data format');
+        }
+      }
+
+      const safeDutyDate = dutyDate.trim().slice(0, 50).replace(/[<>]/g, '');
+      const safeSelectedOffice = selectedOffice.trim().slice(0, 50).replace(/[<>]/g, '');
+
+      const generatedDate = new Date().toLocaleDateString('en-US', {
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+
+      // PDF 생성 (클라이언트 사이드)
+      setSubmitStatus('Processing PDF...');
+      setProgress(60);
       
-      // 🔒 보안: API 호출 타임아웃 설정 (30초)
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000);
-      
-      let response;
+      const pdfDoc = createAddOnTreatmentPDFDocument({
+        safeDutyDate,
+        safeSelectedOffice,
+        patientRows,
+        generatedDate,
+      });
+
+      const blob = await pdf(pdfDoc).toBlob();
+        
+      // PDF를 Firebase Storage에 저장
+      setSubmitStatus('Saving...');
+      setProgress(70);
       try {
-        response = await fetch('/api/generate-addon-treatment-pdf', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            dutyDate,
-            selectedOffice,
-            patientRows
-          }),
-          signal: controller.signal,
+        const storage = getStorage();
+        const safeFilename = sanitizeFilename(`${safeDutyDate}_${safeSelectedOffice}_Add On Treatment.pdf`);
+        const filename = `4) ${safeDutyDate}_${safeSelectedOffice}_Add On Treatment.pdf`;
+        const storageRef = ref(storage, `endofday-pdfs/${safeSelectedOffice}/${safeDutyDate}/${filename}`);
+        
+        // PDF 업로드
+        await uploadBytes(storageRef, blob);
+        
+        // 다운로드 URL 가져오기
+        const downloadUrl = await getDownloadURL(storageRef);
+        
+        // Firestore에 메타데이터 저장
+        const safePdfDocId = `${safeDutyDate}_${safeSelectedOffice}_addon-treatment_${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '');
+        await setDoc(doc(db, 'pdf-documents', safePdfDocId), {
+          filename,
+          office: safeSelectedOffice,
+          date: safeDutyDate,
+          type: 'Add On Treatment',
+          url: downloadUrl,
+          storagePath: `endofday-pdfs/${safeSelectedOffice}/${safeDutyDate}/${filename}`,
+          createdAt: new Date(),
         });
-      } catch (fetchError: any) {
-        clearTimeout(timeoutId);
-        if (fetchError.name === 'AbortError') {
-          throw new Error('Request timeout. Please try again.');
-        }
-        throw fetchError;
-      } finally {
-        clearTimeout(timeoutId);
+      } catch (storageError: any) {
+        alert('An error occurred while submitting. Please try again.');
+        throw storageError;
       }
+      
+      // 2. 데이터 삭제
+      setSubmitStatus('Cleaning up...');
+      setProgress(80);
+      const docId = sanitizeDocId(`${safeDutyDate}_${safeSelectedOffice}_addon_treatment`);
+      await deleteDoc(doc(db, "addon-treatment", docId));
+      
+      // 3. 폼 초기화
+      setPatientData({});
+      setRowCount(20);
 
-      if (response.ok) {
-        // PDF blob 받기
-        setSubmitStatus('Processing PDF...');
-        setProgress(60);
-        const blob = await response.blob();
-        
-        // 🔒 보안: 파일명 및 경로 검증
-        const safeOffice = selectedOffice.replace(/[^a-zA-Z0-9_-]/g, '');
-        const safeDutyDate = dutyDate.replace(/[^a-zA-Z0-9_-]/g, '');
-        
-        // PDF를 Firebase Storage에 저장
-        setSubmitStatus('Saving PDF to archive...');
-        setProgress(70);
-        try {
-          const storage = getStorage();
-          const filename = `4) ${safeDutyDate}_${safeOffice || 'Unknown'}_Add On Treatment.pdf`;
-          const storageRef = ref(storage, `addon-treatment-pdfs/${safeOffice}/${safeDutyDate}/${filename}`);
-          
-          // PDF 업로드
-          await uploadBytes(storageRef, blob);
-          
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // Firestore에 메타데이터 저장
-          // 🔒 보안: 문서 ID 검증
-          const safePdfDocId = `${safeDutyDate}_${safeOffice}_addon-treatment_${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '');
-          await setDoc(doc(db, 'pdf-documents', safePdfDocId), {
-            filename,
-            office: safeOffice,
-            date: safeDutyDate,
-            type: 'Add On Treatment',
-            url: downloadUrl,
-            storagePath: `addon-treatment-pdfs/${safeOffice}/${safeDutyDate}/${filename}`,
-            createdAt: new Date(),
-          });
-          
-          console.log('PDF saved successfully to Firebase Storage');
-          setSubmitStatus('✅ PDF saved to archive successfully!');
-        } catch (storageError: any) {
-          // 🔒 보안: 에러 메시지에 민감한 정보 노출 방지
-          console.error('Storage error:', storageError);
-          alert('PDF 저장 중 오류가 발생했습니다. 다시 시도해주세요.');
-          setSubmitStatus('❌ PDF 저장 실패');
-        }
-        
-        // 2. 데이터 삭제
-        setSubmitStatus('Cleaning up...');
-        setProgress(80);
-        // 🔒 보안: 문서 ID 검증 (위에서 이미 safeOffice, safeDutyDate 생성됨)
-        if (safeOffice.includes('..') || safeDutyDate.includes('..')) {
-          console.error('Invalid document ID: path traversal detected');
-          return;
-        }
-        const docId = sanitizeDocId(`${safeDutyDate}_${safeOffice}_addon_treatment`);
-        if (docId.length > 1500) {
-          console.error('Document ID too long');
-          return;
-        }
-        await deleteDoc(doc(db, "addon-treatment", docId));
-        
-        // 3. 폼 초기화
-        setPatientData({});
-        setRowCount(20);
+      setSubmitStatus('Complete!');
+      setProgress(100);
+      
+      // 2초 후 모달 닫기
+      setTimeout(() => {
+        setLoading(false);
+        setSubmitStatus('');
+        setProgress(0);
+      }, 2000);
 
-        setSubmitStatus('Complete! PDF saved to archive.');
-        setProgress(100);
-        
-        // 2초 후 모달 닫기
-        setTimeout(() => {
-          setLoading(false);
-          setSubmitStatus('');
-          setProgress(0);
-        }, 2000);
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'PDF generation failed');
-      }
-
-    } catch (error) {
-      // 🔒 보안: 에러 메시지에 민감한 정보 노출 방지
-      // Production에서는 에러 로깅 비활성화
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('Submit error:', error);
-      }
-      const isTimeout = error instanceof Error && (
-        error.message.includes('timeout') || 
-        error.message.includes('Timeout') ||
-        error.message.includes('aborted')
-      );
-      setSubmitStatus(isTimeout 
-        ? '❌ Request timeout. Please try again.' 
-        : '❌ Submission failed. Please try again.');
+    } catch (error: any) {
+      setSubmitStatus('❌ Submission failed. Please try again.');
       setProgress(0);
       setTimeout(() => {
         setLoading(false);
@@ -762,6 +801,59 @@ export default function AddOnTreatment() {
     }
   };
 
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
+  useEffect(() => {
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in');
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'manager') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          // 다른 페이지로 리다이렉트하거나 홈으로 이동
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+        setDutyDate(getCurrentCaliforniaTime());
+      } catch (error: any) {
+        alert('An error occurred while verifying authentication.');
+        setIsAuthorized(false);
+      }
+    });
+
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   // 제출 중 브라우저 네비게이션 방지
   useEffect(() => {
     const handleBeforeUnload = (e: any) => {
@@ -789,6 +881,54 @@ export default function AddOnTreatment() {
       window.removeEventListener('popstate', handlePopState);
     };
   }, [loading]);
+
+  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
+  if (isAuthorized === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: `
+          radial-gradient(circle at 10% 20%, rgba(120, 200, 255, 0.1) 0%, transparent 50%),
+          radial-gradient(circle at 90% 80%, rgba(255, 182, 193, 0.1) 0%, transparent 50%),
+          radial-gradient(circle at 50% 50%, rgba(144, 238, 144, 0.05) 0%, transparent 50%),
+          linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)
+        `,
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      } as React.CSSProperties}>
+        <div style={{ textAlign: 'center' } as React.CSSProperties}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' } as React.CSSProperties}>🔐</div>
+          <div style={{ fontSize: '18px', color: '#2c3e50' } as React.CSSProperties}>Verifying authentication...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: `
+          radial-gradient(circle at 10% 20%, rgba(120, 200, 255, 0.1) 0%, transparent 50%),
+          radial-gradient(circle at 90% 80%, rgba(255, 182, 193, 0.1) 0%, transparent 50%),
+          radial-gradient(circle at 50% 50%, rgba(144, 238, 144, 0.05) 0%, transparent 50%),
+          linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%)
+        `,
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      } as React.CSSProperties}>
+        <div style={{ textAlign: 'center' } as React.CSSProperties}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' } as React.CSSProperties}>🚫</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' } as React.CSSProperties}>접근 권한이 없습니다</div>
+          <div style={{ fontSize: '14px', color: '#666' } as React.CSSProperties}>관리자 권한이 필요합니다</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
