@@ -1,9 +1,186 @@
 'use client'
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db } from "@/lib/firebase.config";
+import { db, auth } from "@/lib/firebase.config";
+// Firebase 인증 직접 사용
+import { onAuthStateChanged } from 'firebase/auth';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
+
+// 🔒 보안: 입력 검증 함수
+function safeStr(v: unknown, max: number): string {
+  if (v == null) return '';
+  return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+}
+
+// Daily Office Duty PDF 생성 함수
+function createDailyOfficeDutyPDFDocument(props: {
+  safeDutyDate: string;
+  safeSelectedOffice: string;
+  safeDutyData: { [key: string]: string };
+  generatedDate: string;
+}) {
+  const { safeDutyDate, safeSelectedOffice, safeDutyData, generatedDate } = props;
+
+  const pdfStyles = StyleSheet.create({
+    page: { padding: 20, fontFamily: 'Helvetica', fontSize: 9 },
+    header: { marginBottom: 15, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 8, alignItems: 'center' },
+    headerTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 4 },
+    infoSection: { marginBottom: 15, padding: 8, borderWidth: 1, borderColor: '#ccc', flexDirection: 'row', justifyContent: 'space-between', flexWrap: 'wrap' },
+    infoItem: { fontSize: 9, marginBottom: 4 },
+    table: { marginTop: 10 },
+    tableRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
+    tableHeader: { flexDirection: 'row', borderBottomWidth: 1, borderColor: '#333', backgroundColor: '#f0f0f0', fontWeight: 'bold' },
+    tableCellNo: { padding: 4, fontSize: 8, flex: 0.3, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    tableCellDesc: { padding: 4, fontSize: 7, flex: 2.5, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'flex-start', alignItems: 'flex-start' },
+    tableCellDetails: { padding: 4, fontSize: 7, flex: 1.5, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'flex-start', alignItems: 'flex-start' },
+    tableCellName: { padding: 4, fontSize: 8, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    tableCellTime: { padding: 4, fontSize: 8, flex: 0.7, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    dutyDetails: { fontSize: 6, color: '#666', marginTop: 2 },
+  });
+
+  const s = pdfStyles;
+
+  // 헤더
+  const header = React.createElement(View, { style: s.header },
+    React.createElement(Text, { style: s.headerTitle }, 'Daily Office Duty'),
+  );
+
+  // 정보 섹션
+  const infoSection = React.createElement(View, { style: s.infoSection },
+    React.createElement(Text, { style: s.infoItem }, `Date: ${safeDutyDate || '-'}`),
+    React.createElement(Text, { style: s.infoItem }, `Location: ${safeSelectedOffice || '-'}`),
+    React.createElement(Text, { style: s.infoItem }, `Generated: ${generatedDate || '-'}`),
+  );
+
+  // 테이블 헤더
+  const tableHeader = React.createElement(View, { style: s.tableHeader },
+    React.createElement(View, { style: s.tableCellNo }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'No.')),
+    React.createElement(View, { style: s.tableCellDesc }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Duty Description')),
+    React.createElement(View, { style: s.tableCellDetails }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Details')),
+    React.createElement(View, { style: s.tableCellName }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Done By')),
+    React.createElement(View, { style: s.tableCellName }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Checked By')),
+    React.createElement(View, { style: s.tableCellTime }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Time')),
+  );
+
+  // Duty Description 텍스트를 줄바꿈 처리하는 함수
+  const renderDutyDescription = (text: string, details?: string | null) => {
+    const lines = text.split('<br>');
+    const elements: any[] = [];
+    
+    lines.forEach((line, index) => {
+      if (index > 0) {
+        elements.push(React.createElement(Text, { key: `br-${index}` }, '\n'));
+      }
+      elements.push(React.createElement(Text, { key: `line-${index}` }, line));
+    });
+    
+    if (details && details !== null) {
+      elements.push(React.createElement(Text, { key: 'details', style: s.dutyDetails }, `\n${details}`));
+    }
+    
+    return React.createElement(Text, null, ...elements);
+  };
+
+  // 테이블 데이터 행 (32개 행)
+  const dutyDescriptions = [
+    { main: 'Turn Off Answering Service', details: null },
+    { main: 'All charts filed back?', details: null },
+    { main: 'Charts pulled for next day', details: null },
+    { main: 'Check eligibility', details: '1st of every month come in early to check eligibility by 8:30 am' },
+    { main: 'If pt is not eligible call and inform', details: null },
+    { main: 'Insurance breakdown for next day\'s patients', details: 'Call and get ins. info if necessary' },
+    { main: 'Check ledger for any balance on the account', details: 'Fill out "Account with Balances Form" and fax\nCalled to inform patient of balance?' },
+    { main: 'Morning confirmations', details: 'At least by noon' },
+    { main: 'No shows entered on ledger', details: null },
+    { main: 'No shows stamped in patient charts', details: null },
+    { main: 'Reconfirming completed?', details: 'Start at 4:00pm' },
+    { main: 'One week reminders completed?', details: null },
+    { main: 'Call all treatment patients from today for post op', details: null },
+    { main: 'Total lab case deposits/deliveries', details: 'Name/DOB' },
+    { main: 'Check all undelivered lab cases and make appointments', details: 'Any Lab case that is more than 3 weeks old must be sent to corporate along with $20 deposit' },
+    { main: 'Check all lab cases for next day', details: 'Call lab for next day pick up\'s' },
+    { main: 'N₂O/ Compressor Off', details: null },
+    { main: 'Did you read the meter on the Oxygen/N₂O/Helium tank?', details: null },
+    { main: 'How many tanks are empty & need to be replaced?', details: null },
+    { main: 'Check restrooms initial logs hourly', details: null },
+    { main: 'Swept/Mopped', details: null },
+    { main: 'Cleaned Breakroom', details: null },
+    { main: 'Sterilizers: Cycle Complete', details: '(Do Not Push Stop)' },
+    { main: 'Drained Ultrasonic', details: null },
+    { main: 'Spore Test', details: 'Every Monday' },
+    { main: 'Turn Off All TV\'s and Computers at the End of the Day', details: null },
+    { main: 'Postcards Ready for Pick-up', details: null },
+    { main: 'Clean traps everyday', details: '(chair)' },
+    { main: 'Clean main trap 1st/15th', details: '(by vacuum)' },
+    { main: 'Did you flush the lines with hot water?', details: null },
+    { main: 'Check all doors are locked', details: null },
+    { main: 'Turn On Answering Service', details: null },
+  ];
+
+  const tableRows = dutyDescriptions.map((duty, index) => {
+    const rowNum = index + 1;
+    const rowKey = `Row${rowNum}`;
+    
+    // Details 필드 처리
+    let detailsText = '';
+    if (rowNum === 2) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
+    } else if (rowNum === 4) {
+      detailsText = '';
+    } else if (rowNum === 5) {
+      detailsText = `How many pt's did you call: ${safeStr(safeDutyData[`${rowKey}_CallNum`], 50)}`;
+    } else if (rowNum === 7) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
+    } else if (rowNum === 14) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_Name/DOB`], 200);
+    } else if (rowNum === 15) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_LabCases`], 200);
+    } else if (rowNum === 18) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
+    } else if (rowNum === 19) {
+      const o2 = safeStr(safeDutyData[`${rowKey}_O2`], 10) || '0';
+      const n2o = safeStr(safeDutyData[`${rowKey}_N2O`], 10) || '0';
+      const he = safeStr(safeDutyData[`${rowKey}_He`], 10) || '0';
+      detailsText = `O₂: ${o2}\nN₂O: ${n2o}\nHe: ${he}`;
+    } else if (rowNum === 21) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
+    } else if (rowNum === 22) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
+    } else if (rowNum === 23) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
+    } else if (rowNum === 24) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
+    } else if (rowNum === 30) {
+      detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
+    }
+
+    const doneBy = safeStr(safeDutyData[`${rowKey}_Done`], 100);
+    const checkedBy = safeStr(safeDutyData[`${rowKey}_Checked`], 100);
+    const time = safeStr(safeDutyData[`${rowKey}_Time`], 20);
+
+    return React.createElement(View, { key: rowNum, style: s.tableRow },
+      React.createElement(View, { style: s.tableCellNo }, React.createElement(Text, null, String(rowNum))),
+      React.createElement(View, { style: s.tableCellDesc }, renderDutyDescription(duty.main, duty.details)),
+      React.createElement(View, { style: s.tableCellDetails }, React.createElement(Text, null, detailsText || '-')),
+      React.createElement(View, { style: s.tableCellName }, React.createElement(Text, null, doneBy || '-')),
+      React.createElement(View, { style: s.tableCellName }, React.createElement(Text, null, checkedBy || '-')),
+      React.createElement(View, { style: s.tableCellTime }, React.createElement(Text, null, time || '-')),
+    );
+  });
+
+  // 테이블
+  const table = React.createElement(View, { style: s.table }, tableHeader, ...tableRows);
+
+  return React.createElement(Document, null,
+    React.createElement(Page, { size: 'A4', orientation: 'portrait', style: s.page },
+      header,
+      infoSection,
+      table
+    ),
+  );
+}
 
 export default function DailyOfficeDuties() {
   const [loading, setLoading] = useState(false);
@@ -11,6 +188,11 @@ export default function DailyOfficeDuties() {
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  
+  // Rate limiting을 위한 ref
+  const lastUpdateDutyDataCall = useRef<number>(0);
+  const lastSubmitCall = useRef<number>(0);
   
   // 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
@@ -42,7 +224,7 @@ export default function DailyOfficeDuties() {
   const [pendingOffice, setPendingOffice] = useState('');
   
   // 오피스 옵션
-  const officeOptions = ['Ming', 'Bernard', 'Delano', 'Tulare', 'Visalia', 'Fresno', 'California', 'Ortho'];
+  const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
   
   // 오피스 비밀번호 가져오기 함수
   const getOfficePassword = (office: string): string => {
@@ -296,7 +478,6 @@ export default function DailyOfficeDuties() {
       setLastSavedData({ ...dutyData });
       
     } catch (error) {
-      console.error("Auto-save error:", error);
     }
   }, [dutyDate, selectedOffice, dutyData, lastSavedData, isUpdatingFromFirebase, officePasswordVerified, userSessionId]);
 
@@ -330,7 +511,6 @@ export default function DailyOfficeDuties() {
       
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Data loaded from Firebase:", data);
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
@@ -364,9 +544,20 @@ export default function DailyOfficeDuties() {
       }
       
     } catch (error) {
-      console.error("Error loading data:", error);
+      // 에러 메시지 추출 및 보안 강화
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      setSubmitStatus('Error loading data: ' + errorMessage);
+      
+      // 민감한 정보 필터링
+      const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
+      const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
+        errorMessage.toLowerCase().includes(keyword.toLowerCase())
+      );
+      
+      const safeErrorMessage = hasSensitiveInfo 
+        ? 'An error occurred while loading. Please try again.' 
+        : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
+      
+      setSubmitStatus('Error loading data: ' + safeErrorMessage);
       setTimeout(() => setSubmitStatus(''), 3000);
     }
   };
@@ -389,7 +580,6 @@ export default function DailyOfficeDuties() {
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Real-time data received:", data);
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
@@ -419,7 +609,6 @@ export default function DailyOfficeDuties() {
           setTimeout(() => setAutoSaveStatus(''), 2000);
         }
       } else {
-        console.log("Real-time listener: No document exists for date:", dutyDate);
       }
     }, (error) => {
       console.error("Real-time listener error:", error);
@@ -428,43 +617,56 @@ export default function DailyOfficeDuties() {
     });
 
     return () => {
-      console.log("Cleaning up real-time listener for date:", dutyDate, "office:", selectedOffice);
       unsubscribe();
     };
   }, [dutyDate, selectedOffice, officePasswordVerified]);
 
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
+  useEffect(() => {
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'manager') {
+          setIsAuthorized(false);
+          return;
+        }
+
+        setIsAuthorized(true);
+      } catch (error: any) {
+        setIsAuthorized(false);
+      }
+    });
+
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
   // 컴포넌트 마운트 시 초기 로드는 dutyDate 변경 시 로드로 대체됨
 
-  // 수동 저장 함수
-  const saveData = async () => {
-    if (!dutyDate) return;
-
-    try {
-      setAutoSaveStatus('💾 Saving...');
-      
-      // 🔒 보안: 저장 전 데이터 검증
-      const validatedDutyData: { [key: string]: string } = {};
-      for (const [key, value] of Object.entries(dutyData)) {
-        validatedDutyData[key] = validateInput(value as string, 500);
-      }
-      
-      const dataToSave = {
-        dutyDate,
-        ...validatedDutyData,
-        timestamp: new Date().toISOString()
-      };
-
-      await setDoc(doc(db, "daily-office-duties", dutyDate), dataToSave);
-      
-      setAutoSaveStatus('💾 Saved ✅');
-      setTimeout(() => setAutoSaveStatus(''), 2000);
-      
-    } catch (error) {
-      console.error("Save error:", error);
-      setAutoSaveStatus('💾 Save failed ❌');
-      setTimeout(() => setAutoSaveStatus(''), 3000);
-    }
-  };
 
   // 🔒 보안: 입력 검증 함수
   const validateInput = (value: string, maxLength: number = 500): string => {
@@ -476,8 +678,26 @@ export default function DailyOfficeDuties() {
     return value;
   };
 
-  // 데이터 업데이트 함수
+  // 데이터 업데이트 함수 (Rate limiting 적용)
   const updateDutyData = (field: string, value: string) => {
+    // Rate limiting: 입력 반응성을 위해 완화된 제한 적용
+    // (자동 저장은 별도 debounce로 처리되므로 입력 자체는 빠르게 반응)
+    const now = Date.now();
+    const fieldKey = `lastUpdate_${field}`;
+    const lastCall = (window as any)[fieldKey] || 0;
+
+    // 전역 rate limiting: 모든 업데이트에 대해 50ms 제한 (입력 반응성 향상)
+    if (now - lastUpdateDutyDataCall.current < 50) {
+      return;
+    }
+    lastUpdateDutyDataCall.current = now;
+
+    // 개별 필드 rate limiting: 동일 필드에 대해 100ms 제한 (입력 반응성 향상)
+    if (now - lastCall < 100) {
+      return;
+    }
+    (window as any)[fieldKey] = now;
+
     // 🔒 보안: 입력 검증 및 길이 제한
     const validatedValue = validateInput(value, 500);
     
@@ -531,27 +751,20 @@ export default function DailyOfficeDuties() {
     return isOverdue && !isCompleted;
   };
 
-  // 전체 마감 시간 체크 (기존 호환성을 위해 유지)
-  const checkDeadlines = () => {
-    const overdueItems: string[] = [];
-    
-    (Object.keys(DEADLINES) as Array<keyof typeof DEADLINES>).forEach(itemName => {
-      if (isRowOverdue(itemName)) {
-        overdueItems.push(DEADLINES[itemName].message);
-      }
-    });
-    
-    return overdueItems;
-  };
 
-  // 제출 처리
+  // 제출 처리 (Rate limiting 적용)
   const handleSubmit = async () => {
-    // Submit 비밀번호 확인 (모든 오피스 동일)
-    const submitPassword = 'Halloween';
-    const password = prompt(`Are you sure you want to submit? Submitting will reset today's data. Enter password to proceed:`);
-    if (password === null) return;
-    if (password !== submitPassword) {
-      alert("Incorrect password. Submission cancelled.");
+    // Rate limiting: 최근 3초 내 호출 방지 (PDF 생성은 무거운 작업)
+    const now = Date.now();
+    if (now - lastSubmitCall.current < 3000) {
+      alert('⚠️ Please try again.');
+      return;
+    }
+    lastSubmitCall.current = now;
+
+    // 확인 다이얼로그
+    const confirmed = confirm('Would you like to submit?');
+    if (!confirmed) {
       return;
     }
 
@@ -560,37 +773,61 @@ export default function DailyOfficeDuties() {
       setSubmitStatus('Saving...');
       setProgress(10);
 
-      // 1. 프린트 페이지 생성 및 열기
-      setSubmitStatus('Opening print page...');
+      // 1. PDF 생성 (클라이언트 사이드)
+      setSubmitStatus('Submitting...');
       setProgress(30);
       
-      const response = await fetch('/api/generate-daily-office-duty-pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          dutyDate,
-          selectedOffice,
-          dutyData,
-          submitPassword: password // 서버 측 검증을 위해 비밀번호 전송
-        }),
+      // 데이터 sanitize
+      const safeDutyDate = (dutyDate || '').trim().slice(0, 50).replace(/[<>]/g, '');
+      const safeSelectedOffice = (selectedOffice || '').trim().slice(0, 100).replace(/[<>]/g, '');
+      const safeDutyData: { [key: string]: string } = {};
+      for (const [key, value] of Object.entries(dutyData)) {
+        if (typeof value === 'string' && value.length <= 500) {
+          safeDutyData[key] = value.replace(/[<>]/g, '');
+        } else {
+          safeDutyData[key] = '';
+        }
+      }
+
+      // 생성 날짜 포맷팅
+      const generatedDate = new Date().toLocaleString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
       });
 
-      if (response.ok) {
-        // PDF blob 받기
-        setSubmitStatus('Saving PDF to archive...');
-        setProgress(60);
-        const blob = await response.blob();
-        
+      // PDF 문서 생성
+      setSubmitStatus('Creating PDF document...');
+      setProgress(40);
+      
+      const pdfDoc = createDailyOfficeDutyPDFDocument({
+        safeDutyDate,
+        safeSelectedOffice,
+        safeDutyData,
+        generatedDate
+      });
+
+      // PDF blob 생성
+      setSubmitStatus('Processing PDF...');
+      setProgress(50);
+      
+      const pdfBlob = await pdf(pdfDoc).toBlob();
+
+      if (pdfBlob && pdfBlob.size > 0) {
         // PDF를 Firebase Storage에 저장
+        setSubmitStatus('Saving...');
+        setProgress(60);
+        
         try {
           const storage = getStorage();
           const filename = `2) ${dutyDate}_${selectedOffice}_Daily Office Duty.pdf`;
           const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${dutyDate}/${filename}`);
           
           // PDF 업로드
-          await uploadBytes(storageRef, blob);
+          await uploadBytes(storageRef, pdfBlob);
           
           // 다운로드 URL 가져오기
           const downloadUrl = await getDownloadURL(storageRef);
@@ -603,16 +840,27 @@ export default function DailyOfficeDuties() {
             type: 'Daily Office Duty',
             url: downloadUrl,
             storagePath: `endofday-pdfs/${selectedOffice}/${dutyDate}/${filename}`,
+            source: 'd_page',
             createdAt: new Date(),
           });
           
-          console.log('PDF saved successfully to Firebase Storage');
           setSubmitStatus('✅ PDF saved to archive successfully!');
         } catch (storageError: any) {
-          console.error('Storage error:', storageError);
-          const errorMsg = storageError?.message || '알 수 없는 오류';
-          alert(`PDF 저장 중 오류가 발생했습니다: ${errorMsg}`);
-          setSubmitStatus('❌ PDF 저장 실패');
+          // 에러 메시지 추출 및 보안 강화
+          const errorMessage = storageError?.message || 'Error';
+          
+          // 민감한 정보 필터링
+          const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
+          const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
+            errorMessage.toLowerCase().includes(keyword.toLowerCase())
+          );
+          
+          const safeErrorMessage = hasSensitiveInfo 
+            ? 'An error occurred while submitting. Please try again.' 
+            : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
+          
+          alert(`An error occurred while submitting. Please try again.: ${safeErrorMessage}`);
+          setSubmitStatus('❌ Submission failed. Please try again.');
         }
         
         // 2. 데이터 삭제
@@ -630,7 +878,7 @@ export default function DailyOfficeDuties() {
           return initialData as typeof prevData;
         });
 
-        setSubmitStatus('Complete! PDF saved to archive.');
+        setSubmitStatus('Complete!');
         setProgress(100);
         
         // 2초 후 모달 닫기
@@ -640,14 +888,24 @@ export default function DailyOfficeDuties() {
           setProgress(0);
         }, 2000);
       } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'PDF generation failed');
+        throw new Error('PDF is empty');
       }
 
     } catch (error) {
-      console.error('Submit error:', error);
+      // 에러 메시지 추출 및 보안 강화
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      setSubmitStatus('❌ Submission failed: ' + errorMessage);
+      
+      // 민감한 정보 필터링
+      const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
+      const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
+        errorMessage.toLowerCase().includes(keyword.toLowerCase())
+      );
+      
+      const safeErrorMessage = hasSensitiveInfo 
+        ? '제출 중 오류가 발생했습니다.' 
+        : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
+      
+      setSubmitStatus('❌ Submission failed: ' + safeErrorMessage);
       setProgress(0);
       setTimeout(() => {
         setLoading(false);
@@ -667,8 +925,8 @@ export default function DailyOfficeDuties() {
       minHeight: '100vh'
     },
     container: {
-      maxWidth: '67%',
-      width: '67%',
+      maxWidth: '85%',
+      width: '85%',
       margin: '20px auto',
       padding: '30px',
       backgroundColor: 'white',
@@ -760,14 +1018,18 @@ export default function DailyOfficeDuties() {
       zIndex: 1000
     },
     overdueRow: {
-      backgroundColor: '#ffebee !important',
-      borderLeft: '4px solid #f44336 !important'
+      backgroundColor: '#ffcdd2 !important',
+      borderLeft: '4px solid #d32f2f !important'
     },
     overdueWarning: {
-      color: '#f44336',
+      color: '#d32f2f',
       fontWeight: 'bold',
       fontSize: '0.9em',
-      marginTop: '4px'
+      marginTop: '4px',
+      backgroundColor: '#ffcdd2',
+      padding: '4px 8px',
+      borderRadius: '4px',
+      display: 'inline-block'
     },
     dutyDetails: {
       fontSize: '0.9em',
@@ -786,8 +1048,6 @@ export default function DailyOfficeDuties() {
       verticalAlign: 'middle' as const
     }
   };
-
-  const overdueItems = checkDeadlines();
 
   // 제출 중 브라우저 네비게이션 방지
   useEffect(() => {
@@ -817,12 +1077,61 @@ export default function DailyOfficeDuties() {
     };
   }, [loading]);
 
+  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
+  if (isAuthorized === null) {
+    return (
+      <div style={styles.body}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+          background: 'linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%)',
+          fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
+            <div style={{ fontSize: '18px', color: '#2c3e50' }}>Verifying authentication...</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div style={styles.body}>
+        <div style={{
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          height: '100vh',
+          background: 'linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%)',
+          fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+        }}>
+          <div style={{ textAlign: 'center' }}>
+            <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
+            <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
+            <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <>
       <style>{`
         @keyframes spin {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
+        }
+        .overdue-row td {
+          background-color: #ffcdd2 !important;
+        }
+        .overdue-row input,
+        .overdue-row textarea {
+          background-color: #ffcdd2 !important;
         }
       `}</style>
       <div style={styles.body}>
@@ -982,15 +1291,15 @@ export default function DailyOfficeDuties() {
           </thead>
           <tbody>
             {/* Row 1 */}
-            <tr style={isRowOverdue('Row1_Done') ? styles.overdueRow : {}}>
+            <tr className={isRowOverdue('Row1_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row1_Done') ? styles.overdueRow : {}}>
               <td style={styles.td}><strong>1</strong></td>
               <td style={styles.td}>
                 <strong>Turn Off Answering Service</strong>
                 <div style={styles.dutyDetails}>
-                  1) Go to: https://smileland.my3cx.us<br/>
+                  1) Go to phone system website<br/>
                   2) Log in<br/>
-                  4) Ensure Your Office is Selected under "Department"<br/>
-                  5) Select Override Office Hours<br/>
+                  4) Ensure your office is selected<br/>
+                  5) Select override office hours<br/>
                   6) Select "Reset Default Office Hours"
                 </div>
                 <div style={styles.deadlineInfo}>Deadline: 9:00 AM</div>
@@ -1032,7 +1341,7 @@ export default function DailyOfficeDuties() {
             </tr>
 
             {/* Row 2 */}
-            <tr style={isRowOverdue('Row2_Done') ? styles.overdueRow : {}}>
+            <tr className={isRowOverdue('Row2_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row2_Done') ? styles.overdueRow : {}}>
               <td style={styles.td}><strong>2</strong></td>
               <td style={styles.td}>
                 <strong>All charts filed back?</strong><br/>
@@ -1099,7 +1408,7 @@ export default function DailyOfficeDuties() {
             </tr>
 
             {/* Row 3 */}
-            <tr style={isRowOverdue('Row3_Done') ? styles.overdueRow : {}}>
+            <tr className={isRowOverdue('Row3_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row3_Done') ? styles.overdueRow : {}}>
               <td style={styles.td}><strong>3</strong></td>
               <td style={styles.td}>
                 <strong>Charts pulled for next day</strong>
@@ -1142,7 +1451,7 @@ export default function DailyOfficeDuties() {
             </tr>
 
             {/* Row 4 */}
-            <tr style={isRowOverdue('Row4_Done') ? styles.overdueRow : {}}>
+            <tr className={isRowOverdue('Row4_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row4_Done') ? styles.overdueRow : {}}>
               <td style={styles.td}><strong>4</strong></td>
               <td style={styles.td}>
                 <strong>Check eligibility</strong>
@@ -1278,12 +1587,12 @@ export default function DailyOfficeDuties() {
             </tr>
 
             {/* Row 7 */}
-            <tr style={isRowOverdue('Row7_Done') ? styles.overdueRow : {}}>
+            <tr className={isRowOverdue('Row7_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row7_Done') ? styles.overdueRow : {}}>
               <td style={styles.td}><strong>7</strong></td>
               <td style={styles.td}>
                 <strong>Check ledger for any balance on the account</strong><br/>
                 <div style={styles.dutyDetails}>
-                  Fill out "Account with Balances Form" and fax to the AR Department at (661)328-1905
+                  Fill out "Account with Balances Form" and fax to the AR Department
                 </div>
                 <div style={styles.dutyDetails}>Called to inform patient of balance?</div>
                 <div style={styles.inlineOption}>
@@ -1349,7 +1658,7 @@ export default function DailyOfficeDuties() {
             </tr>
 
             {/* Row 8 */}
-            <tr style={isRowOverdue('Row8_Done') ? styles.overdueRow : {}}>
+            <tr className={isRowOverdue('Row8_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row8_Done') ? styles.overdueRow : {}}>
               <td style={styles.td}><strong>8</strong></td>
               <td style={styles.td}>
                 <strong>Morning confirmations</strong><br/>
@@ -1471,7 +1780,7 @@ export default function DailyOfficeDuties() {
             </tr>
 
             {/* Row 11 */}
-            <tr style={isRowOverdue('Row11_Done') ? styles.overdueRow : {}}>
+            <tr className={isRowOverdue('Row11_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row11_Done') ? styles.overdueRow : {}}>
               <td style={styles.td}><strong>11</strong></td>
               <td style={styles.td}>
                 <strong>Reconfirming completed?</strong><br/>
@@ -1604,14 +1913,15 @@ export default function DailyOfficeDuties() {
                 <textarea
                   value={dutyData['Row14_Name/DOB']}
                   onChange={(e) => updateDutyData('Row14_Name/DOB', e.target.value)}
-                  placeholder="Name/DOB(mm/dd/yyyy) 1&#10;Name/DOB(mm/dd/yyyy) 2&#10;Name/DOB(mm/dd/yyyy) 3"
+                  placeholder="Name/DOB(mm/dd/yyyy) 1&#10;&#10;Name/DOB(mm/dd/yyyy) 2&#10;&#10;Name/DOB(mm/dd/yyyy) 3"
                   style={{ 
                     ...styles.input, 
                     margin: 0, 
                     fontSize: '13px', 
                     padding: '6px 8px',
-                    minHeight: '60px',
-                    resize: 'vertical'
+                    minHeight: '80px',
+                    resize: 'vertical',
+                    whiteSpace: 'pre-wrap'
                   }}
                 />
               </td>
@@ -1659,14 +1969,15 @@ export default function DailyOfficeDuties() {
                 <textarea
                   value={dutyData.Row15_LabCases}
                   onChange={(e) => updateDutyData('Row15_LabCases', e.target.value)}
-                  placeholder="1)&#10;2)&#10;3)"
+                  placeholder="1)&#10;&#10;2)&#10;&#10;3)"
                   style={{ 
                     ...styles.input, 
                     margin: 0, 
                     fontSize: '13px', 
                     padding: '6px 8px',
-                    minHeight: '60px',
-                    resize: 'vertical'
+                    minHeight: '80px',
+                    resize: 'vertical',
+                    whiteSpace: 'pre-wrap'
                   }}
                 />
               </td>
@@ -2206,7 +2517,7 @@ export default function DailyOfficeDuties() {
             </tr>
 
             {/* Row 25 */}
-            <tr style={isRowOverdue('Row25_Done') ? styles.overdueRow : {}}>
+            <tr className={isRowOverdue('Row25_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row25_Done') ? styles.overdueRow : {}}>
               <td style={styles.td}><strong>25</strong></td>
               <td style={styles.td}>
                 <strong>Spore Test</strong>
@@ -2513,10 +2824,10 @@ export default function DailyOfficeDuties() {
               <td style={styles.td}>
                 <strong>Turn On Answering Service</strong><br/>
                 <div style={styles.dutyDetails}>
-                  1) Go to: https://smileland.my3cx.us<br/>
+                  1) Go to phone system website<br/>
                   2) Log in<br/>
-                  3) Click on User Icon<br/>
-                  4) Select Override Office Hours<br/>
+                  3) Click on user icon<br/>
+                  4) Select override office hours<br/>
                   5) Select "Office is Closed"<br/>
                   6) For "1day"<br/>
                   7) Call the office to verify that calls were transferred correctly. (For Holiday Weekends, Set for 1 week)
