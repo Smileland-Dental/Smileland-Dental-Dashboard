@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import { collection, getDocs } from 'firebase/firestore';
-import { db } from '@/lib/firebase.config';
+import { collection, getDocs, doc, getDoc } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase.config';
+import { onAuthStateChanged } from 'firebase/auth';
 
 interface TreatmentSheet {
   id: string;
@@ -20,12 +21,11 @@ export default function ViewTreatmentSheets() {
   const [loading, setLoading] = useState(true);
   const [officeInput, setOfficeInput] = useState<string>('');
   const [dateFilter, setDateFilter] = useState<string>('');
-  const [mounted, setMounted] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
 
-  // 클라이언트 사이드 마운트 확인
-  useEffect(() => {
-    setMounted(true);
-  }, []);
+  // Rate limiting을 위한 ref
+  const lastFetchTreatmentSheetsCall = useRef<number>(0);
+  const lastHandleViewDetailsCall = useRef<number>(0);
 
   // 안전한 문자열 검증 함수
   const sanitizeString = (value: any, maxLength: number = 1000): string => {
@@ -102,16 +102,69 @@ export default function ViewTreatmentSheets() {
       setLoading(false);
     } catch (error) {
       // 프로덕션에서는 상세한 에러 정보를 노출하지 않음
-      if (process.env.NODE_ENV === 'development') {
-        console.error('Failed to load treatment sheets:', error);
-      }
-      alert('Failed to load treatment sheets. Please try again.');
+      alert('error');
       setLoading(false);
     }
   };
 
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
-    fetchTreatmentSheets();
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+      return;
+    }
+
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'manager') {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+        
+        // 인증 성공 후 데이터 로드
+        await fetchTreatmentSheets();
+      } catch (error: any) {
+        setIsAuthorized(false);
+        if (typeof window !== 'undefined') {
+          window.location.href = '/';
+        }
+      }
+    });
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // 입력된 office와 date로 필터링 및 정렬된 데이터
@@ -146,6 +199,13 @@ export default function ViewTreatmentSheets() {
     });
 
   const handleViewDetails = (sheet: TreatmentSheet) => {
+    // Rate limiting: 최근 500ms 내 호출 방지 (중복 클릭 방지)
+    const now = Date.now();
+    if (now - lastHandleViewDetailsCall.current < 500) {
+      return;
+    }
+    lastHandleViewDetailsCall.current = now;
+
     // 입력값 검증 및 정리
     const safeOffice = (sheet.office || '').trim().replace(/[^A-Za-z0-9]/g, '').substring(0, 10);
     const safeRdaName = (sheet.rdaName || '').trim().replace(/[^A-Za-z0-9\s]/g, '').substring(0, 50);
@@ -268,14 +328,6 @@ export default function ViewTreatmentSheets() {
     minWidth: '200px'
   };
 
-  const selectStyle: React.CSSProperties = {
-    padding: '10px 15px',
-    border: '2px solid #ddd',
-    borderRadius: '8px',
-    fontSize: '16px',
-    backgroundColor: 'white'
-  };
-
   const buttonStyle: React.CSSProperties = {
     padding: '10px 20px',
     backgroundColor: '#007bff',
@@ -321,10 +373,6 @@ export default function ViewTreatmentSheets() {
     transition: 'background-color 0.2s'
   };
 
-  const rowHoverStyle: React.CSSProperties = {
-    backgroundColor: '#f8f9fa'
-  };
-
   const loadingStyle: React.CSSProperties = {
     textAlign: 'center',
     padding: '50px',
@@ -342,11 +390,26 @@ export default function ViewTreatmentSheets() {
     boxShadow: '0 2px 10px rgba(0,0,0,0.1)'
   };
 
+  // 인증 확인 중이거나 인증 실패 시 처리
+  if (isAuthorized === null) {
+    return (
+      <div style={containerStyle}>
+        <div style={loadingStyle}>
+          <div>Verifying authentication...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return null; // 리다이렉트 중이므로 아무것도 렌더링하지 않음
+  }
+
   if (loading) {
     return (
       <div style={containerStyle}>
         <div style={loadingStyle}>
-          <div>⏳ Loading treatment sheets...</div>
+          <div>Loading...</div>
         </div>
       </div>
     );
