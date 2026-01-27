@@ -1,26 +1,40 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { db } from '@/lib/firebase.config';
-import { collection, query, where, getDocs, Timestamp } from 'firebase/firestore';
+import { db, auth } from '@/lib/firebase.config';
+import { collection, query, where, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 
 export default function EndOfDay() {
   const [selectedOffice, setSelectedOffice] = useState('');
   const [pdfs, setPdfs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [filteredPdfs, setFilteredPdfs] = useState<any[]>([]);
-  const [merging, setMerging] = useState(false);
-  const [downloadingZip, setDownloadingZip] = useState(false);
   const [monthFilter, setMonthFilter] = useState('');
+  const [typeOptions, setTypeOptions] = useState<string[]>([]);
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [currentPdfIndex, setCurrentPdfIndex] = useState(0);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
 
   // 오피스 옵션
-  const officeOptions = ['Bernard', 'California', 'Call Center', 'Delano', 'Fresno', 'Janitor', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+  const officeOptions = ['Bernard', 'California', 'Call_Center', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+
+  // 보안: Office 값 검증
+  const isValidOffice = (office: string): boolean => {
+    return officeOptions.includes(office);
+  };
 
   // Office 변경 처리
   const handleOfficeChange = (newOffice: string) => {
     // 빈 값으로 선택하면 비밀번호 없이 변경 허용 (초기화)
     if (newOffice === '') {
       setSelectedOffice('');
+      return;
+    }
+    
+    // 보안: 허용된 Office 값만 허용
+    if (!isValidOffice(newOffice)) {
+      alert('Invalid office selection.');
       return;
     }
     
@@ -90,12 +104,19 @@ export default function EndOfDay() {
         return aNum - bNum; // 번호 순서대로 정렬
       });
       
+      // 실제 데이터에서 고유한 type 값들 추출
+      const uniqueTypes = Array.from(new Set(
+        pdfList
+          .map(pdf => pdf.type)
+          .filter(type => type && typeof type === 'string')
+      )).sort();
+      
+      setTypeOptions(uniqueTypes);
       setPdfs(pdfList);
       setFilteredPdfs(pdfList);
     } catch (error: any) {
-      console.error('Error loading PDFs:', error);
-      const errorMessage = error?.message || '알 수 없는 오류';
-      alert(`Error loading PDFs: ${errorMessage}`);
+      // 보안: 상세한 에러 메시지 노출 최소화
+      alert('Error, please try again.');
       setPdfs([]);
       setFilteredPdfs([]);
     } finally {
@@ -103,10 +124,97 @@ export default function EndOfDay() {
     }
   };
 
-  // Office 변경 시 PDF 목록 다시 로드
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
-    loadPdfs();
-  }, [selectedOffice]);
+    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      // HTTP로 접속한 경우 HTTPS로 리다이렉트
+      window.location.href = window.location.href.replace('http:', 'https:');
+      return;
+    }
+
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'manager') {
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+      } catch (error: any) {
+        setIsAuthorized(false);
+        if (typeof window !== 'undefined') {
+          window.location.href = '/';
+        }
+      }
+    });
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+
+  // Office 변경 시 PDF 목록 다시 로드 (인증된 경우에만)
+  useEffect(() => {
+    if (isAuthorized === true) {
+      loadPdfs();
+    }
+  }, [selectedOffice, isAuthorized]);
+
+
+  // 키보드 이벤트 처리 (PDF 뷰어에서 좌우 화살표 키로 이동)
+  useEffect(() => {
+    if (!viewerOpen) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        if (currentPdfIndex > 0) {
+          setCurrentPdfIndex(currentPdfIndex - 1);
+        }
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        if (currentPdfIndex < filteredPdfs.length - 1) {
+          setCurrentPdfIndex(currentPdfIndex + 1);
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        setViewerOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [viewerOpen, currentPdfIndex, filteredPdfs.length]);
 
 
   // 캘리포니아 시간대의 오늘 날짜 가져오기
@@ -131,19 +239,6 @@ export default function EndOfDay() {
   // Type 필터링
   const [typeFilter, setTypeFilter] = useState('');
   
-  // Type 옵션
-  const typeOptions = [
-    'End of Day Fax Cover',
-    'Daily Office Duty',
-    'Attendance Tract',
-    'Add On Treatment',
-    'Lobby Inspection',
-    'Restroom Inspection',
-    'Patient Log',
-    'RDA/DA (Sealant) Treatment',
-    'Janitorial Daily Duty'
-  ];
-  
   useEffect(() => {
     let filtered = pdfs;
     
@@ -162,7 +257,13 @@ export default function EndOfDay() {
     
     // Type 필터 적용
     if (typeFilter) {
-      filtered = filtered.filter(pdf => pdf.type === typeFilter);
+      filtered = filtered.filter(pdf => {
+        if (!pdf.type) return false;
+        // 정확히 일치하거나, 공백을 제거한 후 비교
+        const pdfType = String(pdf.type).trim();
+        const filterType = String(typeFilter).trim();
+        return pdfType === filterType;
+      });
     }
     
     setFilteredPdfs(filtered);
@@ -189,129 +290,52 @@ export default function EndOfDay() {
     });
   };
 
-  // PDF 병합 함수
-  const handleMergePdfs = async () => {
-    if (filteredPdfs.length === 0) {
-      alert('No PDFs to merge.');
-      return; 
-    }
-
-    setMerging(true);
+  // 보안: URL 검증 함수
+  const isValidFirebaseStorageUrl = (url: string): boolean => {
+    if (typeof url !== 'string') return false;
+    // Firebase Storage URL만 허용
+    if (!url.startsWith('https://firebasestorage.googleapis.com')) return false;
+    // URL 형식 검증
     try {
-      // 모든 필터링된 PDF의 URL 수집
-      const pdfUrls = filteredPdfs.map(pdf => pdf.url).filter(url => url);
-      
-      if (pdfUrls.length === 0) {
-        alert('No valid PDF URLs.');
-        setMerging(false);
-        return;
-      }
-
-      // 병합 API 호출
-      const response = await fetch('/api/merge-pdfs', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ pdfUrls }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'PDF 병합 실패');
-      }
-
-      // 병합된 PDF blob 받기
-      const blob = await response.blob();
-      
-      // 파일명 생성
-      const dateStr = dateFilter || new Date().toISOString().split('T')[0];
-      const typeStr = typeFilter ? `_${typeFilter.replace(/\s+/g, '_')}` : '';
-      const filename = `${dateStr}_${selectedOffice}${typeStr}_End of Day Daily Check Out.pdf`;
-      
-      // 다운로드
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-
-      alert(`${filteredPdfs.length} PDFs merged successfully.`);
-    } catch (error: any) {
-      console.error('Error merging PDFs:', error);
-      alert(`Error merging PDFs: ${error?.message || 'Unknown error'}`);
-    } finally {
-      setMerging(false);
+      const urlObj = new URL(url);
+      // 도메인 검증
+      if (urlObj.hostname !== 'firebasestorage.googleapis.com') return false;
+      // 경로 검증 (path traversal 방지)
+      if (urlObj.pathname.includes('..') || urlObj.pathname.includes('//')) return false;
+      // 쿼리 파라미터 검증 (XSS 방지)
+      if (urlObj.search && urlObj.search.length > 1000) return false;
+      // URL 길이 제한
+      if (url.length > 2048) return false;
+      return true;
+    } catch {
+      return false;
     }
   };
 
-  // ZIP으로 모든 PDF 다운로드 함수
-  const handleDownloadZip = async () => {
-    if (filteredPdfs.length === 0) {
-      alert('No PDFs to download.');
-      return;
-    }
-
-    setDownloadingZip(true);
-    try {
-      // 모든 필터링된 PDF의 URL 수집
-      const pdfUrls = filteredPdfs.map(pdf => pdf.url).filter(url => url);
-      
-      if (pdfUrls.length === 0) {
-        alert('No valid PDF URLs.');
-        setDownloadingZip(false);
-        return;
-      }
-
-      // ZIP 다운로드 API 호출
-      const response = await fetch('/api/download-pdfs-zip', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ pdfUrls }),
-      });
-
-      if (!response.ok) {
-        let errorMessage = 'ZIP download failed';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch (e) {
-          errorMessage = `HTTP error! status: ${response.status}`;
-        }
-        throw new Error(errorMessage);
-      }
-
-      // ZIP blob 받기
-      const zipBlob = await response.blob();
-      
-      // 파일명 생성
-      const dateStr = monthFilter || dateFilter || new Date().toISOString().split('T')[0];
-      const typeStr = typeFilter ? `_${typeFilter.replace(/\s+/g, '_')}` : '';
-      const filename = `${dateStr}_${selectedOffice}${typeStr}.zip`;
-      
-      // 다운로드
-      const url = window.URL.createObjectURL(zipBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-
-      alert(`${filteredPdfs.length} PDFs downloaded to ZIP file.`);
-    } catch (error: any) {
-      console.error('Error downloading ZIP:', error);
-      alert(`Error downloading ZIP: ${error?.message || 'Unknown error'}`);
-    } finally {
-      setDownloadingZip(false);
+  // PDF 뷰어 열기
+  const openPdfViewer = (index: number) => {
+    if (filteredPdfs[index] && filteredPdfs[index].url && isValidFirebaseStorageUrl(filteredPdfs[index].url)) {
+      setCurrentPdfIndex(index);
+      setViewerOpen(true);
+    } else {
+      alert('Cannot open the file.');
     }
   };
+
+  // 이전 PDF로 이동
+  const goToPreviousPdf = () => {
+    if (currentPdfIndex > 0) {
+      setCurrentPdfIndex(currentPdfIndex - 1);
+    }
+  };
+
+  // 다음 PDF로 이동
+  const goToNextPdf = () => {
+    if (currentPdfIndex < filteredPdfs.length - 1) {
+      setCurrentPdfIndex(currentPdfIndex + 1);
+    }
+  };
+
 
   // 월 목록 생성 (1~12)
   const getMonthOptions = (): Array<{ value: string; label: string }> => {
@@ -327,7 +351,7 @@ export default function EndOfDay() {
 
   const styles = {
     body: {
-      fontFamily: "'Roboto', sans-serif",
+      fontFamily: "sans-serif",
       background: '#ffe4e6',
       color: '#333',
       lineHeight: '1.6',
@@ -423,11 +447,26 @@ export default function EndOfDay() {
     }
   };
 
+  // 인증 확인 중이거나 인증 실패 시 처리
+  if (isAuthorized === null) {
+    return (
+      <div style={styles.body}>
+        <div style={styles.container}>
+          <div style={styles.loadingState}>
+            <div style={{fontSize: '24px', marginBottom: '10px'}}>⏳</div>
+            Verifying authentication...
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return null; // 리다이렉트 중이므로 아무것도 렌더링하지 않음
+  }
+
   return (
     <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap');
-      `}</style>
       <div style={styles.body}>
         <div style={styles.container}>
           <h2 style={styles.header}>
@@ -512,44 +551,6 @@ export default function EndOfDay() {
                     Clear Filters
                   </button>
                 )}
-                {filteredPdfs.length > 0 && (
-                  <>
-                    <button
-                      onClick={handleDownloadZip}
-                      disabled={downloadingZip}
-                      style={{
-                        padding: '10px 15px',
-                        background: downloadingZip ? '#95a5a6' : '#27ae60',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: downloadingZip ? 'not-allowed' : 'pointer',
-                        fontSize: '14px',
-                        fontWeight: '600',
-                        marginLeft: '10px'
-                      }}
-                    >
-                      {downloadingZip ? 'Downloading...' : `📥 Download ZIP (${filteredPdfs.length})`}
-                    </button>
-                    <button
-                      onClick={handleMergePdfs}
-                      disabled={merging}
-                      style={{
-                        padding: '10px 15px',
-                        background: merging ? '#95a5a6' : '#4a90e2',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: merging ? 'not-allowed' : 'pointer',
-                        fontSize: '14px',
-                        fontWeight: '600',
-                        marginLeft: '10px'
-                      }}
-                    >
-                      {merging ? 'Merging...' : `📄 Merge (${filteredPdfs.length})`}
-                    </button>
-                  </>
-                )}
               </>
             )}
         </div>
@@ -576,84 +577,10 @@ export default function EndOfDay() {
                 <div
                   key={pdf.id}
                   style={styles.pdfCard}
-                  onClick={async () => {
-                    try {
-                      let htmlContent: string | null = null;
-                      
-                      // 1. Firestore에 HTML이 저장되어 있는 경우
-                      if (pdf.html) {
-                        htmlContent = pdf.html;
-                      } 
-                      // 2. HTML이 없고 URL이 있는 경우, URL에서 HTML 가져오기
-                      else if (pdf.url && pdf.url.startsWith('http')) {
-                        // HTML 파일인 경우 (확장자가 .html이거나 type이 text/html)
-                        if (pdf.filename?.endsWith('.html') || pdf.url.includes('.html')) {
-                          try {
-                            const response = await fetch(pdf.url);
-                            if (response.ok) {
-                              htmlContent = await response.text();
-                            }
-                          } catch (fetchError) {
-                            console.error('Error fetching HTML from URL:', fetchError);
-                          }
-                        }
-                      }
-                      
-                      // HTML이 있으면 새 창에서 표시
-                      if (htmlContent) {
-                        // 🔒 보안: HTML 검증
-                        if (typeof htmlContent !== 'string') {
-                          alert('Invalid HTML format');
-                          return;
-                        }
-                        
-                        // HTML이 이스케이프되어 있는 경우 디코딩 시도
-                        if (htmlContent.includes('&lt;') || htmlContent.includes('&gt;')) {
-                          const textarea = document.createElement('textarea');
-                          textarea.innerHTML = htmlContent;
-                          htmlContent = textarea.value;
-                        }
-                        
-                        // HTML이 올바른 형식인지 확인
-                        const trimmedHtml = htmlContent.trim();
-                        if (!trimmedHtml.startsWith('<!DOCTYPE') && !trimmedHtml.startsWith('<html')) {
-                          // HTML이 JSON 문자열로 저장된 경우 파싱 시도
-                          try {
-                            const parsed = JSON.parse(htmlContent);
-                            if (parsed && typeof parsed === 'string') {
-                              htmlContent = parsed;
-                            }
-                          } catch (e) {
-                            // JSON이 아니면 그대로 사용
-                          }
-                          
-                          // 다시 확인
-                          const reTrimmed = htmlContent.trim();
-                          if (!reTrimmed.startsWith('<!DOCTYPE') && !reTrimmed.startsWith('<html')) {
-                            alert('HTML 형식이 올바르지 않습니다.');
-                            return;
-                          }
-                        }
-                        
-                        // 새 창 생성 및 HTML 직접 작성
-                        const newWindow = window.open('', '_blank');
-                        if (newWindow) {
-                          newWindow.document.open();
-                          newWindow.document.write(htmlContent);
-                          newWindow.document.close();
-                        } else {
-                          alert('팝업이 차단되었습니다. 팝업 차단을 해제해주세요.');
-                        }
-                      } 
-                      // HTML이 없고 일반 URL인 경우 (PDF 등)
-                      else if (pdf.url && pdf.url.startsWith('http')) {
-                        window.open(pdf.url, '_blank');
-                      } else {
-                        alert('PDF를 열 수 없습니다. URL이 없습니다.');
-                      }
-                    } catch (error) {
-                      console.error('Error opening PDF:', error);
-                      alert('PDF를 열 수 없습니다.');
+                  onClick={() => {
+                    const index = filteredPdfs.findIndex(p => p.id === pdf.id);
+                    if (index !== -1) {
+                      openPdfViewer(index);
                     }
                   }}
                   onMouseEnter={(e) => {
@@ -665,7 +592,10 @@ export default function EndOfDay() {
                     e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
                   }}
                 >
-                  <div style={styles.pdfTitle}>{pdf.filename || 'PDF Document'}</div>
+                  <div style={styles.pdfTitle}>
+                    {/* 보안: XSS 방지 - React가 자동으로 이스케이프하지만 명시적으로 처리 */}
+                    {pdf.filename || 'PDF Document'}
+                  </div>
                   {pdf.createdAt && (
                     <div style={styles.pdfInfo}>
                       <strong>Created:</strong> {formatTime(pdf.createdAt)}
@@ -677,6 +607,164 @@ export default function EndOfDay() {
           )}
         </div>
       </div>
+
+      {/* PDF 뷰어 모달 */}
+      {viewerOpen && filteredPdfs[currentPdfIndex] && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.9)',
+            zIndex: 1000,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setViewerOpen(false);
+            }
+          }}
+        >
+          {/* 닫기 버튼 */}
+          <button
+            onClick={() => setViewerOpen(false)}
+            style={{
+              position: 'absolute',
+              top: '20px',
+              right: '20px',
+              background: '#ff6b6b',
+              color: 'white',
+              border: 'none',
+              borderRadius: '50%',
+              width: '40px',
+              height: '40px',
+              fontSize: '20px',
+              cursor: 'pointer',
+              zIndex: 1001,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 'bold'
+            }}
+          >
+            ×
+          </button>
+
+          {/* PDF 정보 */}
+          <div
+            style={{
+              position: 'absolute',
+              top: '20px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              background: 'rgba(255, 255, 255, 0.9)',
+              padding: '10px 20px',
+              borderRadius: '8px',
+              color: '#333',
+              fontSize: '16px',
+              fontWeight: '600',
+              zIndex: 1001
+            }}
+          >
+            {filteredPdfs[currentPdfIndex].filename || 'PDF Document'} ({currentPdfIndex + 1} / {filteredPdfs.length})
+          </div>
+
+          {/* 이전 버튼 */}
+          {currentPdfIndex > 0 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                goToPreviousPdf();
+              }}
+              style={{
+                position: 'absolute',
+                left: '20px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'rgba(255, 255, 255, 0.9)',
+                color: '#333',
+                border: 'none',
+                borderRadius: '50%',
+                width: '50px',
+                height: '50px',
+                fontSize: '24px',
+                cursor: 'pointer',
+                zIndex: 1001,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 'bold'
+              }}
+            >
+              ‹
+            </button>
+          )}
+
+          {/* 다음 버튼 */}
+          {currentPdfIndex < filteredPdfs.length - 1 && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                goToNextPdf();
+              }}
+              style={{
+                position: 'absolute',
+                right: '20px',
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'rgba(255, 255, 255, 0.9)',
+                color: '#333',
+                border: 'none',
+                borderRadius: '50%',
+                width: '50px',
+                height: '50px',
+                fontSize: '24px',
+                cursor: 'pointer',
+                zIndex: 1001,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontWeight: 'bold'
+              }}
+            >
+              ›
+            </button>
+          )}
+
+          {/* PDF iframe viewer */}
+          {filteredPdfs[currentPdfIndex]?.url ? (
+            <iframe
+              src={`${filteredPdfs[currentPdfIndex].url}#toolbar=0`}
+              style={{
+                width: '90%',
+                height: '90%',
+                border: 'none',
+                borderRadius: '8px',
+                background: 'white'
+              }}
+              title="PDF Viewer"
+              allow="fullscreen"
+            />
+          ) : (
+            <div style={{
+              width: '90%',
+              height: '90%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontSize: '18px'
+            }}>
+              Cannot open the file.
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
