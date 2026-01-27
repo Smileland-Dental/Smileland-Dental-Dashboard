@@ -105,7 +105,7 @@ export default function ShowCheckSystem() {
       
       // Office 값 whitelist 검증
       if (field === 'selectedOffice' && value && value !== 'All') {
-        const validOffices = ['A', 'B', 'C', 'D'];
+        const validOffices = ['Bernard', 'Call Center','California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
         if (!validOffices.includes(value)) {
           return '';
         }
@@ -139,7 +139,7 @@ export default function ShowCheckSystem() {
   const loadAppointmentsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Office 옵션
-  const officeOptions = ['All', 'A', 'B', 'C', 'D'];
+  const officeOptions = ['All', 'Bernard','California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
   // --- PDF 생성 관련 상수/스타일 ---
   const pdfStyles = StyleSheet.create({
@@ -295,7 +295,7 @@ export default function ShowCheckSystem() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'admin') {
+        if (userData?.role !== 'manager') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           // 다른 페이지로 리다이렉트하거나 홈으로 이동
@@ -1058,7 +1058,7 @@ export default function ShowCheckSystem() {
       }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
-          <div style={{ fontSize: '18px', color: '#023047' }}>인증 확인 중...</div>
+          <div style={{ fontSize: '18px', color: '#023047' }}>Verifying authentication...</div>
         </div>
       </div>
     );
@@ -1076,8 +1076,8 @@ export default function ShowCheckSystem() {
       }}>
         <div style={{ textAlign: 'center' }}>
           <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
-          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>접근 권한이 없습니다</div>
-          <div style={{ fontSize: '14px', color: '#666' }}>관리자 권한이 필요합니다</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
+          <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
         </div>
       </div>
     );
