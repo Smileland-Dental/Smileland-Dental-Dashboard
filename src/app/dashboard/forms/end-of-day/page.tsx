@@ -17,7 +17,7 @@ export default function EndOfDay() {
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
 
   // 오피스 옵션
-  const officeOptions = ['Bernard', 'California', 'Call_Center', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+  const officeOptions = ['Appointment Show', 'Bernard', 'California', 'Call_Center', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
   // 보안: Office 값 검증
   const isValidOffice = (office: string): boolean => {
@@ -768,3 +768,4 @@ export default function EndOfDay() {
     </>
   );
 }
+
