@@ -412,10 +412,10 @@ export default function ShowCheckSystem() {
         const data = doc.data();
         
         // 보안 강화: 데이터 소유권 확인 (Firebase Security Rules와 함께)
-        if (currentUser && data.userId && data.userId !== currentUser.uid) {
-          // 다른 사용자의 데이터는 로드하지 않음 (Security Rules에서도 차단됨)
-          return;
-        }
+        // if (currentUser && data.userId && data.userId !== currentUser.uid) {
+        //   // 다른 사용자의 데이터는 로드하지 않음 (Security Rules에서도 차단됨)
+        //   return;
+        // }
         
         // 제출된 데이터만 필터링
         if (data.dutyDate && data.userName && data.workOffice) {
@@ -541,10 +541,10 @@ export default function ShowCheckSystem() {
       });
       
       // 보안 강화: 데이터 소유권 확인
-      if (currentData && currentData.userId && currentData.userId !== currentUser.uid) {
-        alert('⚠️ You do not have access to this page.');
-        return;
-      }
+      // if (currentData && currentData.userId && currentData.userId !== currentUser.uid) {
+      //   alert('⚠️ You do not have access to this page.');
+      //   return;
+      // }
       
       if (currentData && currentData.patientRows) {
         // 해당 row의 showStatus 업데이트
@@ -1455,3 +1455,4 @@ export default function ShowCheckSystem() {
     </>
   );
 }
+
