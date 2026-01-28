@@ -139,7 +139,7 @@ export default function ShowCheckSystem() {
   const loadAppointmentsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Office 옵션
-  const officeOptions = ['All', 'Bernard','California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+  const officeOptions = ['All','Bernard','California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
   // --- PDF 생성 관련 상수/스타일 ---
   const pdfStyles = StyleSheet.create({
@@ -310,7 +310,6 @@ export default function ShowCheckSystem() {
         // 인증 성공 후 데이터 로드
         await loadAppointments();
       } catch (error: any) {
-        alert('error');
         setIsAuthorized(false);
       }
     });
@@ -392,44 +391,62 @@ export default function ShowCheckSystem() {
 
       setLoading(true);
       const querySnapshot = await getDocs(collection(db, "patient-logs"));
-      
-      // 제출된 PDF 목록 가져오기 (제출된 것만 필터링하기 위해)
+      // pdf-documents 제출된 목록(누가 제출했든 전체) — 이 범위에 들어가는 patient-logs 표시
       const pdfQuerySnapshot = await getDocs(collection(db, "pdf-documents"));
-      const submittedDocs = new Set<string>();
-      
+      const submittedPatientLogs: Array<{date: string, name: string, office: string}> = [];
+      const submittedShowChecks: Array<{startDate: string, endDate: string, selectedOffice: string}> = [];
+
       pdfQuerySnapshot.forEach((pdfDoc) => {
         const pdfData = pdfDoc.data();
         if (pdfData.type === 'Patient Log' && pdfData.date && pdfData.name && pdfData.office) {
-          // 제출된 문서의 키 생성: date_name_office
-          const key = `${pdfData.date}_${pdfData.name}_${pdfData.office}`;
-          submittedDocs.add(key);
+          submittedPatientLogs.push({
+            date: pdfData.date,
+            name: pdfData.name,
+            office: pdfData.office
+          });
+        } else if (pdfData.type === 'Show Check' && pdfData.startDate && pdfData.endDate) {
+          submittedShowChecks.push({
+            startDate: pdfData.startDate,
+            endDate: pdfData.endDate,
+            selectedOffice: pdfData.selectedOffice || 'All'
+          });
         }
       });
-      
+
       const allAppointments: any[] = [];
-      
+
+      // pdf-documents 제출된 patient-logs 정보만 표시. 페이지 보는 사람은 제출 여부와 관계없이 확인만 함
       querySnapshot.forEach((doc) => {
         const data = doc.data();
-        
-        // 보안 강화: 데이터 소유권 확인 (Firebase Security Rules와 함께)
-        // if (currentUser && data.userId && data.userId !== currentUser.uid) {
-        //   // 다른 사용자의 데이터는 로드하지 않음 (Security Rules에서도 차단됨)
-        //   return;
-        // }
-        
-        // 제출된 데이터만 필터링
-        if (data.dutyDate && data.userName && data.workOffice) {
-          const docKey = `${data.dutyDate}_${data.userName}_${data.workOffice}`;
-          if (!submittedDocs.has(docKey)) {
-            // 제출되지 않은 데이터는 건너뛰기
-            return;
-          }
+        let isSubmitted = false;
+
+        if (data.patientRows && submittedPatientLogs.length > 0) {
+          const submittedOffices = new Set(submittedPatientLogs.map(pl => pl.office));
+          const hasMatchingOffice = (data.workOffice && submittedOffices.has(data.workOffice)) ||
+            data.patientRows.some((row: any) => row.office && submittedOffices.has(row.office));
+          if (hasMatchingOffice) isSubmitted = true;
         }
-        
+
+        if (!isSubmitted && data.patientRows && submittedShowChecks.length > 0) {
+          const hasMatchingAppointment = data.patientRows.some((row: any) => {
+            if (!row.appt_date) return false;
+            return submittedShowChecks.some((showCheck) => {
+              const apptDate = new Date(row.appt_date);
+              const startDate = new Date(showCheck.startDate);
+              const endDate = new Date(showCheck.endDate);
+              const inDateRange = apptDate >= startDate && apptDate <= endDate;
+              const officeMatch = showCheck.selectedOffice === 'All' || showCheck.selectedOffice === row.office;
+              return inDateRange && officeMatch;
+            });
+          });
+          if (hasMatchingAppointment) isSubmitted = true;
+        }
+
+        if (!isSubmitted) return;
+
         if (data.patientRows) {
           data.patientRows.forEach((row: any, index: number) => {
             if (row.appt_date && row.name) {
-              // 기본적인 데이터 sanitization (XSS 방지)
               const sanitizedRow = {
                 name: typeof row.name === 'string' ? row.name.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '',
                 office: typeof row.office === 'string' ? row.office.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '',
@@ -442,7 +459,6 @@ export default function ShowCheckSystem() {
                 call_out: Boolean(row.call_out),
                 showStatus: (row.showStatus === 'show' || row.showStatus === 'no-show' || row.showStatus === 'pending') ? row.showStatus : 'pending'
               };
-              
               allAppointments.push({
                 ...sanitizedRow,
                 docId: sanitizeFirebaseDocIdClient(doc.id),
@@ -462,7 +478,6 @@ export default function ShowCheckSystem() {
       appointmentsRef.current = allAppointments;
     } catch (error) {
       // 로그 제거 (보안 강화)
-      alert('error');
     } finally {
       setLoading(false);
     }
@@ -540,11 +555,8 @@ export default function ShowCheckSystem() {
         }
       });
       
-      // 보안 강화: 데이터 소유권 확인
-      // if (currentData && currentData.userId && currentData.userId !== currentUser.uid) {
-      //   alert('⚠️ You do not have access to this page.');
-      //   return;
-      // }
+      // 모든 인증된 사용자가 제출된 데이터의 상태를 업데이트할 수 있도록 userId 체크 제거
+      // (제출된 데이터는 공개적으로 확인 및 업데이트 가능해야 함)
       
       if (currentData && currentData.patientRows) {
         // 해당 row의 showStatus 업데이트
@@ -555,13 +567,10 @@ export default function ShowCheckSystem() {
           return row;
         });
         
-        // Firebase 업데이트 (보안 검증 적용 + 사용자 정보 강제 추가)
+        // Firebase 업데이트
         const safeUpdateData = sanitizeFirebaseDataClient({
           patientRows: updatedPatientRows,
           lastUpdated: new Date().toISOString(),
-          // 보안 강화: 사용자 정보 강제 추가
-          userId: currentUser.uid, // 항상 현재 사용자 ID로 설정
-          ...(currentUser.email && { userEmail: currentUser.email }),
           updatedAt: new Date().toISOString()
         });
         await updateDoc(docRef, safeUpdateData);
@@ -606,7 +615,6 @@ export default function ShowCheckSystem() {
       }
     } catch (error) {
       // 로그 제거 (보안 강화)
-      alert('error');
     }
   };
 
@@ -784,6 +792,10 @@ export default function ShowCheckSystem() {
             name: name || 'Supervisor',
             type: 'Show Check',
             source: 's_route',
+            // Show Check 매칭을 위한 추가 필드
+            startDate: startDate,
+            endDate: endDate,
+            selectedOffice: selectedOffice || 'All',
           });
           
           await setDoc(doc(db, 'pdf-documents', `${date}_${safeOfficeName}_showcheck_${Date.now()}`), {
@@ -815,7 +827,6 @@ export default function ShowCheckSystem() {
             setProgress(0);
           }, 2000);
         } catch (storageError: any) {
-          alert('error');
           setPdfLoading(false);
           setSubmitStatus('');
           setProgress(0);
@@ -1455,4 +1466,3 @@ export default function ShowCheckSystem() {
     </>
   );
 }
-
