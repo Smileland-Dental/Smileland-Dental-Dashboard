@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from '@/lib/firebase.config';
 import { collection, query, where, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
+import { getStorage, ref, getBlob } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 
 export default function EndOfDay() {
@@ -206,7 +207,7 @@ export default function EndOfDay() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [viewerOpen]);
 
-  // PDF를 fetch하여 blob URL로 로드 (iframe 없이, Storage URL을 DOM에 노출하지 않음)
+  // PDF 로드: path가 있으면 Storage SDK(getBlob) 사용 → 인증 적용, URL 노출 없음. 없으면 url로 fetch (기존 방식)
   useEffect(() => {
     if (!viewerOpen || !viewingPdf) {
       if (pdfBlobUrlRef.current) {
@@ -219,7 +220,10 @@ export default function EndOfDay() {
     }
 
     const pdf = viewingPdf;
-    if (!pdf?.url || !isValidFirebaseStorageUrl(pdf.url)) {
+    const usePath = pdf?.path && isValidStoragePath(pdf.path);
+    const useUrl = pdf?.url && isValidFirebaseStorageUrl(pdf.url);
+
+    if (!usePath && !useUrl) {
       setPdfError(true);
       setPdfLoading(false);
       return;
@@ -229,29 +233,44 @@ export default function EndOfDay() {
     setPdfError(false);
     let cancelled = false;
 
-    fetch(pdf.url)
-      .then((res) => {
-        if (cancelled) return;
-        if (!res.ok) throw new Error();
-        return res.blob();
-      })
-      .then((blob) => {
-        if (cancelled || !blob) return;
-        if (pdfBlobUrlRef.current) {
-          URL.revokeObjectURL(pdfBlobUrlRef.current);
-          pdfBlobUrlRef.current = null;
+    const setBlobFromResponse = (blob: Blob | null) => {
+      if (cancelled || !blob) return;
+      if (pdfBlobUrlRef.current) {
+        URL.revokeObjectURL(pdfBlobUrlRef.current);
+        pdfBlobUrlRef.current = null;
+      }
+      const blobUrl = URL.createObjectURL(blob);
+      pdfBlobUrlRef.current = blobUrl;
+      setPdfBlobUrl(blobUrl);
+      setPdfLoading(false);
+    };
+
+    const onError = (err?: unknown) => {
+      if (!cancelled) {
+        if (typeof console !== 'undefined' && console.error) {
+          console.error('PDF load failed:', err instanceof Error ? err.message : err);
         }
-        const blobUrl = URL.createObjectURL(blob);
-        pdfBlobUrlRef.current = blobUrl;
-        setPdfBlobUrl(blobUrl);
+        setPdfError(true);
         setPdfLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPdfError(true);
-          setPdfLoading(false);
-        }
-      });
+      }
+    };
+
+    if (usePath) {
+      const storage = getStorage();
+      const storageRef = ref(storage, pdf.path);
+      getBlob(storageRef)
+        .then((blob) => setBlobFromResponse(blob))
+        .catch(onError);
+    } else {
+      fetch(pdf.url)
+        .then((res) => {
+          if (cancelled) return null;
+          if (!res.ok) throw new Error();
+          return res.blob();
+        })
+        .then((blob) => setBlobFromResponse(blob ?? null))
+        .catch(onError);
+    }
 
     return () => {
       cancelled = true;
@@ -336,21 +355,25 @@ export default function EndOfDay() {
     });
   };
 
-  // 보안: URL 검증 함수
+  // 보안: Storage path 검증 (path만 저장할 때 사용)
+  const isValidStoragePath = (path: string): boolean => {
+    if (typeof path !== 'string' || !path.trim()) return false;
+    const p = path.trim();
+    if (p.includes('..') || p.includes('//')) return false;
+    if (p.startsWith('/')) return false;
+    if (p.length > 1024) return false;
+    return true;
+  };
+
+  // 보안: URL 검증 함수 (path 없이 url만 쓸 때)
   const isValidFirebaseStorageUrl = (url: string): boolean => {
     if (typeof url !== 'string') return false;
-    // Firebase Storage URL만 허용
     if (!url.startsWith('https://firebasestorage.googleapis.com')) return false;
-    // URL 형식 검증
     try {
       const urlObj = new URL(url);
-      // 도메인 검증
       if (urlObj.hostname !== 'firebasestorage.googleapis.com') return false;
-      // 경로 검증 (path traversal 방지)
       if (urlObj.pathname.includes('..') || urlObj.pathname.includes('//')) return false;
-      // 쿼리 파라미터 검증 (XSS 방지)
       if (urlObj.search && urlObj.search.length > 1000) return false;
-      // URL 길이 제한
       if (url.length > 2048) return false;
       return true;
     } catch {
@@ -358,9 +381,11 @@ export default function EndOfDay() {
     }
   };
 
-  // PDF 뷰어 열기 (클릭한 해당 PDF만 표시)
+  // PDF 뷰어 열기 (path 또는 url 지원)
   const openPdfViewer = (pdf: any) => {
-    if (pdf?.url && isValidFirebaseStorageUrl(pdf.url)) {
+    const hasPath = pdf?.path && isValidStoragePath(pdf.path);
+    const hasUrl = pdf?.url && isValidFirebaseStorageUrl(pdf.url);
+    if (hasPath || hasUrl) {
       setViewingPdf(pdf);
       setViewerOpen(true);
     } else {
