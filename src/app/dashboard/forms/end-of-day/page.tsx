@@ -2,8 +2,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from '@/lib/firebase.config';
-import { collection, query, where, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
-import { getStorage, ref, getBlob } from 'firebase/storage';
+import { doc, getDoc } from 'firebase/firestore';
+import { getStorage, ref, getBlob, listAll, getMetadata } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 
 export default function EndOfDay() {
@@ -12,7 +12,6 @@ export default function EndOfDay() {
   const [loading, setLoading] = useState(false);
   const [filteredPdfs, setFilteredPdfs] = useState<any[]>([]);
   const [monthFilter, setMonthFilter] = useState('');
-  const [typeOptions, setTypeOptions] = useState<string[]>([]);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewingPdf, setViewingPdf] = useState<any | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
@@ -55,7 +54,7 @@ export default function EndOfDay() {
     setSelectedOffice(newOffice);
   };
 
-  // PDF 목록 로드
+  // PDF 목록 로드: Storage에서 직접 목록 가져오기 (path가 항상 올바름)
   const loadPdfs = async () => {
     if (!selectedOffice) {
       setPdfs([]);
@@ -65,63 +64,60 @@ export default function EndOfDay() {
 
     setLoading(true);
     try {
-      // orderBy 없이 쿼리 (인덱스 불필요)
-      const q = query(
-        collection(db, 'pdf-documents'),
-        where('office', '==', selectedOffice)
+      const storage = getStorage();
+      const listRef = ref(storage, `endofday-pdfs/${selectedOffice}/`);
+      const result = await listAll(listRef);
+
+      // 구조: cat/office/날짜/파일들 → 날짜 폴더(prefixes) 안의 PDF 수집
+      const pdfItems: (typeof result.items)[number][] = [];
+      for (const prefixRef of result.prefixes) {
+        const subResult = await listAll(prefixRef);
+        pdfItems.push(
+          ...subResult.items.filter((item) =>
+            item.name.toLowerCase().endsWith('.pdf')
+          )
+        );
+      }
+      // office 바로 아래에 있는 PDF도 포함
+      pdfItems.push(
+        ...result.items.filter((item) =>
+          item.name.toLowerCase().endsWith('.pdf')
+        )
       );
-      
-      const querySnapshot = await getDocs(q);
-      const pdfList: any[] = [];
-      
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        pdfList.push({
-          id: doc.id,
-          ...data,
-          // createdAt이 없으면 현재 시간을 사용
-          createdAt: data.createdAt || new Date()
-        });
-      });
-      
-      // 클라이언트 사이드에서 정렬 (파일명의 번호 순서)
+
+      const pdfList: any[] = await Promise.all(
+        pdfItems.map(async (item) => {
+          const meta = await getMetadata(item);
+          const createdAt = meta.timeCreated ? new Date(meta.timeCreated) : new Date();
+          const dateStr = createdAt.toISOString().slice(0, 10);
+          return {
+            path: item.fullPath,
+            filename: item.name,
+            createdAt,
+            date: dateStr
+          };
+        })
+      );
+
       pdfList.sort((a, b) => {
-        // 파일명에서 번호 추출 함수
         const extractNumber = (filename: string): number => {
-          if (!filename) return 9999; // 번호가 없으면 뒤로
-          // "1) ", "2) ", "8) " 형식의 번호 추출
+          if (!filename) return 9999;
           const match = filename.match(/^(\d+)\)\s/);
           return match ? parseInt(match[1], 10) : 9999;
         };
-        
         const aNum = extractNumber(a.filename || '');
         const bNum = extractNumber(b.filename || '');
-        
-        // 번호가 같으면 createdAt 기준 최신순
         if (aNum === bNum) {
-          if (a.createdAt?.toMillis && b.createdAt?.toMillis) {
-            return b.createdAt.toMillis() - a.createdAt.toMillis();
-          }
           const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
           const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
           return bTime - aTime;
         }
-        
-        return aNum - bNum; // 번호 순서대로 정렬
+        return aNum - bNum;
       });
-      
-      // 실제 데이터에서 고유한 type 값들 추출
-      const uniqueTypes = Array.from(new Set(
-        pdfList
-          .map(pdf => pdf.type)
-          .filter(type => type && typeof type === 'string')
-      )).sort();
-      
-      setTypeOptions(uniqueTypes);
+
       setPdfs(pdfList);
       setFilteredPdfs(pdfList);
-    } catch (error: any) {
-      // 보안: 상세한 에러 메시지 노출 최소화
+    } catch {
       alert('Error, please try again.');
       setPdfs([]);
       setFilteredPdfs([]);
@@ -173,7 +169,7 @@ export default function EndOfDay() {
         }
 
         setIsAuthorized(true);
-      } catch (error: any) {
+      } catch {
         setIsAuthorized(false);
         if (typeof window !== 'undefined') {
           window.location.href = '/';
@@ -194,7 +190,6 @@ export default function EndOfDay() {
     }
   }, [selectedOffice, isAuthorized]);
 
-
   // 키보드: Escape로 뷰어 닫기
   useEffect(() => {
     if (!viewerOpen) return;
@@ -208,7 +203,7 @@ export default function EndOfDay() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [viewerOpen]);
 
-  // PDF 로드: path가 있으면 Storage SDK(getBlob) 사용 → 인증 적용, URL 노출 없음. 없으면 url로 fetch (기존 방식)
+  // PDF 로드: path만 사용, Storage SDK(getBlob) → blob URL로 표시
   useEffect(() => {
     if (!viewerOpen || !viewingPdf) {
       if (pdfBlobUrlRef.current) {
@@ -222,9 +217,8 @@ export default function EndOfDay() {
 
     const pdf = viewingPdf;
     const usePath = pdf?.path && isValidStoragePath(pdf.path);
-    const useUrl = pdf?.url && isValidFirebaseStorageUrl(pdf.url);
 
-    if (!usePath && !useUrl) {
+    if (!usePath) {
       setPdfError(true);
       setPdfLoading(false);
       return;
@@ -246,37 +240,26 @@ export default function EndOfDay() {
       setPdfLoading(false);
     };
 
-    const onError = (err?: unknown) => {
+    const onError = () => {
       if (!cancelled) {
-        if (typeof console !== 'undefined' && console.error) {
-          console.error('PDF load failed:', err instanceof Error ? err.message : err);
-        }
         setPdfError(true);
         setPdfLoading(false);
       }
     };
 
-    if (usePath) {
-      const storagePath = normalizeStoragePath(pdf.path);
-      if (!storagePath) {
-        onError();
-        return;
-      }
-      const storage = getStorage();
-      const storageRef = ref(storage, storagePath);
-      getBlob(storageRef)
-        .then((blob) => setBlobFromResponse(blob))
-        .catch(onError);
-    } else {
-      fetch(pdf.url)
-        .then((res) => {
-          if (cancelled) return null;
-          if (!res.ok) throw new Error();
-          return res.blob();
-        })
-        .then((blob) => setBlobFromResponse(blob ?? null))
-        .catch(onError);
+    const storagePath = normalizeStoragePath(pdf.path);
+    if (!storagePath) {
+      onError();
+      return () => {
+        cancelled = true;
+        setPdfBlobUrl(null);
+      };
     }
+    const storage = getStorage();
+    const storageRef = ref(storage, storagePath);
+    getBlob(storageRef)
+      .then((blob) => setBlobFromResponse(blob))
+      .catch(onError);
 
     return () => {
       cancelled = true;
@@ -307,9 +290,6 @@ export default function EndOfDay() {
   // 날짜 필터링 (초기값: 캘리포니아 시간대의 오늘 날짜)
   const [dateFilter, setDateFilter] = useState(() => getCurrentCaliforniaDate());
   
-  // Type 필터링
-  const [typeFilter, setTypeFilter] = useState('');
-  
   useEffect(() => {
     let filtered = pdfs;
     
@@ -325,32 +305,18 @@ export default function EndOfDay() {
         return pdf.date.startsWith(monthFilter);
       });
     }
-    
-    // Type 필터 적용
-    if (typeFilter) {
-      filtered = filtered.filter(pdf => {
-        if (!pdf.type) return false;
-        // 정확히 일치하거나, 공백을 제거한 후 비교
-        const pdfType = String(pdf.type).trim();
-        const filterType = String(typeFilter).trim();
-        return pdfType === filterType;
-      });
-    }
-    
-    setFilteredPdfs(filtered);
-  }, [dateFilter, monthFilter, typeFilter, pdfs]);
 
-  // 시간 형식 변환
-  const formatTime = (timestamp: any) => {
+    setFilteredPdfs(filtered);
+  }, [dateFilter, monthFilter, pdfs]);
+
+  const formatTime = (timestamp: Date | { toDate?: () => Date } | number) => {
     if (!timestamp) return '';
-    let date: Date;
-    if (timestamp instanceof Timestamp) {
-      date = timestamp.toDate();
-    } else if (timestamp.toDate) {
-      date = timestamp.toDate();
-    } else {
-      date = new Date(timestamp);
-    }
+    const date =
+      timestamp instanceof Date
+        ? timestamp
+        : typeof timestamp === 'number'
+          ? new Date(timestamp)
+          : (timestamp as { toDate?: () => Date }).toDate?.() ?? new Date();
     return date.toLocaleString('en-US', { 
       timeZone: 'America/Los_Angeles',
       month: '2-digit',
@@ -376,27 +342,10 @@ export default function EndOfDay() {
     return normalizeStoragePath(path) !== null;
   };
 
-  // 보안: URL 검증 함수 (path 없이 url만 쓸 때)
-  const isValidFirebaseStorageUrl = (url: string): boolean => {
-    if (typeof url !== 'string') return false;
-    if (!url.startsWith('https://firebasestorage.googleapis.com')) return false;
-    try {
-      const urlObj = new URL(url);
-      if (urlObj.hostname !== 'firebasestorage.googleapis.com') return false;
-      if (urlObj.pathname.includes('..') || urlObj.pathname.includes('//')) return false;
-      if (urlObj.search && urlObj.search.length > 1000) return false;
-      if (url.length > 2048) return false;
-      return true;
-    } catch {
-      return false;
-    }
-  };
-
-  // PDF 뷰어 열기 (path 또는 url 지원)
+  // PDF 뷰어 열기 (path만 사용)
   const openPdfViewer = (pdf: any) => {
     const hasPath = pdf?.path && isValidStoragePath(pdf.path);
-    const hasUrl = pdf?.url && isValidFirebaseStorageUrl(pdf.url);
-    if (hasPath || hasUrl) {
+    if (hasPath) {
       setViewingPdf(pdf);
       setViewerOpen(true);
     } else {
@@ -408,7 +357,6 @@ export default function EndOfDay() {
     setViewerOpen(false);
     setViewingPdf(null);
   };
-
 
   // 월 목록 생성 (1~12)
   const getMonthOptions = (): Array<{ value: string; label: string }> => {
@@ -575,19 +523,6 @@ export default function EndOfDay() {
 
             {selectedOffice && (
               <>
-                <label style={styles.label} htmlFor="typeFilter">📄 Type:</label>
-                <select
-                  id="typeFilter"
-                  value={typeFilter}
-                  onChange={(e: any) => setTypeFilter(e.target.value)}
-                  style={styles.select}
-                >
-                  <option value="">--All Types--</option>
-                  {typeOptions.map(type => (
-                    <option key={type} value={type}>{type}</option>
-                  ))}
-                </select>
-                
                 <label style={styles.label} htmlFor="monthFilter">📆 Month:</label>
                 <select
                   id="monthFilter"
@@ -603,12 +538,11 @@ export default function EndOfDay() {
                     <option key={month.value} value={month.value}>{month.label}</option>
                   ))}
                 </select>
-                {(dateFilter || monthFilter || typeFilter) && (
+                {(dateFilter || monthFilter) && (
                   <button
                     onClick={() => {
                       setDateFilter('');
                       setMonthFilter('');
-                      setTypeFilter('');
                     }}
                     style={{
                       padding: '10px 15px',
@@ -648,7 +582,7 @@ export default function EndOfDay() {
             <div style={styles.pdfList}>
               {filteredPdfs.map((pdf, index) => (
                 <div
-                  key={pdf.id}
+                  key={`pdf-${index}-${pdf.filename ?? ''}`}
                   style={styles.pdfCard}
                   onClick={() => openPdfViewer(pdf)}
                   onMouseEnter={(e) => {
@@ -661,7 +595,6 @@ export default function EndOfDay() {
                   }}
                 >
                   <div style={styles.pdfTitle}>
-                    {/* 보안: XSS 방지 - React가 자동으로 이스케이프하지만 명시적으로 처리 */}
                     {pdf.filename || 'PDF Document'}
                   </div>
                   {pdf.createdAt && (
