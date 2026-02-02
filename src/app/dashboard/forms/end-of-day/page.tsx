@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from '@/lib/firebase.config';
 import { collection, query, where, getDocs, Timestamp, doc, getDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -13,7 +13,11 @@ export default function EndOfDay() {
   const [monthFilter, setMonthFilter] = useState('');
   const [typeOptions, setTypeOptions] = useState<string[]>([]);
   const [viewerOpen, setViewerOpen] = useState(false);
-  const [currentPdfIndex, setCurrentPdfIndex] = useState(0);
+  const [viewingPdf, setViewingPdf] = useState<any | null>(null);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState(false);
+  const pdfBlobUrlRef = useRef<string | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
 
   // 오피스 옵션
@@ -189,33 +193,75 @@ export default function EndOfDay() {
   }, [selectedOffice, isAuthorized]);
 
 
-  // 키보드 이벤트 처리 (PDF 뷰어에서 좌우 화살표 키로 이동)
+  // 키보드: Escape로 뷰어 닫기
   useEffect(() => {
     if (!viewerOpen) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowLeft') {
+      if (e.key === 'Escape') {
         e.preventDefault();
-        if (currentPdfIndex > 0) {
-          setCurrentPdfIndex(currentPdfIndex - 1);
-        }
-      } else if (e.key === 'ArrowRight') {
-        e.preventDefault();
-        if (currentPdfIndex < filteredPdfs.length - 1) {
-          setCurrentPdfIndex(currentPdfIndex + 1);
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        setViewerOpen(false);
+        closeViewer();
       }
     };
-
     window.addEventListener('keydown', handleKeyDown);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-    };
-  }, [viewerOpen, currentPdfIndex, filteredPdfs.length]);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [viewerOpen]);
 
+  // PDF를 fetch하여 blob URL로 로드 (iframe 없이, Storage URL을 DOM에 노출하지 않음)
+  useEffect(() => {
+    if (!viewerOpen || !viewingPdf) {
+      if (pdfBlobUrlRef.current) {
+        URL.revokeObjectURL(pdfBlobUrlRef.current);
+        pdfBlobUrlRef.current = null;
+      }
+      setPdfBlobUrl(null);
+      setPdfError(false);
+      return;
+    }
+
+    const pdf = viewingPdf;
+    if (!pdf?.url || !isValidFirebaseStorageUrl(pdf.url)) {
+      setPdfError(true);
+      setPdfLoading(false);
+      return;
+    }
+
+    setPdfLoading(true);
+    setPdfError(false);
+    let cancelled = false;
+
+    fetch(pdf.url)
+      .then((res) => {
+        if (cancelled) return;
+        if (!res.ok) throw new Error();
+        return res.blob();
+      })
+      .then((blob) => {
+        if (cancelled || !blob) return;
+        if (pdfBlobUrlRef.current) {
+          URL.revokeObjectURL(pdfBlobUrlRef.current);
+          pdfBlobUrlRef.current = null;
+        }
+        const blobUrl = URL.createObjectURL(blob);
+        pdfBlobUrlRef.current = blobUrl;
+        setPdfBlobUrl(blobUrl);
+        setPdfLoading(false);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPdfError(true);
+          setPdfLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+      if (pdfBlobUrlRef.current) {
+        URL.revokeObjectURL(pdfBlobUrlRef.current);
+        pdfBlobUrlRef.current = null;
+      }
+      setPdfBlobUrl(null);
+    };
+  }, [viewerOpen, viewingPdf]);
 
   // 캘리포니아 시간대의 오늘 날짜 가져오기
   const getCurrentCaliforniaDate = () => {
@@ -312,28 +358,19 @@ export default function EndOfDay() {
     }
   };
 
-  // PDF 뷰어 열기
-  const openPdfViewer = (index: number) => {
-    if (filteredPdfs[index] && filteredPdfs[index].url && isValidFirebaseStorageUrl(filteredPdfs[index].url)) {
-      setCurrentPdfIndex(index);
+  // PDF 뷰어 열기 (클릭한 해당 PDF만 표시)
+  const openPdfViewer = (pdf: any) => {
+    if (pdf?.url && isValidFirebaseStorageUrl(pdf.url)) {
+      setViewingPdf(pdf);
       setViewerOpen(true);
     } else {
       alert('Cannot open the file.');
     }
   };
 
-  // 이전 PDF로 이동
-  const goToPreviousPdf = () => {
-    if (currentPdfIndex > 0) {
-      setCurrentPdfIndex(currentPdfIndex - 1);
-    }
-  };
-
-  // 다음 PDF로 이동
-  const goToNextPdf = () => {
-    if (currentPdfIndex < filteredPdfs.length - 1) {
-      setCurrentPdfIndex(currentPdfIndex + 1);
-    }
+  const closeViewer = () => {
+    setViewerOpen(false);
+    setViewingPdf(null);
   };
 
 
@@ -577,12 +614,7 @@ export default function EndOfDay() {
                 <div
                   key={pdf.id}
                   style={styles.pdfCard}
-                  onClick={() => {
-                    const index = filteredPdfs.findIndex(p => p.id === pdf.id);
-                    if (index !== -1) {
-                      openPdfViewer(index);
-                    }
-                  }}
+                  onClick={() => openPdfViewer(pdf)}
                   onMouseEnter={(e) => {
                     e.currentTarget.style.transform = 'translateY(-2px)';
                     e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.15)';
@@ -608,8 +640,8 @@ export default function EndOfDay() {
         </div>
       </div>
 
-      {/* PDF 뷰어 모달 */}
-      {viewerOpen && filteredPdfs[currentPdfIndex] && (
+      {/* PDF 뷰어 모달 (클릭한 해당 PDF만 표시, iframe 없음) */}
+      {viewerOpen && viewingPdf && (
         <div
           style={{
             position: 'fixed',
@@ -626,13 +658,13 @@ export default function EndOfDay() {
           }}
           onClick={(e) => {
             if (e.target === e.currentTarget) {
-              setViewerOpen(false);
+              closeViewer();
             }
           }}
         >
           {/* 닫기 버튼 */}
           <button
-            onClick={() => setViewerOpen(false)}
+            onClick={closeViewer}
             style={{
               position: 'absolute',
               top: '20px',
@@ -671,86 +703,23 @@ export default function EndOfDay() {
               zIndex: 1001
             }}
           >
-            {filteredPdfs[currentPdfIndex].filename || 'PDF Document'} ({currentPdfIndex + 1} / {filteredPdfs.length})
+            {viewingPdf.filename || 'PDF Document'}
           </div>
 
-          {/* 이전 버튼 */}
-          {currentPdfIndex > 0 && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                goToPreviousPdf();
-              }}
-              style={{
-                position: 'absolute',
-                left: '20px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                background: 'rgba(255, 255, 255, 0.9)',
-                color: '#333',
-                border: 'none',
-                borderRadius: '50%',
-                width: '50px',
-                height: '50px',
-                fontSize: '24px',
-                cursor: 'pointer',
-                zIndex: 1001,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 'bold'
-              }}
-            >
-              ‹
-            </button>
-          )}
-
-          {/* 다음 버튼 */}
-          {currentPdfIndex < filteredPdfs.length - 1 && (
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                goToNextPdf();
-              }}
-              style={{
-                position: 'absolute',
-                right: '20px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                background: 'rgba(255, 255, 255, 0.9)',
-                color: '#333',
-                border: 'none',
-                borderRadius: '50%',
-                width: '50px',
-                height: '50px',
-                fontSize: '24px',
-                cursor: 'pointer',
-                zIndex: 1001,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 'bold'
-              }}
-            >
-              ›
-            </button>
-          )}
-
-          {/* PDF iframe viewer */}
-          {filteredPdfs[currentPdfIndex]?.url ? (
-            <iframe
-              src={`${filteredPdfs[currentPdfIndex].url}#toolbar=0`}
-              style={{
-                width: '90%',
-                height: '90%',
-                border: 'none',
-                borderRadius: '8px',
-                background: 'white'
-              }}
-              title="PDF Viewer"
-              allow="fullscreen"
-            />
-          ) : (
+          {/* PDF 뷰어: blob URL로만 표시 (iframe 없음, Storage URL을 DOM에 노출하지 않음) */}
+          {pdfLoading ? (
+            <div style={{
+              width: '90%',
+              height: '90%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontSize: '18px'
+            }}>
+              Loading PDF...
+            </div>
+          ) : pdfError || !pdfBlobUrl ? (
             <div style={{
               width: '90%',
               height: '90%',
@@ -762,10 +731,26 @@ export default function EndOfDay() {
             }}>
               Cannot open the file.
             </div>
+          ) : (
+            <object
+              data={pdfBlobUrl}
+              type="application/pdf"
+              style={{
+                width: '90%',
+                height: '90%',
+                border: 'none',
+                borderRadius: '8px',
+                background: 'white'
+              }}
+              title="PDF Document"
+            >
+              <p style={{ padding: '20px', color: '#333' }}>
+                Your browser does not support viewing PDFs. Please download the file.
+              </p>
+            </object>
           )}
         </div>
       )}
     </>
   );
 }
-
