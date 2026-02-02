@@ -24,6 +24,7 @@ export default function EndOfDay() {
   // 오피스 옵션
   const officeOptions = ['Appointment Show', 'Bernard', 'California', 'Call_Center', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
+
   // 보안: Office 값 검증
   const isValidOffice = (office: string): boolean => {
     return officeOptions.includes(office);
@@ -256,8 +257,13 @@ export default function EndOfDay() {
     };
 
     if (usePath) {
+      const storagePath = normalizeStoragePath(pdf.path);
+      if (!storagePath) {
+        onError();
+        return;
+      }
       const storage = getStorage();
-      const storageRef = ref(storage, pdf.path);
+      const storageRef = ref(storage, storagePath);
       getBlob(storageRef)
         .then((blob) => setBlobFromResponse(blob))
         .catch(onError);
@@ -355,14 +361,19 @@ export default function EndOfDay() {
     });
   };
 
-  // 보안: Storage path 검증 (path만 저장할 때 사용)
+  // Storage path 정규화: 앞 슬래시 제거, 보안 검사 후 반환 (Firebase ref용)
+  const normalizeStoragePath = (path: string): string | null => {
+    if (typeof path !== 'string' || !path.trim()) return null;
+    const p = path.trim().replace(/^\/*/, ''); // 앞 슬래시 제거
+    if (!p) return null;
+    if (p.includes('..') || p.includes('//')) return null;
+    if (p.length > 1024) return null;
+    return p;
+  };
+
+  // path가 있으면 true (정규화 가능한 경로)
   const isValidStoragePath = (path: string): boolean => {
-    if (typeof path !== 'string' || !path.trim()) return false;
-    const p = path.trim();
-    if (p.includes('..') || p.includes('//')) return false;
-    if (p.startsWith('/')) return false;
-    if (p.length > 1024) return false;
-    return true;
+    return normalizeStoragePath(path) !== null;
   };
 
   // 보안: URL 검증 함수 (path 없이 url만 쓸 때)
