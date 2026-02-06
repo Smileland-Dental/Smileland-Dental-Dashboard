@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase.config";
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
@@ -13,6 +13,7 @@ export default function RestroomInspection() {
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [userOfficeBasedOptions, setUserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
   
   // 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
@@ -58,6 +59,7 @@ export default function RestroomInspection() {
     "Tulare": ["Dianne"],
     "Visalia": ["Dianne"]
   };
+
 
   // 컬럼 순서: Time, Check, Pick up Paper, Wipe Sinks and Mirrors, Wipe Toilets, Wipe Baby Table, Empty Trash, Toilet Paper, Soap, Toilet Seat Covers, Refresh Spray, Checked Time
   const COLUMN_NAMES = [
@@ -267,8 +269,6 @@ export default function RestroomInspection() {
     if (!inspectionDate || !selectedOffice || !selectedRestroom) return;
 
     try {
-      setSubmitStatus('Loading data...');
-      
       const docId = `${inspectionDate}_${selectedOffice}_${selectedRestroom}`;
       const docSnap = await getDocs(collection(db, "restroom-inspections")).then((snapshot: any) => {
         const foundDoc = snapshot.docs.find((d: any) => d.id === docId);
@@ -293,22 +293,39 @@ export default function RestroomInspection() {
         setTimeout(() => {
           setIsUpdatingFromFirebase(false);
         }, 100);
-        
-        setSubmitStatus('Data loaded successfully');
-        setTimeout(() => setSubmitStatus(''), 2000);
       } else {
         // 데이터가 없으면 초기화
         const initialData = {};
         setRestroomData(initialData);
         setLastSavedData(initialData);
-        setSubmitStatus('No data found - initialized empty form');
-        setTimeout(() => setSubmitStatus(''), 2000);
+
+                
+        // 플래그 해제
+        setTimeout(() => {
+          setIsUpdatingFromFirebase(false);
+        }, 100);
       }
       
     } catch (error: any) {
+      // 에러 발생 시에도 플래그 해제
+      setTimeout(() => {
+        setIsUpdatingFromFirebase(false);
+      }, 100);
+      
       setSubmitStatus('Error loading data: ' + error.message);
       setTimeout(() => setSubmitStatus(''), 3000);
     }
+  };
+
+  // Restroom 변경 처리 - 데이터 초기화 후 변경
+  const handleRestroomChange = (newRestroom: string) => {
+    // 초기화 중 자동 저장 방지
+    setIsUpdatingFromFirebase(true);
+    // 이전 데이터 초기화
+    setRestroomData({});
+    setLastSavedData({});
+    // 새 restroom 설정
+    setSelectedRestroom(newRestroom);
   };
 
   // 날짜, 오피스, 화장실 변경 시 데이터 로드
@@ -497,33 +514,30 @@ export default function RestroomInspection() {
 
       const blob = await pdf(pdfDoc).toBlob();
         
-      // PDF를 Firebase Storage에 저장
+      // PDF를 Firebase Storage에 저장 (endofday-pdfs에만 저장)
       setSubmitStatus('Saving...');
       setProgress(70);
       try {
         const storage = getStorage();
-        const safeFilename = sanitizeFilename(`${inspectionDate}_${selectedOffice}_Restroom_${selectedRestroom}_Inspection_Log.pdf`);
-        const filename = `6) ${inspectionDate}_${selectedOffice}_Restroom_${selectedRestroom}_Inspection_Log.pdf`;
+        // 캘리포니아 시간으로 짧은 타임스탬프 생성 (예: 230pm)
+        const now = new Date();
+        const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+        let hours = laTime.getHours();
+        const minutes = laTime.getMinutes();
+        const ampm = hours >= 12 ? 'pm' : 'am';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const timeStamp = `${hours}${minutes.toString().padStart(2, '0')}${ampm}`;
+        
+        const filename = `6) ${inspectionDate}_${selectedOffice}_Restroom_${selectedRestroom}_Inspection_Log_${timeStamp}.pdf`;
         const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`);
         
         // PDF 업로드
         await uploadBytes(storageRef, blob);
         
-        // 다운로드 URL 가져오기
-        const downloadUrl = await getDownloadURL(storageRef);
-        
-        // Firestore에 메타데이터 저장
-        await setDoc(doc(db, 'pdf-documents', `${inspectionDate}_${selectedOffice}_restroom_${selectedRestroom}_${Date.now()}`), {
-          filename,
-          office: selectedOffice,
-          date: inspectionDate,
-          type: `Restroom ${selectedRestroom} Inspection Log`,
-          url: downloadUrl,
-          storagePath: `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`,
-          createdAt: new Date(),
-        });
       } catch (storageError: any) {
-        alert(`An error occurred while submitting. Please try again.`);
+        const errorMsg = storageError?.message || 'Error';
+        alert(`An error occurred while submitting. Please try again.: ${errorMsg}`);
         throw storageError;
       }
       
@@ -733,6 +747,24 @@ export default function RestroomInspection() {
 
         setIsAuthorized(true);
         setInspectionDate(getCurrentCaliforniaTime());
+
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const officeBasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
+          
+          // officeOptions에 포함된 값들만 필터링
+          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setUserOfficeBasedOptions(validOptions);
+            // 단일 값이면 자동 선택
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+            }
+          }
+        }
       } catch (error: any) {
         alert('An error occurred while verifying authentication.');
         setIsAuthorized(false);
@@ -909,23 +941,41 @@ export default function RestroomInspection() {
               onChange={(e: any) => setInspectionDate(e.target.value)}
               style={styles.input}
             />
-            <label style={styles.label} htmlFor="office">🏢 Office:</label>
-            <select
-              id="office"
-              value={selectedOffice}
-              onChange={(e: any) => handleOfficeChange(e.target.value)}
-              style={styles.select}
-            >
-              <option value="">--Select Office--</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
+            {/* office_based 옵션이 있는 경우에만 Office 표시 */}
+            {userOfficeBasedOptions.length > 0 && (
+              <>
+                <label style={styles.label} htmlFor="office">🏢 Office:</label>
+                {userOfficeBasedOptions.length === 1 ? (
+                  <span style={{
+                    ...styles.select,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    backgroundColor: '#e9ecef',
+                    fontWeight: '600',
+                    color: '#4a6fa1'
+                  } as React.CSSProperties}>
+                    {selectedOffice}
+                  </span>
+                ) : (
+                  <select
+                    id="office"
+                    value={selectedOffice}
+                    onChange={(e: any) => setSelectedOffice(e.target.value)}
+                    style={styles.select}
+                  >
+                    <option value="">--Select Office--</option>
+                    {userOfficeBasedOptions.map(office => (
+                      <option key={office} value={office}>{office}</option>
+                    ))}
+                  </select>
+                )}
+              </>
+            )}
             <label style={styles.label} htmlFor="restroom">🚻 Restroom:</label>
             <select
               id="restroom"
               value={selectedRestroom}
-              onChange={(e: any) => setSelectedRestroom(e.target.value)}
+              onChange={(e: any) => handleRestroomChange(e.target.value)}
               style={styles.select}
             >
               <option value="" disabled hidden>Select Restroom</option>
@@ -936,7 +986,7 @@ export default function RestroomInspection() {
           </div>
 
           {/* 검사 테이블 */}
-          {selectedRestroom && (
+          {selectedOffice && selectedRestroom && (
             <div style={styles.tableContainer}>
               <table style={styles.table}>
                 <thead>
@@ -1041,7 +1091,7 @@ export default function RestroomInspection() {
           )}
 
           {/* 제출 버튼 */}
-          {selectedRestroom && (
+          {selectedOffice && selectedRestroom && (
             <div style={{textAlign:'center',marginTop:'30px'} as React.CSSProperties}>
               <button
                 type="button"
