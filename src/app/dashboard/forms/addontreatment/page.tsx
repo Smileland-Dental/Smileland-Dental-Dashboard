@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase.config";
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 // 🔒 보안: 입력 검증 함수
@@ -65,6 +65,7 @@ export default function AddOnTreatment() {
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [userOfficeBasedOptions, setUserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_basedes 옵션들
   
   // 🔒 보안: 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   // 더 안전한 UUID 생성 방식을 사용하는 것을 권장합니다 (예: crypto.randomUUID)
@@ -200,7 +201,6 @@ export default function AddOnTreatment() {
     const infoSection = React.createElement(View, { style: s.infoSection },
       React.createElement(Text, null, `Date: ${safeDutyDate}`),
       React.createElement(Text, null, `Location: ${safeSelectedOffice}`),
-      React.createElement(Text, null, `Generated: ${generatedDate}`),
     );
 
     // Table Header
@@ -614,32 +614,27 @@ export default function AddOnTreatment() {
 
       const blob = await pdf(pdfDoc).toBlob();
         
-      // PDF를 Firebase Storage에 저장
+      // PDF를 Firebase Storage에 저장 (endofday-pdfs에만 저장)
       setSubmitStatus('Saving...');
       setProgress(70);
       try {
         const storage = getStorage();
-        const safeFilename = sanitizeFilename(`${safeDutyDate}_${safeSelectedOffice}_Add On Treatment.pdf`);
-        const filename = `4) ${safeDutyDate}_${safeSelectedOffice}_Add On Treatment.pdf`;
+        // 캘리포니아 시간으로 짧은 타임스탬프 생성 (예: 230pm)
+        const now = new Date();
+        const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+        let hours = laTime.getHours();
+        const minutes = laTime.getMinutes();
+        const ampm = hours >= 12 ? 'pm' : 'am';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const timeStamp = `${hours}${minutes.toString().padStart(2, '0')}${ampm}`;
+        
+        const filename = `4) ${safeDutyDate}_${safeSelectedOffice}_Add On Treatment_${timeStamp}.pdf`;
         const storageRef = ref(storage, `endofday-pdfs/${safeSelectedOffice}/${safeDutyDate}/${filename}`);
         
         // PDF 업로드
         await uploadBytes(storageRef, blob);
         
-        // 다운로드 URL 가져오기
-        const downloadUrl = await getDownloadURL(storageRef);
-        
-        // Firestore에 메타데이터 저장
-        const safePdfDocId = `${safeDutyDate}_${safeSelectedOffice}_addon-treatment_${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '');
-        await setDoc(doc(db, 'pdf-documents', safePdfDocId), {
-          filename,
-          office: safeSelectedOffice,
-          date: safeDutyDate,
-          type: 'Add On Treatment',
-          url: downloadUrl,
-          storagePath: `endofday-pdfs/${safeSelectedOffice}/${safeDutyDate}/${filename}`,
-          createdAt: new Date(),
-        });
       } catch (storageError: any) {
         alert('An error occurred while submitting. Please try again.');
         throw storageError;
@@ -834,6 +829,24 @@ export default function AddOnTreatment() {
 
         setIsAuthorized(true);
         setDutyDate(getCurrentCaliforniaTime());
+
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const officeBasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
+          
+          // officeOptions에 포함된 값들만 필터링
+          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setUserOfficeBasedOptions(validOptions);
+            // 단일 값이면 자동 선택
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+            }
+          }
+        }
       } catch (error: any) {
         alert('An error occurred while verifying authentication.');
         setIsAuthorized(false);
@@ -1061,21 +1074,37 @@ export default function AddOnTreatment() {
                 required
               />
             </div>
-            <div style={styles.formGroup}>
-              <label style={styles.label} htmlFor="selectedOffice">Office:</label>
-              <select
-                id="selectedOffice"
-                value={selectedOffice}
-                onChange={(e) => handleOfficeChange(e.target.value)}
-                style={styles.input}
-                required
-              >
-                <option value="">--Select Office--</option>
-                {officeOptions.map(office => (
-                  <option key={office} value={office}>{office}</option>
-                ))}
-              </select>
-            </div>
+            {/* office_basedes 옵션이 있는 경우에만 Office 표시 */}
+            {userOfficeBasedOptions.length > 0 && (
+              <div style={styles.formGroup}>
+                <label style={styles.label} htmlFor="selectedOffice">Office:</label>
+                {userOfficeBasedOptions.length === 1 ? (
+                  <span style={{
+                    ...styles.input,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    backgroundColor: '#e9ecef',
+                    fontWeight: '600',
+                    color: '#2c3e50'
+                  }}>
+                    {selectedOffice}
+                  </span>
+                ) : (
+                  <select
+                    id="selectedOffice"
+                    value={selectedOffice}
+                    onChange={(e) => setSelectedOffice(e.target.value)}
+                    style={styles.input}
+                    required
+                  >
+                    <option value="">--Select Office--</option>
+                    {userOfficeBasedOptions.map(office => (
+                      <option key={office} value={office}>{office}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 환자 로그 테이블 */}
@@ -1232,4 +1261,3 @@ export default function AddOnTreatment() {
     </>
   );
 }
-
