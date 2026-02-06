@@ -476,25 +476,6 @@ export default function AddOnTreatment() {
     });
   };
 
-  // Office 변경 처리
-  const handleOfficeChange = (newOffice: string) => {
-    // 빈 값으로 선택하면 비밀번호 없이 변경 허용 (초기화)
-    if (newOffice === '') {
-      setSelectedOffice('');
-      return;
-    }
-    
-    // 선택된 office의 첫 알파벳 대문자를 비밀번호로 사용
-    const officePassword = newOffice.charAt(0).toUpperCase();
-    const password = prompt(`Enter password to change office: `);
-    if (password === null) return;
-    if (password !== officePassword) {
-      alert("Incorrect password. Office change cancelled.");
-      return;
-    }
-    setSelectedOffice(newOffice);
-  };
-
   // 제출 처리
   const handleSubmit = async () => {
     if (!selectedOffice) {
@@ -1261,3 +1242,4 @@ export default function AddOnTreatment() {
     </>
   );
 }
+
