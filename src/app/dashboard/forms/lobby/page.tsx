@@ -948,43 +948,35 @@ export default function LobbyInspectionPage() {
             onChange={(e: any) => setInspectionDate(e.target.value)}
             style={styles.input}
           />
-          <label style={styles.label} htmlFor="office">🏢 Office:</label>
-          {/* office_based 옵션이 1개면 텍스트로 표시, 여러 개면 dropdown (비밀번호 없이), 없으면 전체 옵션 + 비밀번호 */}
-          {userOfficeBasedOptions.length === 1 ? (
-            <span style={{
-              ...styles.select,
-              display: 'inline-flex',
-              alignItems: 'center',
-              backgroundColor: '#e9ecef',
-              fontWeight: '600',
-              color: '#4a6fa1'
-            }}>
-              {selectedOffice}
-            </span>
-          ) : userOfficeBasedOptions.length > 1 ? (
-            <select
-              id="office"
-              value={selectedOffice}
-              onChange={(e: any) => setSelectedOffice(e.target.value)}
-              style={styles.select}
-            >
-              <option value="">--Select Office--</option>
-              {userOfficeBasedOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
-          ) : (
-            <select
-              id="office"
-              value={selectedOffice}
-              onChange={(e: any) => handleOfficeChange(e.target.value)}
-              style={styles.select}
-            >
-              <option value="">--Select Office--</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
+          {/* officee_based 옵션이 있는 경우에만 Office 표시 */}
+          {userOfficeBasedOptions.length > 0 && (
+            <>
+              <label style={styles.label} htmlFor="office">🏢 Office:</label>
+              {userOfficeBasedOptions.length === 1 ? (
+                <span style={{
+                  ...styles.select,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  backgroundColor: '#e9ecef',
+                  fontWeight: '600',
+                  color: '#4a6fa1'
+                }}>
+                  {selectedOffice}
+                </span>
+              ) : (
+                <select
+                  id="office"
+                  value={selectedOffice}
+                  onChange={(e: any) => setSelectedOffice(e.target.value)}
+                  style={styles.select}
+                >
+                  <option value="">--Select Office--</option>
+                  {userOfficeBasedOptions.map(office => (
+                    <option key={office} value={office}>{office}</option>
+                  ))}
+                </select>
+              )}
+            </>
           )}
         </div>
 
