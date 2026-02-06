@@ -363,27 +363,6 @@ export default function LobbyInspectionPage() {
     });
   };
 
-  // Office 변경 처리
-  const handleOfficeChange = (newOffice: string) => {
-    // 빈 값으로 선택하면 비밀번호 없이 변경 허용 (초기화)
-    if (newOffice === '') {
-      setSelectedOffice('');
-      return;
-    }
-    
-    // 주의: 약한 비밀번호 검증 (보안 취약점)
-    // 선택된 office의 첫 알파벳 대문자를 비밀번호로 사용
-    // TODO: 강력한 비밀번호 정책 적용 또는 서버 사이드 인증으로 이동
-    const officePassword = newOffice.charAt(0).toUpperCase();
-    const password = prompt(`Enter password to change office: `);
-    if (password === null) return;
-    if (password !== officePassword) {
-      alert("Incorrect password. Office change cancelled.");
-      return;
-    }
-    setSelectedOffice(newOffice);
-  };
-
   // 제출 함수 (Rate limiting 적용)
   const handleSubmit = async () => {
     // Rate limiting: 최근 3초 내 호출 방지 (PDF 생성은 무거운 작업)
@@ -1112,3 +1091,4 @@ export default function LobbyInspectionPage() {
     </>
   );
 }
+
