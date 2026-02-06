@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { db, auth } from '@/lib/firebase.config';
 import { doc, setDoc, getDoc, Timestamp, onSnapshot, deleteDoc } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
@@ -64,6 +64,7 @@ export default function AttendanceTrack() {
     doctorData: []
   });
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [userOfficeBasedOptions, setUserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
 
   // 마지막 저장된 데이터 추적 (자동 저장 최적화용)
   const lastSavedDataRef = useRef<string>('');
@@ -347,33 +348,6 @@ export default function AttendanceTrack() {
   // Office 옵션
   const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
   const incidentOptions = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'];
-
-  // 오피스 선택 핸들러 (비밀번호 확인 포함)
-  const handleOfficeChange = (newOffice: string) => {
-    // 빈 값으로 선택하면 비밀번호 없이 변경 허용 (초기화)
-    if (newOffice === '') {
-      setSelectedOffice('');
-      setOfficePasswordVerified(false);
-      return;
-    }
-    
-    // 🔒 보안: 오피스 값 검증
-    if (!validateOffice(newOffice)) {
-      alert('Invalid office value');
-      return;
-    }
-    
-    // 선택된 office의 첫 알파벳 대문자를 비밀번호로 사용
-    const officePassword = newOffice.charAt(0).toUpperCase();
-    const password = prompt(`Enter password to access office ${newOffice}:`);
-    if (password === null) return; // 사용자가 취소한 경우
-    if (password !== officePassword) {
-      alert("Incorrect password. Office access denied.");
-      return;
-    }
-    setSelectedOffice(newOffice);
-    setOfficePasswordVerified(true);
-  };
 
   // Staff List를 기반으로 테이블 행 업데이트 (기존 입력 데이터 보존)
   const updateTableRowsFromStaffList = useCallback((staffListData: { staff: StaffList; doctors: DoctorMember[] }, preserveExistingData: boolean = true) => {
@@ -1043,30 +1017,24 @@ export default function AttendanceTrack() {
           throw new Error('PDF is empty');
         }
 
-        // PDF를 Firebase Storage에 저장
+        // PDF를 Firebase Storage에 저장 (endofday-pdfs에만 저장)
         try {
           const storage = getStorage();
-          const filename = `3) ${safeDate}_${safeOffice}_Attendance Tract.pdf`;
-          const safeStoragePath = `endofday-pdfs/${safeOffice}/${safeDate}/${filename}`.replace(/[^a-zA-Z0-9_/.-]/g, '');
-          const storageRef = ref(storage, safeStoragePath);
+          // 캘리포니아 시간으로 짧은 타임스탬프 생성 (예: 230pm)
+          const now = new Date();
+          const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+          let hours = laTime.getHours();
+          const minutes = laTime.getMinutes();
+          const ampm = hours >= 12 ? 'pm' : 'am';
+          hours = hours % 12;
+          hours = hours ? hours : 12;
+          const timeStamp = `${hours}${minutes.toString().padStart(2, '0')}${ampm}`;
+          
+          const filename = `3) ${safeDate}_${safeOffice}_Attendance Tract_${timeStamp}.pdf`;
+          const storageRef = ref(storage, `endofday-pdfs/${safeOffice}/${safeDate}/${filename}`);
           
           // PDF 업로드
           await uploadBytes(storageRef, pdfBuffer);
-          
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // 🔒 보안: 문서 ID 검증
-          const safePdfDocId = `${safeDate}_${safeOffice}_attendance-tract_${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '');
-          await setDoc(doc(db, 'pdf-documents', safePdfDocId), {
-            filename,
-            office: selectedOffice,
-            date: trackDate,
-            type: 'Attendance Tract',
-            url: downloadUrl,
-            storagePath: safeStoragePath,
-            createdAt: Timestamp.now(),
-          });
           
         } catch (storageError: any) {
           const errorMsg = storageError?.message || '알 수 없는 오류';
@@ -1242,6 +1210,25 @@ export default function AttendanceTrack() {
         }
 
         setIsAuthorized(true);
+
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const officeBasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
+          
+          // officeOptions에 포함된 값들만 필터링
+          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setUserOfficeBasedOptions(validOptions);
+            // 단일 값이면 자동 선택 및 비밀번호 확인 완료 처리
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+              setOfficePasswordVerified(true);
+            }
+          }
+        }
       } catch (error: any) {
         alert('An error occurred while verifying authentication.');
         setIsAuthorized(false);
@@ -1318,19 +1305,38 @@ export default function AttendanceTrack() {
         gap: '20px',
         flexWrap: 'wrap'
       }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <strong>Office:</strong>
-          <select
-            value={selectedOffice}
-            onChange={(e) => handleOfficeChange(e.target.value)}
-            style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ddd' }}
-          >
-            <option value="">Select Office</option>
-            {officeOptions.map(office => (
-              <option key={office} value={office}>{office}</option>
-            ))}
-          </select>
-        </label>
+        {/* office_based 옵션이 있는 경우에만 Office 표시 */}
+        {userOfficeBasedOptions.length > 0 && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <strong>Office:</strong>
+            {userOfficeBasedOptions.length === 1 ? (
+              <span style={{
+                padding: '5px 10px',
+                borderRadius: '4px',
+                border: '1px solid #ddd',
+                backgroundColor: '#e9ecef',
+                fontWeight: '600',
+                color: '#2D3748'
+              }}>
+                {selectedOffice}
+              </span>
+            ) : (
+              <select
+                value={selectedOffice}
+                onChange={(e) => {
+                  setSelectedOffice(e.target.value);
+                  setOfficePasswordVerified(e.target.value !== '');
+                }}
+                style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ddd' }}
+              >
+                <option value="">Select Office</option>
+                {userOfficeBasedOptions.map(office => (
+                  <option key={office} value={office}>{office}</option>
+                ))}
+              </select>
+            )}
+          </label>
+        )}
         
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <strong>Date:</strong>
@@ -1858,4 +1864,3 @@ export default function AttendanceTrack() {
     </div>
   );
 }
-
