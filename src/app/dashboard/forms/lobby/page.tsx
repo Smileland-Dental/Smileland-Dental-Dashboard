@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { db, auth } from '@/lib/firebase.config';
 import { doc, setDoc, getDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
@@ -19,6 +19,7 @@ export default function LobbyInspectionPage() {
   const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
   const [lastSavedData, setLastSavedData] = useState<any>({});
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [userOfficeBasedOptions, setUserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
 
   // Rate limiting을 위한 ref
   const lastUpdateLobbyDataCall = useRef<number>(0);
@@ -511,31 +512,25 @@ export default function LobbyInspectionPage() {
 
       const blob = await pdf(pdfDoc).toBlob();
         
-      // PDF를 Firebase Storage에 저장
+      // PDF를 Firebase Storage에 저장 (endofday-pdfs 저장)
       setSubmitStatus('Saving...');
       setProgress(70);
       try {
         const storage = getStorage();
-        const safeFilename = sanitizeFilename(`${inspectionDate}_${selectedOffice}_Lobby_Inspection_Log.pdf`);
-        const filename = `5) ${inspectionDate}_${selectedOffice}_Lobby Inspection Log.pdf`;
+        const now = new Date();
+        const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+        let hours = laTime.getHours();
+        const minutes = laTime.getMinutes();
+        const ampm = hours >= 12 ? 'pm' : 'am';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const timeStamp = `${hours}${minutes.toString().padStart(2, '0')}${ampm}`;
+        
+        const filename = `5) ${inspectionDate}_${selectedOffice}_Lobby Inspection Log_${timeStamp}.pdf`;
         const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`);
         
         // PDF 업로드
         await uploadBytes(storageRef, blob);
-        
-        // 다운로드 URL 가져오기
-        const downloadUrl = await getDownloadURL(storageRef);
-        
-        // Firestore에 메타데이터 저장
-        await setDoc(doc(db, 'pdf-documents', `${inspectionDate}_${selectedOffice}_lobby_${Date.now()}`), {
-          filename,
-          office: selectedOffice,
-          date: inspectionDate,
-          type: 'Lobby Inspection Log',
-          url: downloadUrl,
-          storagePath: `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`,
-          createdAt: new Date(),
-        });
         
       } catch (storageError: any) {
         // 저장 실패 시 사용자에게 알림
@@ -767,6 +762,24 @@ export default function LobbyInspectionPage() {
 
         setIsAuthorized(true);
         setInspectionDate(getCurrentCaliforniaTime());
+
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const officebasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
+          
+          // officeOptions에 포함된 값들만 필터링
+          const validOptions = officebasedArray.filter((g: string) => officeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setUserOfficeBasedOptions(validOptions);
+            // 단일 값이면 자동 선택
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+            }
+          }
+        }
       } catch (error: any) {
         alert('An error occurred while verifying authentication.');
         setIsAuthorized(false);
@@ -936,17 +949,43 @@ export default function LobbyInspectionPage() {
             style={styles.input}
           />
           <label style={styles.label} htmlFor="office">🏢 Office:</label>
-          <select
-            id="office"
-            value={selectedOffice}
-            onChange={(e: any) => handleOfficeChange(e.target.value)}
-            style={styles.select}
-          >
-            <option value="">--Select Office--</option>
-            {officeOptions.map(office => (
-              <option key={office} value={office}>{office}</option>
-            ))}
-          </select>
+          {/* office_based 옵션이 1개면 텍스트로 표시, 여러 개면 dropdown (비밀번호 없이), 없으면 전체 옵션 + 비밀번호 */}
+          {userOfficeBasedOptions.length === 1 ? (
+            <span style={{
+              ...styles.select,
+              display: 'inline-flex',
+              alignItems: 'center',
+              backgroundColor: '#e9ecef',
+              fontWeight: '600',
+              color: '#4a6fa1'
+            }}>
+              {selectedOffice}
+            </span>
+          ) : userOfficeBasedOptions.length > 1 ? (
+            <select
+              id="office"
+              value={selectedOffice}
+              onChange={(e: any) => setSelectedOffice(e.target.value)}
+              style={styles.select}
+            >
+              <option value="">--Select Office--</option>
+              {userOfficeBasedOptions.map(office => (
+                <option key={office} value={office}>{office}</option>
+              ))}
+            </select>
+          ) : (
+            <select
+              id="office"
+              value={selectedOffice}
+              onChange={(e: any) => handleOfficeChange(e.target.value)}
+              style={styles.select}
+            >
+              <option value="">--Select Office--</option>
+              {officeOptions.map(office => (
+                <option key={office} value={office}>{office}</option>
+              ))}
+            </select>
+          )}
         </div>
 
         {/* 테이블 - Date와 Office가 모두 선택되었을 때만 표시 */}
