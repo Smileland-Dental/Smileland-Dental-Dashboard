@@ -188,7 +188,7 @@ const CreditCardReceipts = () => {
   };
 
   // Handle file upload
-  const handleFileUpload = async (index: number, files: FileList) => 
+  const handleFileUpload = async (index: number, files: FileList) => {
     
     if (!files || files.length === 0) {
       console.log('No files to upload');
