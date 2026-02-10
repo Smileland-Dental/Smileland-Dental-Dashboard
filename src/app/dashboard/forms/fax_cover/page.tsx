@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from "react";
-import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
+import { doc, setDoc, getDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase.config";
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
@@ -107,44 +107,30 @@ export default function FaxCoverPage() {
     return '';
   };
 
-  // 날짜 형식 변환: YYYY-MM-DD -> MM/DD/YYYY
-  const convertDateToDisplay = (dateStr: string): string => {
-    if (!dateStr) return '';
-    // 이미 MM/DD/YYYY 형식인 경우
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(dateStr)) return dateStr;
-    // YYYY-MM-DD 형식을 MM/DD/YYYY로 변환
-    const parts = dateStr.split('-');
-    if (parts.length === 3) {
-      const year = parts[0];
-      const month = parts[1];
-      const day = parts[2];
-      return `${month}/${day}/${year}`;
-    }
-    return '';
-  };
-
   // --- PDF 생성 관련 상수/스타일 ---
   const pdfStyles = StyleSheet.create({
-    page: { padding: 20, fontFamily: 'Helvetica', fontSize: 9 },
-    header: { marginBottom: 10, borderBottomWidth: 1, borderColor: '#333', paddingBottom: 5, alignItems: 'center' },
-    headerTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 3 },
-    headerSubtitle: { fontSize: 10, color: '#666' },
-    infoSection: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8, fontSize: 9 },
-    infoItem: { flexDirection: 'row', gap: 4 },
+    page: { padding: 15, fontFamily: 'Helvetica', fontSize: 8 },
+    header: { marginBottom: 6, borderBottomWidth: 1, borderColor: '#333', paddingBottom: 3, alignItems: 'center' },
+    headerTitle: { fontSize: 16, fontWeight: 'bold', marginBottom: 2 },
+    headerSubtitle: { fontSize: 9, color: '#666' },
+    infoSection: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5, fontSize: 8 },
+    infoItem: { flexDirection: 'row', gap: 3 },
     infoLabel: { fontWeight: 'bold' },
-    table: { marginTop: 8, marginBottom: 8 },
+    table: { marginTop: 5, marginBottom: 5 },
     tableRow: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
-    tableCell: { padding: 4, fontSize: 8, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    tableCell: { padding: 2.5, fontSize: 7, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
     tableCellNo: { flex: 0.3 },
     tableCellName: { flex: 2 },
     tableCellQty: { flex: 0.8 },
     tableHeader: { backgroundColor: '#f0f0f0', fontWeight: 'bold' },
-    section: { marginTop: 10, marginBottom: 8 },
-    sectionTitle: { fontSize: 12, fontWeight: 'bold', marginBottom: 4, borderBottomWidth: 1, borderColor: '#ddd', paddingBottom: 2 },
-    sectionContent: { fontSize: 9, marginBottom: 3 },
-    sectionRow: { flexDirection: 'row', marginBottom: 3 },
-    sectionLabel: { fontWeight: 'bold', marginRight: 5 },
-    footer: { marginTop: 15, paddingTop: 8, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 7, color: '#666' },
+    section: { marginTop: 6, marginBottom: 4 },
+    sectionTitle: { fontSize: 10, fontWeight: 'bold', marginBottom: 2, borderBottomWidth: 1, borderColor: '#ddd', paddingBottom: 1 },
+    sectionContent: { fontSize: 8, marginBottom: 2 },
+    sectionRow: { flexDirection: 'row', marginBottom: 2 },
+    sectionLabel: { fontWeight: 'bold', marginRight: 4 },
+    sideBySideRow: { flexDirection: 'row', gap: 10, marginTop: 6, marginBottom: 4 },
+    sideBySideColumn: { flex: 1 },
+    footer: { marginTop: 8, paddingTop: 5, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 7, color: '#666' },
   });
 
   // PDF 생성 유틸 함수
@@ -188,7 +174,6 @@ export default function FaxCoverPage() {
     };
     supervisorData: {
       officeSupervisorManager: string;
-      spokeWith: string;
       checkOutBy: string;
     };
     generatedDate: string;
@@ -280,36 +265,38 @@ export default function FaxCoverPage() {
     );
     const productionTable = React.createElement(View, { style: s.table }, productionHeader, ...productionRows);
 
-    // Today Section
-    const todaySection = React.createElement(View, { style: s.section },
-      React.createElement(Text, { style: s.sectionTitle }, 'Today'),
-      React.createElement(View, { style: s.sectionContent },
-        React.createElement(View, { style: s.sectionRow },
-          React.createElement(Text, { style: s.sectionLabel }, 'Add On\'s: '),
-          React.createElement(Text, null, safeStr(todayData.addOns, 500)),
-        ),
-        React.createElement(View, { style: s.sectionRow },
-          React.createElement(Text, { style: s.sectionLabel }, 'No Shows: '),
-          React.createElement(Text, null, safeStr(todayData.noShows, 500)),
-        ),
-        React.createElement(View, { style: s.sectionRow },
-          React.createElement(Text, { style: s.sectionLabel }, 'Seen: '),
-          React.createElement(Text, null, safeStr(todayData.seen, 500)),
+        // Today + Next Day Section (side by side)
+    const todayNextDaySection = React.createElement(View, { style: s.sideBySideRow },
+      // Today (left)
+      React.createElement(View, { style: s.sideBySideColumn },
+        React.createElement(Text, { style: s.sectionTitle }, 'Today'),
+        React.createElement(View, { style: s.sectionContent },
+          React.createElement(View, { style: s.sectionRow },
+            React.createElement(Text, { style: s.sectionLabel }, 'Add On\'s: '),
+            React.createElement(Text, null, safeStr(todayData.addOns, 500)),
+          ),
+          React.createElement(View, { style: s.sectionRow },
+            React.createElement(Text, { style: s.sectionLabel }, 'No Shows: '),
+            React.createElement(Text, null, safeStr(todayData.noShows, 500)),
+          ),
+          React.createElement(View, { style: s.sectionRow },
+            React.createElement(Text, { style: s.sectionLabel }, 'Seen: '),
+            React.createElement(Text, null, safeStr(todayData.seen, 500)),
+          ),
         ),
       ),
-    );
-
-    // Next Day Section
-    const nextDaySection = React.createElement(View, { style: s.section },
-      React.createElement(Text, { style: s.sectionTitle }, 'Next Day'),
-      React.createElement(View, { style: s.sectionContent },
-        React.createElement(View, { style: s.sectionRow },
-          React.createElement(Text, { style: s.sectionLabel }, 'Opener: '),
-          React.createElement(Text, null, safeStr(nextDayData.opener, 200)),
-        ),
-        React.createElement(View, { style: s.sectionRow },
-          React.createElement(Text, { style: s.sectionLabel }, 'Closer: '),
-          React.createElement(Text, null, safeStr(nextDayData.closer, 200)),
+      // Next Day (right)
+      React.createElement(View, { style: s.sideBySideColumn },
+        React.createElement(Text, { style: s.sectionTitle }, 'Next Day'),
+        React.createElement(View, { style: s.sectionContent },
+          React.createElement(View, { style: s.sectionRow },
+            React.createElement(Text, { style: s.sectionLabel }, 'Opener: '),
+            React.createElement(Text, null, safeStr(nextDayData.opener, 200)),
+          ),
+          React.createElement(View, { style: s.sectionRow },
+            React.createElement(Text, { style: s.sectionLabel }, 'Closer: '),
+            React.createElement(Text, null, safeStr(nextDayData.closer, 200)),
+          ),
         ),
       ),
     );
@@ -338,10 +325,6 @@ export default function FaxCoverPage() {
           React.createElement(Text, null, safeStr(supervisorData.officeSupervisorManager, 200)),
         ),
         React.createElement(View, { style: s.sectionRow },
-          React.createElement(Text, { style: s.sectionLabel }, 'Spoke with: '),
-          React.createElement(Text, null, safeStr(supervisorData.spokeWith, 200)),
-        ),
-        React.createElement(View, { style: s.sectionRow },
           React.createElement(Text, { style: s.sectionLabel }, 'Check out by: '),
           React.createElement(Text, null, safeStr(supervisorData.checkOutBy, 200)),
         ),
@@ -357,17 +340,12 @@ export default function FaxCoverPage() {
         infoSection2, 
         table, 
         productionTable, 
-        todaySection, 
-        nextDaySection, 
+        todayNextDaySection, 
         callLogSection, 
         supervisorSection, 
         footer
       ),
     );
-  }
-
-  function sanitizeFilename(filename: string): string {
-    return filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 255);
   }
 
   // 초기 데이터 생성 함수 (중복 제거)
@@ -413,7 +391,6 @@ export default function FaxCoverPage() {
       },
       supervisorData: {
         officeSupervisorManager: '',
-        spokeWith: '',
         checkOutBy: ''
       }
     };
@@ -425,45 +402,12 @@ export default function FaxCoverPage() {
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
-  
-  // 🔒 보안: 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
-  // 더 안전한 UUID 생성 방식을 사용하는 것을 권장합니다 (예: crypto.randomUUID)
-  const [userSessionId] = useState(() => {
-    // crypto.randomUUID가 사용 가능한 경우 사용, 아니면 fallback
-    if (typeof window !== 'undefined' && typeof crypto !== 'undefined' && crypto.randomUUID) {
-      return crypto.randomUUID();
-    }
-    // Fallback: 더 안전한 랜덤 문자열 생성
-    const array = new Uint8Array(16);
-    if (typeof window !== 'undefined' && typeof crypto !== 'undefined' && crypto.getRandomValues) {
-      crypto.getRandomValues(array);
-    } else {
-      // 최후의 수단: Math.random 사용 (보안상 권장하지 않음)
-      for (let i = 0; i < array.length; i++) {
-        array[i] = Math.floor(Math.random() * 256);
-      }
-    }
-    return Array.from(array, byte => byte.toString(16).padStart(2, '0')).join('');
-  });
-  
+  const [userOfficeBasedOptions, setuserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
+ 
+  const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
+
   // 마지막 저장된 데이터 추적
   const [lastSavedData, setLastSavedData] = useState({});
-  
-  // 현재 캘리포니아 시간 가져오기
-  const getCurrentCaliforniaTime = () => {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/Los_Angeles',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit'
-    });
-    const parts = formatter.formatToParts(now);
-    const year = parts.find(p => p.type === 'year')?.value || '';
-    const month = parts.find(p => p.type === 'month')?.value || '';
-    const day = parts.find(p => p.type === 'day')?.value || '';
-    return `${year}-${month}-${day}`;
-  };
   
   // 날짜 상태
   const [faxDate, setFaxDate] = useState(() => {
@@ -474,20 +418,9 @@ export default function FaxCoverPage() {
 
   // 오피스 선택 상태
   const [selectedOffice, setSelectedOffice] = useState('');
-  // 비밀번호 확인 상태
-  const [officePasswordVerified, setOfficePasswordVerified] = useState(false);
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [pendingOffice, setPendingOffice] = useState('');
 
   // 오피스 옵션
   const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
-
-  // 🔒 보안: Office의 첫 번째 알파벳을 대문자로 반환하는 함수
-  // ⚠️ 주의: 클라이언트 측 비밀번호는 보안상 취약합니다. 가능하면 서버 측 인증을 사용하세요.
-  const getOfficePassword = (office: string): string => {
-    if (!office) return '';
-    return office.charAt(0).toUpperCase();
-  };
 
   // 폼 데이터 상태
   const [formData, setFormData] = useState(() => {
@@ -538,7 +471,6 @@ export default function FaxCoverPage() {
   // Office Supervisor/Manager 데이터 상태
   const [supervisorData, setSupervisorData] = useState({
     officeSupervisorManager: '',
-    spokeWith: '',
     checkOutBy: ''
   });
 
@@ -562,11 +494,11 @@ export default function FaxCoverPage() {
   // 마지막 저장된 Call Log 데이터 추적
   const [lastSavedCallLogData, setLastSavedCallLogData] = useState<{ whoCalled: string; appointmentsMade: string }>({ whoCalled: '', appointmentsMade: '' });
   // 마지막 저장된 Supervisor 데이터 추적
-  const [lastSavedSupervisorData, setLastSavedSupervisorData] = useState<{ officeSupervisorManager: string; spokeWith: string; checkOutBy: string }>({ officeSupervisorManager: '', spokeWith: '', checkOutBy: '' });
+  const [lastSavedSupervisorData, setLastSavedSupervisorData] = useState<{ officeSupervisorManager: string; checkOutBy: string }>({ officeSupervisorManager: '', checkOutBy: '' });
 
-  // 자동 저장 함수 (비밀번호 확인 후)
+  // 자동 저장 함수
   const autoSave = useCallback(async () => {
-    if (!faxDate || isUpdatingFromFirebase || !officePasswordVerified) return;
+    if (!faxDate || isUpdatingFromFirebase) return;
 
     // 🔒 보안: 오피스 선택 확인
     if (!selectedOffice) return;
@@ -631,7 +563,6 @@ export default function FaxCoverPage() {
 
       const validatedSupervisorData = {
         officeSupervisorManager: validateInput(supervisorData.officeSupervisorManager, 200),
-        spokeWith: validateInput(supervisorData.spokeWith, 200),
         checkOutBy: validateInput(supervisorData.checkOutBy, 200),
       };
 
@@ -677,7 +608,7 @@ export default function FaxCoverPage() {
     } catch (error) {
       // Auto-save error silently handled
     }
-  }, [faxDate, selectedOffice, formData, tableData, productionData, todayData, nextDayData, callLogData, supervisorData, lastSavedData, lastSavedTableData, lastSavedProductionData, lastSavedTodayData, lastSavedNextDayData, lastSavedCallLogData, lastSavedSupervisorData, isUpdatingFromFirebase, userSessionId, officePasswordVerified]);
+  }, [faxDate, selectedOffice, formData, tableData, productionData, todayData, nextDayData, callLogData, supervisorData, lastSavedData, lastSavedTableData, lastSavedProductionData, lastSavedTodayData, lastSavedNextDayData, lastSavedCallLogData, lastSavedSupervisorData, isUpdatingFromFirebase, userSessionId]);
 
   // 데이터 변경 시에만 자동 저장
   useEffect(() => {
@@ -695,8 +626,8 @@ export default function FaxCoverPage() {
 
   // 데이터 로드
   const loadData = async () => {
-    // formData.date와 selectedOffice가 모두 있고, 비밀번호가 확인되어야 로드
-    if (!formData.date || !selectedOffice || !officePasswordVerified) return;
+    // formData.date와 selectedOffice가 모두 있어야 로드
+    if (!formData.date || !selectedOffice) return;
     
     const isoDate = convertDateToISO(formData.date);
     if (!isoDate) return;
@@ -843,18 +774,15 @@ export default function FaxCoverPage() {
         if (data.supervisorData) {
           setSupervisorData({
             officeSupervisorManager: data.supervisorData.officeSupervisorManager || '',
-            spokeWith: data.supervisorData.spokeWith || '',
             checkOutBy: data.supervisorData.checkOutBy || ''
           });
           setLastSavedSupervisorData({
             officeSupervisorManager: data.supervisorData.officeSupervisorManager || '',
-            spokeWith: data.supervisorData.spokeWith || '',
             checkOutBy: data.supervisorData.checkOutBy || ''
           });
         } else {
           const initialSupervisorData = {
             officeSupervisorManager: '',
-            spokeWith: '',
             checkOutBy: ''
           };
           setSupervisorData(initialSupervisorData);
@@ -894,20 +822,18 @@ export default function FaxCoverPage() {
         setLastSavedCallLogData(initial.callLogData);
         setSupervisorData(initial.supervisorData);
         setLastSavedSupervisorData(initial.supervisorData);
-        setSubmitStatus('No data found - initialized empty form');
-        setTimeout(() => setSubmitStatus(''), 2000);
+        setSubmitStatus('');
       }
       
     } catch (error) {
       // 🔒 보안: 에러 메시지에 민감한 정보 노출 방지
-      setSubmitStatus('Error loading data. Please try again.');
-      setTimeout(() => setSubmitStatus(''), 3000);
+      setSubmitStatus('');
     }
   };
 
-  // formData.date 또는 selectedOffice 변경 시 데이터 로드 (비밀번호 확인 후)
+  // formData.date 또는 selectedOffice 변경 시 데이터 로드
   useEffect(() => {
-    if (formData.date && selectedOffice && officePasswordVerified) {
+    if (formData.date && selectedOffice) {
       const isoDate = convertDateToISO(formData.date);
       if (isoDate) {
         setFaxDate(isoDate);
@@ -917,11 +843,11 @@ export default function FaxCoverPage() {
         }, 100);
       }
     }
-  }, [formData.date, selectedOffice, officePasswordVerified]);
+  }, [formData.date, selectedOffice]);
 
-  // 실시간 데이터 동기화 (비밀번호 확인 후)
+  // 실시간 데이터 동기화
   useEffect(() => {
-    if (!formData.date || !selectedOffice || !officePasswordVerified) return;
+    if (!formData.date || !selectedOffice) return;
 
     const isoDate = convertDateToISO(formData.date) || faxDate;
     if (!isoDate) return;
@@ -1015,12 +941,10 @@ export default function FaxCoverPage() {
         if (data.supervisorData) {
           setSupervisorData({
             officeSupervisorManager: data.supervisorData.officeSupervisorManager || '',
-            spokeWith: data.supervisorData.spokeWith || '',
             checkOutBy: data.supervisorData.checkOutBy || ''
           });
           setLastSavedSupervisorData({
             officeSupervisorManager: data.supervisorData.officeSupervisorManager || '',
-            spokeWith: data.supervisorData.spokeWith || '',
             checkOutBy: data.supervisorData.checkOutBy || ''
           });
         }
@@ -1118,6 +1042,24 @@ export default function FaxCoverPage() {
         }
 
         setIsAuthorized(true);
+
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const officeBasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
+          
+          // officeOptions에 포함된 값들만 필터링
+          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setuserOfficeBasedOptions(validOptions);
+            // 단일 값이면 자동 선택
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+            }
+          }
+        }
       } catch (error: any) {
         alert('An error occurred while verifying authentication.');
         setIsAuthorized(false);
@@ -1229,7 +1171,6 @@ export default function FaxCoverPage() {
 
       const validatedSupervisorData = {
         officeSupervisorManager: validateInput(supervisorData.officeSupervisorManager, 200),
-        spokeWith: validateInput(supervisorData.spokeWith, 200),
         checkOutBy: validateInput(supervisorData.checkOutBy, 200),
       };
 
@@ -1259,7 +1200,7 @@ export default function FaxCoverPage() {
 
       try {
         // 클라이언트에서 직접 PDF 생성
-        const pdfBuffer = await pdf(createFaxCoverPDFDocument({
+        const blob = await pdf(createFaxCoverPDFDocument({
           safeFaxDate,
           safeSelectedOffice: safeOffice,
           formData: validatedFormData,
@@ -1272,37 +1213,28 @@ export default function FaxCoverPage() {
           generatedDate,
         })).toBlob();
 
-        // PDF blob 받기
         setSubmitStatus('Processing...');
         setProgress(60);
-        const blob = pdfBuffer;
-        
+
         // PDF를 Firebase Storage에 저장
         setSubmitStatus('Saving...');
         setProgress(70);
         try {
           const storage = getStorage();
-          const filename = `1) ${safeIsoDate}_${safeOffice || 'Unknown'}_End of Day Fax Cover.pdf`;
+          const tsNow = new Date();
+          const tsLaTime = new Date(tsNow.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+          let tsHours = tsLaTime.getHours();
+          const tsMinutes = tsLaTime.getMinutes();
+          const tsAmpm = tsHours >= 12 ? 'pm' : 'am';
+          tsHours = tsHours % 12;
+          tsHours = tsHours ? tsHours : 12;
+          const timeStamp = `${tsHours}${tsMinutes.toString().padStart(2, '0')}${tsAmpm}`;
+          
+          const filename = `1) ${safeIsoDate}_${safeOffice || 'Unknown'}_End of Day Fax Cover_${timeStamp}.pdf`;
           const storageRef = ref(storage, `endofday-pdfs/${safeOffice}/${safeIsoDate}/${filename}`);
           
           // PDF 업로드
           await uploadBytes(storageRef, blob);
-          
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // Firestore에 메타데이터 저장
-          // 🔒 보안: 문서 ID 검증
-          const safePdfDocId = `${safeIsoDate}_${safeOffice}_fax-cover_${Date.now()}`.replace(/[^a-zA-Z0-9_-]/g, '');
-          await setDoc(doc(db, 'pdf-documents', safePdfDocId), {
-            filename,
-            office: safeOffice,
-            date: safeIsoDate,
-            type: 'End of Day Fax Cover',
-            url: downloadUrl,
-            storagePath: `endofday-pdfs/${selectedOffice}/${isoDate}/${filename}`,
-            createdAt: new Date(),
-          });
           
           setSubmitStatus('✅ Complete!');
         } catch (storageError: any) {
@@ -1321,19 +1253,7 @@ export default function FaxCoverPage() {
         setIsUpdatingFromFirebase(true);
         
         try {
-          // 문서 삭제
           await deleteDoc(doc(db, "fax-cover", docId));
-          
-          // 삭제 확인을 위해 짧은 지연
-          await new Promise(resolve => setTimeout(resolve, 500));
-          
-          // 문서가 완전히 삭제되었는지 확인
-          const docRef = doc(db, "fax-cover", docId);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            // 문서가 여전히 존재하면 다시 삭제 시도
-            await deleteDoc(docRef);
-          }
         } catch (deleteError) {
           // 삭제 실패해도 계속 진행
         }
@@ -1644,11 +1564,6 @@ export default function FaxCoverPage() {
               margin: "0 0 20px 0",
               lineHeight: "1.4"
             }}>
-              {submitStatus === 'Saving...'}
-              {submitStatus === 'Submitting...'}
-              {submitStatus === 'Submitting...'}
-              {submitStatus === 'Cleaning up...'}
-              {submitStatus === 'Complete!'}
               {!submitStatus && 'Processing... Please wait'}
             </p>
             {/* 진행률 바 */}
@@ -1695,151 +1610,6 @@ export default function FaxCoverPage() {
         </div>
       )}
 
-      {/* 비밀번호 확인 모달 */}
-      {showPasswordModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '30px',
-            borderRadius: '8px',
-            maxWidth: '400px',
-            width: '90%',
-            boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
-          }}>
-            <h3 style={{
-              marginTop: 0,
-              marginBottom: '20px',
-              color: '#2c3e50',
-              fontSize: '18px'
-            }}>
-              Office Password Required
-            </h3>
-            <p style={{
-              marginBottom: '20px',
-              color: '#666',
-              fontSize: '14px'
-            }}>
-              Enter the password for <strong>{pendingOffice}</strong>
-            </p>
-            <input
-              type="password"
-              id="officePasswordInput"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  const input = e.target as HTMLInputElement;
-                  const password = input.value;
-                  const expectedPassword = getOfficePassword(pendingOffice);
-                  
-                  if (password === expectedPassword) {
-                    setSelectedOffice(pendingOffice);
-                    setOfficePasswordVerified(true);
-                    setShowPasswordModal(false);
-                    setPendingOffice('');
-                    
-                    // Office 선택 후 데이터 로드
-                    if (formData.date) {
-                      const isoDate = convertDateToISO(formData.date);
-                      if (isoDate) {
-                        setFaxDate(isoDate);
-                      }
-                    }
-                  } else {
-                    alert("Incorrect password. Access denied.");
-                    input.value = '';
-                  }
-                }
-              }}
-              style={{
-                width: '100%',
-                padding: '10px',
-                fontSize: '16px',
-                border: '1px solid #e9ecef',
-                borderRadius: '4px',
-                marginBottom: '20px',
-                boxSizing: 'border-box'
-              }}
-              placeholder="Enter password"
-            />
-            <div style={{
-              display: 'flex',
-              gap: '10px',
-              justifyContent: 'flex-end'
-            }}>
-              <button
-                onClick={() => {
-                  setShowPasswordModal(false);
-                  setPendingOffice('');
-                  // 선택을 취소하고 드롭다운을 빈 값으로 복원
-                  const selectElement = document.getElementById('selectedOffice') as HTMLSelectElement;
-                  if (selectElement) {
-                    selectElement.value = selectedOffice || '';
-                  }
-                }}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#95a5a6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '14px'
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  const input = document.getElementById('officePasswordInput') as HTMLInputElement;
-                  const password = input?.value || '';
-                  const expectedPassword = getOfficePassword(pendingOffice);
-                  
-                  if (password === expectedPassword) {
-                    setSelectedOffice(pendingOffice);
-                    setOfficePasswordVerified(true);
-                    setShowPasswordModal(false);
-                    setPendingOffice('');
-                    
-                    // Office 선택 후 데이터 로드
-                    if (formData.date) {
-                      const isoDate = convertDateToISO(formData.date);
-                      if (isoDate) {
-                        setFaxDate(isoDate);
-                      }
-                    }
-                  } else {
-                    alert("Incorrect password. Access denied.");
-                    if (input) input.value = '';
-                  }
-                }}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#3498db',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '14px'
-                }}
-              >
-                Verify
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       <div style={styles.container}>
         {/* 자동 저장 상태 표시 */}
         {autoSaveStatus && (
@@ -1876,41 +1646,40 @@ export default function FaxCoverPage() {
               style={styles.input}
             />
           </div>
-          <div style={{ ...styles.formGroup, flex: '1', minWidth: '200px' }}>
-            <label style={styles.label} htmlFor="selectedOffice">Office:</label>
-            <select
-              id="selectedOffice"
-              value={selectedOffice}
-              onChange={(e) => {
-                const newOffice = e.target.value;
-                if (!newOffice) {
-                  setSelectedOffice('');
-                  setOfficePasswordVerified(false);
-                  return;
-                }
-                // Office 변경 시 비밀번호 입력 모달 표시
-                setPendingOffice(newOffice);
-                setShowPasswordModal(true);
-              }}
-              style={styles.input}
-            >
-              <option value="">-- Select Office --</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
-          </div>
+          {/* office_based 옵션이 있는 경우에만 Office 표시 */}
+          {userOfficeBasedOptions.length > 0 && (
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '200px' }}>
+              <label style={styles.label} htmlFor="selectedOffice">Office:</label>
+              {userOfficeBasedOptions.length === 1 ? (
+                <div style={{
+                  ...styles.input,
+                  display: 'flex',
+                  alignItems: 'center',
+                  backgroundColor: '#e9ecef',
+                  fontWeight: '600',
+                  color: '#2c3e50'
+                }}>
+                  {selectedOffice}
+                </div>
+              ) : (
+                <select
+                  id="selectedOffice"
+                  value={selectedOffice}
+                  onChange={(e) => setSelectedOffice(e.target.value)}
+                  style={styles.input}
+                >
+                  <option value="">-- Select Office --</option>
+                  {userOfficeBasedOptions.map(office => (
+                    <option key={office} value={office}>{office}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
         </div>
 
-        {/* 비밀번호 확인 메시지 */}
-        {selectedOffice && !officePasswordVerified && (
-          <div style={{ padding: '20px', background: '#ffebee', color: '#c62828', marginBottom: '20px', borderRadius: '4px', textAlign: 'center' }}>
-            Please enter the correct password to access office {selectedOffice} data.
-          </div>
-        )}
-
         {/* Time Check In, Name, Time Check Out, Name - 한 줄에 */}
-        {officePasswordVerified && (
+        {selectedOffice && (
         <form style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
             <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
@@ -2021,7 +1790,7 @@ export default function FaxCoverPage() {
         )}
 
         {/* 테이블 */}
-        {officePasswordVerified && (
+        {selectedOffice && (
         <table style={styles.table}>
           <thead>
             <tr>
@@ -2116,7 +1885,7 @@ export default function FaxCoverPage() {
         )}
 
         {/* Production 섹션 */}
-        {officePasswordVerified && (
+        {selectedOffice && (
         <div style={{ marginTop: '40px', paddingTop: '20px', borderTop: '2px solid #e9ecef' }}>
           <h3 style={{
             color: '#2c3e50',
@@ -2204,7 +1973,7 @@ export default function FaxCoverPage() {
         )}
 
         {/* Today 섹션 */}
-        {officePasswordVerified && (
+        {selectedOffice && (
         <div style={{ marginTop: '40px', paddingTop: '20px', borderTop: '2px solid #e9ecef' }}>
           <h3 style={{
             color: '#2c3e50',
@@ -2274,7 +2043,7 @@ export default function FaxCoverPage() {
         )}
 
         {/* Next Day 섹션 */}
-        {officePasswordVerified && (
+        {selectedOffice && (
         <div style={{ marginTop: '40px', paddingTop: '20px', borderTop: '2px solid #e9ecef' }}>
           <h3 style={{
             color: '#2c3e50',
@@ -2325,7 +2094,7 @@ export default function FaxCoverPage() {
         )}
 
         {/* Call Log 섹션 */}
-        {officePasswordVerified && (
+        {selectedOffice && (
         <div style={{ marginTop: '40px', paddingTop: '20px', borderTop: '2px solid #e9ecef' }}>
           <h3 style={{
             color: '#2c3e50',
@@ -2376,7 +2145,7 @@ export default function FaxCoverPage() {
         )}
 
         {/* Office Supervisor/Manager 섹션 */}
-        {officePasswordVerified && (
+        {selectedOffice && (
         <div style={{ marginTop: '40px', paddingTop: '20px', borderTop: '2px solid #e9ecef' }}>
           <h3 style={{
             color: '#2c3e50',
@@ -2384,7 +2153,7 @@ export default function FaxCoverPage() {
             fontWeight: 'bold',
             marginBottom: '20px'
           }}>
-            Office Supervisor/Manager
+            (For Corporate Use Only)
           </h3>
 
           {/* Office Supervisor/Manager 이름 입력 */}
@@ -2402,24 +2171,6 @@ export default function FaxCoverPage() {
                 setSupervisorData(prev => ({ ...prev, officeSupervisorManager: validated }));
               }}
               maxLength={200}
-              style={styles.input}
-            />
-          </div>
-
-          {/* Spoke with 입력 */}
-          <div style={styles.formGroup}>
-            <label htmlFor="spokeWith" style={styles.label}>
-              Spoke with
-            </label>
-            <input
-              type="text"
-              id="spokeWith"
-              name="spokeWith"
-              value={supervisorData.spokeWith}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 200);
-                setSupervisorData(prev => ({ ...prev, spokeWith: validated }));
-              }}
               style={styles.input}
             />
           </div>
@@ -2446,7 +2197,7 @@ export default function FaxCoverPage() {
         )}
 
         {/* 제출 버튼 */}
-        {officePasswordVerified && (
+        {selectedOffice && (
         <div style={{ textAlign: 'center', marginTop: '20px' }}>
           <button
             onClick={handleSubmit}
@@ -2457,7 +2208,7 @@ export default function FaxCoverPage() {
               cursor: loading ? 'not-allowed' : 'pointer'
             }}
           >
-            {loading ? 'Submitting...' : 'Submit'}
+            {loading ? 'Submitting...' : 'Button for Corporate'}
           </button>
         </div>
         )}
