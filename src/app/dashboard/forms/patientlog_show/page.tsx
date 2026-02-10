@@ -1,11 +1,10 @@
 'use client'
 
 import React, { useState, useEffect, useRef } from "react";
-import { doc, setDoc, collection, getDocs, getDoc, updateDoc, deleteDoc, query, where } from "firebase/firestore";
+import { doc, collection, getDocs, getDoc, updateDoc, deleteDoc, query, where } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase.config";
 import { onAuthStateChanged } from 'firebase/auth';
-// Firebase Storage
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 // Firebase 데이터 sanitize 함수 (강화된 버전)
@@ -105,7 +104,7 @@ export default function ShowCheckSystem() {
       
       // Office 값 whitelist 검증
       if (field === 'selectedOffice' && value && value !== 'All') {
-        const validOffices = ['Bernard', 'Call Center','California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+        const validOffices = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
         if (!validOffices.includes(value)) {
           return '';
         }
@@ -139,7 +138,8 @@ export default function ShowCheckSystem() {
   const loadAppointmentsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Office 옵션
-  const officeOptions = ['All','Bernard','California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+
+  const officeOptions = ['All', 'Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
   // --- PDF 생성 관련 상수/스타일 ---
   const pdfStyles = StyleSheet.create({
@@ -163,22 +163,6 @@ export default function ShowCheckSystem() {
   function safeStr(v: unknown, max: number): string {
     if (v == null) return '';
     return String(v).trim().slice(0, max).replace(/[<>]/g, '');
-  }
-
-  // 시간을 12시간 형식으로 변환하는 함수
-  function convertTo12Hour(timeStr: string): string {
-    if (!timeStr || timeStr === '-') return '-';
-    try {
-      const [hours, minutes] = timeStr.split(':');
-      const hour = parseInt(hours);
-      const min = minutes || '00';
-      if (hour === 0) return `12:${min} AM`;
-      if (hour < 12) return `${hour}:${min} AM`;
-      if (hour === 12) return `12:${min} PM`;
-      return `${hour - 12}:${min} PM`;
-    } catch {
-      return timeStr;
-    }
   }
 
   function createShowCheckPDFDocument(props: {
@@ -232,8 +216,6 @@ export default function ShowCheckSystem() {
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Name')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Office')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Appt. Date')),
-      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Time')),
-      React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Visit Type')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Status')),
     );
 
@@ -242,8 +224,6 @@ export default function ShowCheckSystem() {
       const safeName = safeStr(apt.name, 100);
       const safeOffice = safeStr(apt.office, 50);
       const safeApptDate = safeStr(apt.appt_date, 20);
-      const safeTime = safeStr(apt.time, 20);
-      const safeVisitType = safeStr(apt.visit_type, 50);
       const safeShowStatus = apt.showStatus === 'show' ? 'Show' : 'No Show';
 
       return React.createElement(View, { key: index, style: s.tableRow },
@@ -251,8 +231,6 @@ export default function ShowCheckSystem() {
         React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeName || '-')),
         React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeOffice || '-')),
         React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeApptDate || '-')),
-        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, convertTo12Hour(safeTime))),
-        React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeVisitType || '-')),
         React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeShowStatus)),
       );
     });
@@ -365,119 +343,85 @@ export default function ShowCheckSystem() {
     };
   }, [pdfLoading]);
 
-  // Firebase에서 모든 환자 로그 불러오기 (Rate limiting 적용)
+  // show-noshow 컬렉션에서 제출된 Patient Log 불러오기 (날짜별 문서)
   const loadAppointments = async () => {
     try {
-      // Rate limiting: 최근 1.5초 내 호출 방지
-      // (필터 변경 후 빠르게 새로고침할 수 있도록 허용하되, 과도한 호출 방지)
       const now = Date.now();
-      if (now - lastLoadAppointmentsCall.current < 1500) {
-        return;
-      }
+      if (now - lastLoadAppointmentsCall.current < 1500) return;
       lastLoadAppointmentsCall.current = now;
 
-      // 인증 상태 확인
       const currentUser = auth.currentUser;
-      
-      if (!currentUser) {
-        // Firebase Security Rules가 이미 접근을 제어하므로 조용히 실패
-        return;
-      }
-
-      // 이미 로딩 중이면 중복 호출 방지
-      if (loading) {
-        return;
-      }
+      if (!currentUser) return;
+      if (loading) return;
 
       setLoading(true);
-      const querySnapshot = await getDocs(collection(db, "patient-logs"));
-      // pdf-documents 제출된 목록(누가 제출했든 전체) — 이 범위에 들어가는 patient-logs 표시
-      const pdfQuerySnapshot = await getDocs(collection(db, "pdf-documents"));
-      const submittedPatientLogs: Array<{date: string, name: string, office: string}> = [];
-      const submittedShowChecks: Array<{startDate: string, endDate: string, selectedOffice: string}> = [];
-
-      pdfQuerySnapshot.forEach((pdfDoc) => {
-        const pdfData = pdfDoc.data();
-        if (pdfData.type === 'Patient Log' && pdfData.date && pdfData.name && pdfData.office) {
-          submittedPatientLogs.push({
-            date: pdfData.date,
-            name: pdfData.name,
-            office: pdfData.office
-          });
-        } else if (pdfData.type === 'Show Check' && pdfData.startDate && pdfData.endDate) {
-          submittedShowChecks.push({
-            startDate: pdfData.startDate,
-            endDate: pdfData.endDate,
-            selectedOffice: pdfData.selectedOffice || 'All'
-          });
-        }
-      });
+      const showSnapshot = await getDocs(collection(db, "show-noshow"));
 
       const allAppointments: any[] = [];
+      const apptDatesSet = new Set<string>();
 
-      // pdf-documents 제출된 patient-logs 정보만 표시. 페이지 보는 사람은 제출 여부와 관계없이 확인만 함
-      querySnapshot.forEach((doc) => {
-        const data = doc.data();
-        let isSubmitted = false;
+      showSnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        const appt_date = typeof data.appt_date === 'string' ? data.appt_date.trim() : '';
+        if (!appt_date) return;
 
-        if (data.patientRows && submittedPatientLogs.length > 0) {
-          const submittedOffices = new Set(submittedPatientLogs.map(pl => pl.office));
-          const hasMatchingOffice = (data.workOffice && submittedOffices.has(data.workOffice)) ||
-            data.patientRows.some((row: any) => row.office && submittedOffices.has(row.office));
-          if (hasMatchingOffice) isSubmitted = true;
-        }
+        apptDatesSet.add(appt_date);
 
-        if (!isSubmitted && data.patientRows && submittedShowChecks.length > 0) {
-          const hasMatchingAppointment = data.patientRows.some((row: any) => {
-            if (!row.appt_date) return false;
-            return submittedShowChecks.some((showCheck) => {
-              const apptDate = new Date(row.appt_date);
-              const startDate = new Date(showCheck.startDate);
-              const endDate = new Date(showCheck.endDate);
-              const inDateRange = apptDate >= startDate && apptDate <= endDate;
-              const officeMatch = showCheck.selectedOffice === 'All' || showCheck.selectedOffice === row.office;
-              return inDateRange && officeMatch;
+        // 새 구조: document에 patients만 있음
+        if (Array.isArray(data.patients)) {
+          data.patients.forEach((p: any, index: number) => {
+            const name = typeof p.name === 'string' ? p.name.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '';
+            const office = typeof p.office === 'string' ? p.office.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '';
+            const showStatus = (p.showStatus === 'show' || p.showStatus === 'no-show' || p.showStatus === 'pending') ? p.showStatus : 'pending';
+            allAppointments.push({
+              name,
+              office,
+              appt_date,
+              showStatus,
+              docId: sanitizeFirebaseDocIdClient(docSnap.id),
+              rowIndex: index,
+              dutyDate: '',
+              userName: '',
+              workOffice: '',
             });
           });
-          if (hasMatchingAppointment) isSubmitted = true;
+          return;
         }
-
-        if (!isSubmitted) return;
-
-        if (data.patientRows) {
-          data.patientRows.forEach((row: any, index: number) => {
-            if (row.appt_date && row.name) {
-              const sanitizedRow = {
-                name: typeof row.name === 'string' ? row.name.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '',
-                office: typeof row.office === 'string' ? row.office.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '',
-                appt_date: typeof row.appt_date === 'string' ? row.appt_date.slice(0, 20) : '',
-                visit_type: typeof row.visit_type === 'string' ? row.visit_type.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '',
-                time: typeof row.time === 'string' ? row.time.slice(0, 20) : '',
-                remark: typeof row.remark === 'string' ? row.remark.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 200) : '',
-                other_duty: typeof row.other_duty === 'string' ? row.other_duty.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 200) : '',
-                call_in: Boolean(row.call_in),
-                call_out: Boolean(row.call_out),
-                showStatus: (row.showStatus === 'show' || row.showStatus === 'no-show' || row.showStatus === 'pending') ? row.showStatus : 'pending'
-              };
-              allAppointments.push({
-                ...sanitizedRow,
-                docId: sanitizeFirebaseDocIdClient(doc.id),
-                rowIndex: index,
-                dutyDate: typeof data.dutyDate === 'string' ? data.dutyDate.slice(0, 50) : '',
-                userName: typeof data.userName === 'string' ? data.userName.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '',
-                workOffice: typeof data.workOffice === 'string' ? data.workOffice.slice(0, 50) : '',
-                workHoursFrom: typeof data.workHoursFrom === 'string' ? data.workHoursFrom.slice(0, 20) : '',
-                workHoursTo: typeof data.workHoursTo === 'string' ? data.workHoursTo.slice(0, 20) : ''
-              });
-            }
+        // 구 구조: submissions 아래 patients
+        const submissions = Array.isArray(data.submissions) ? data.submissions : [];
+        submissions.forEach((sub: any, subIdx: number) => {
+          const patients = Array.isArray(sub.patients) ? sub.patients : [];
+          patients.forEach((p: any, index: number) => {
+            const name = typeof p.name === 'string' ? p.name.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '';
+            const office = typeof p.office === 'string' ? p.office.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '';
+            const showStatus = (p.showStatus === 'show' || p.showStatus === 'no-show' || p.showStatus === 'pending') ? p.showStatus : 'pending';
+            allAppointments.push({
+              name,
+              office,
+              appt_date,
+              showStatus,
+              docId: sanitizeFirebaseDocIdClient(docSnap.id),
+              submissionIndex: subIdx,
+              rowIndex: index,
+              dutyDate: typeof sub.duty_date === 'string' ? sub.duty_date.slice(0, 50) : '',
+              userName: typeof sub.name === 'string' ? sub.name.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '',
+              workOffice: typeof sub.office === 'string' ? sub.office.slice(0, 50) : '',
+            });
           });
-        }
+        });
       });
-      
+
       setAppointments(allAppointments);
       appointmentsRef.current = allAppointments;
+
+      // 필터 날짜: document에 있는 appt_date 기준으로 기본값 설정
+      if (apptDatesSet.size > 0) {
+        const sorted = Array.from(apptDatesSet).sort();
+        setStartDate(sorted[0]);
+        setEndDate(sorted[sorted.length - 1]);
+      }
     } catch (error) {
-      // 로그 제거 (보안 강화)
+      // 에러 시 조용히 처리
     } finally {
       setLoading(false);
     }
@@ -511,7 +455,7 @@ export default function ShowCheckSystem() {
       // Rate limiting: 최근 800ms 내 동일한 appointment에 대한 호출 방지
       // (같은 appointment를 실수로 빠르게 여러 번 클릭하는 것 방지)
       const now = Date.now();
-      const appointmentKey = `${appointment.docId}-${appointment.rowIndex}`;
+      const appointmentKey = `${appointment.docId}-${appointment.submissionIndex ?? 0}-${appointment.rowIndex}`;
       const lastCallKey = `lastUpdate_${appointmentKey}`;
       
       // 로컬 스토리지에 마지막 호출 시간 저장 (브라우저 재시작 시 초기화됨)
@@ -543,42 +487,48 @@ export default function ShowCheckSystem() {
         return;
       }
 
-      // 해당 document를 다시 가져와서 patientRows 업데이트
+      // show-noshow 문서: 새 구조는 patients[rowIndex], 구 구조는 submissions[submissionIndex].patients[rowIndex]
       const safeDocId = sanitizeFirebaseDocIdClient(appointment.docId);
-      const docRef = doc(db, "patient-logs", safeDocId);
-      const querySnapshot = await getDocs(collection(db, "patient-logs"));
-      let currentData: any = null;
-      
-      querySnapshot.forEach((document) => {
-        if (document.id === appointment.docId) {
-          currentData = document.data();
+      const docRef = doc(db, "show-noshow", safeDocId);
+      const docSnap = await getDoc(docRef);
+      const currentData = docSnap.exists() ? docSnap.data() : null;
+      const subIdx = appointment.submissionIndex ?? 0;
+
+      if (currentData && Array.isArray(currentData.patients) && currentData.submissions === undefined) {
+        // 새 구조: document에 patients만 있음
+        const patients = [...currentData.patients];
+        if (patients[appointment.rowIndex]) {
+          patients[appointment.rowIndex] = { ...patients[appointment.rowIndex], showStatus: newStatus };
+          await updateDoc(docRef, sanitizeFirebaseDataClient({
+            patients,
+            lastUpdated: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }));
         }
-      });
-      
-      // 모든 인증된 사용자가 제출된 데이터의 상태를 업데이트할 수 있도록 userId 체크 제거
-      // (제출된 데이터는 공개적으로 확인 및 업데이트 가능해야 함)
-      
-      if (currentData && currentData.patientRows) {
-        // 해당 row의 showStatus 업데이트
-        const updatedPatientRows = currentData.patientRows.map((row: any, index: number) => {
-          if (index === appointment.rowIndex) {
-            return { ...row, showStatus: newStatus };
-          }
-          return row;
-        });
-        
-        // Firebase 업데이트
-        const safeUpdateData = sanitizeFirebaseDataClient({
-          patientRows: updatedPatientRows,
-          lastUpdated: new Date().toISOString(),
-          updatedAt: new Date().toISOString()
-        });
-        await updateDoc(docRef, safeUpdateData);
-        
+      } else if (currentData && Array.isArray(currentData.submissions) && currentData.submissions[subIdx]) {
+        // 구 구조: submissions
+        const submissions = [...currentData.submissions];
+        const patients = [...(submissions[subIdx].patients || [])];
+        if (patients[appointment.rowIndex]) {
+          patients[appointment.rowIndex] = { ...patients[appointment.rowIndex], showStatus: newStatus };
+          submissions[subIdx] = { ...submissions[subIdx], patients };
+          await updateDoc(docRef, sanitizeFirebaseDataClient({
+            submissions,
+            lastUpdated: new Date().toISOString(),
+            updatedAt: new Date().toISOString()
+          }));
+        }
+      }
+
+      if (currentData && (
+        (Array.isArray(currentData.patients) && currentData.submissions === undefined) ||
+        (Array.isArray(currentData.submissions) && currentData.submissions[subIdx])
+      )) {
         // 로컬 상태 업데이트
         setAppointments(prev => {
-          const updated = prev.map((apt: any) => 
-            apt.docId === appointment.docId && apt.rowIndex === appointment.rowIndex
+          const updated = prev.map((apt: any) =>
+            apt.docId === appointment.docId && apt.rowIndex === appointment.rowIndex &&
+            (apt.submissionIndex == null ? appointment.submissionIndex == null : apt.submissionIndex === subIdx)
               ? { ...apt, showStatus: newStatus }
               : apt
           );
@@ -649,6 +599,11 @@ export default function ShowCheckSystem() {
     
     if (hasPendingStatus) {
       alert('⚠️ Please select Show or No Show for all appointments before submitting.');
+      return;
+    }
+
+    if (!name || !name.trim()) {
+      alert('⚠️ Please enter your Name.');
       return;
     }
 
@@ -763,14 +718,22 @@ export default function ShowCheckSystem() {
           ? startDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50)
           : `${startDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50)}_to_${endDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50)}`;
         const safeOfficeName = (selectedOffice || 'All_Offices').replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
-        const filename = `${safeDateRange}_${safeOfficeName}_Show Check.pdf`.slice(0, 255);
+        const tsNow = new Date();
+        const tsLaTime = new Date(tsNow.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+        let tsHours = tsLaTime.getHours();
+        const tsMinutes = tsLaTime.getMinutes();
+        const tsAmpm = tsHours >= 12 ? 'pm' : 'am';
+        tsHours = tsHours % 12;
+        tsHours = tsHours ? tsHours : 12;
+        const timeStamp = `${tsHours}${tsMinutes.toString().padStart(2, '0')}${tsAmpm}`;
+        const filename = `${safeDateRange}_${safeOfficeName}_Show Check_${timeStamp}.pdf`.slice(0, 255);
         // 제출 날짜(현재 날짜)를 폴더 이름으로 사용
         const submissionDate = new Date().toISOString().split('T')[0]; // YYYY-MM-DD 형식
         const date = submissionDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50); // 저장 경로에 사용할 날짜 (제출 날짜 사용)
         const office = 'Appointment Show'; // 저장 경로의 office는 "Appointment Show"로 고정
         
         // Firebase에 자동 저장
-        setSubmitStatus('Saving to archive...');
+        setSubmitStatus('Saving...');
         setProgress(70);
         
         try {
@@ -778,32 +741,8 @@ export default function ShowCheckSystem() {
           const storage = getStorage();
           const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
           
-          // PDF 업로드
+          // PDF 업로드 (endofday-pdfs Storage에만 저장)
           await uploadBytes(storageRef, pdfBlob);
-          
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // Firestore에 메타데이터 저장
-          const safeMetadata = sanitizeFirebaseDataClient({
-            filename: filename,
-            office: office,
-            date: date,
-            name: name || 'Supervisor',
-            type: 'Show Check',
-            source: 's_route',
-            // Show Check 매칭을 위한 추가 필드
-            startDate: startDate,
-            endDate: endDate,
-            selectedOffice: selectedOffice || 'All',
-          });
-          
-          await setDoc(doc(db, 'pdf-documents', `${date}_${safeOfficeName}_showcheck_${Date.now()}`), {
-            ...safeMetadata,
-            url: downloadUrl,
-            storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
-            createdAt: new Date(),
-          });
           
           setSubmitStatus('Saved Successfully!');
           setProgress(80);
@@ -846,108 +785,67 @@ export default function ShowCheckSystem() {
     }
   };
 
-  // 처리된 약속 데이터 삭제 함수
-  // appointmentsToDelete: PDF 생성에 사용된 appointment 배열 (선택적)
+  // 처리된 약속 데이터 삭제: 새 구조는 patients에서 제거, 구 구조는 submissions[].patients에서 제거
   const deleteProcessedAppointments = async (appointmentsToDelete?: any[]) => {
     try {
-      // PDF 생성에 사용된 appointment가 있으면 그것을 사용, 없으면 현재 filteredAppointments 사용
       const appointmentsToProcess = appointmentsToDelete || filteredAppointments;
-      
-      // 현재 필터링된 약속들의 document ID별로 그룹화
-      const documentsToCheck = new Map();
-      
-      appointmentsToProcess.forEach(appointment => {
-        const docId = appointment.docId;
-        if (!documentsToCheck.has(docId)) {
-          documentsToCheck.set(docId, []);
+      const byDocFlat = new Map<string, Set<number>>(); // 새 구조: docId -> rowIndices
+      const byDocSubs = new Map<string, Map<number, Set<number>>>(); // 구 구조: docId -> subIdx -> rowIndices
+      appointmentsToProcess.forEach(apt => {
+        const docId = apt.docId;
+        if (apt.submissionIndex == null) {
+          if (!byDocFlat.has(docId)) byDocFlat.set(docId, new Set());
+          byDocFlat.get(docId)!.add(apt.rowIndex);
+        } else {
+          if (!byDocSubs.has(docId)) byDocSubs.set(docId, new Map());
+          const subMap = byDocSubs.get(docId)!;
+          const subIdx = apt.submissionIndex;
+          if (!subMap.has(subIdx)) subMap.set(subIdx, new Set());
+          subMap.get(subIdx)!.add(apt.rowIndex);
         }
-        documentsToCheck.get(docId).push(appointment.rowIndex);
       });
 
-      const deletedDocuments: string[] = [];
-      const updatedDocuments: string[] = [];
-
-      // 각 document 확인 및 처리
-      for (const [docId, processedRowIndices] of documentsToCheck) {
+      for (const [docId, rowIndices] of byDocFlat) {
         const safeDocId = sanitizeFirebaseDocIdClient(docId);
-        const docRef = doc(db, "patient-logs", safeDocId);
-        
-        // 현재 document 데이터 가져오기
-        const querySnapshot = await getDocs(collection(db, "patient-logs"));
-        let currentData: any = null;
-        
-        querySnapshot.forEach((document) => {
-          if (document.id === docId) {
-            currentData = document.data();
-          }
-        });
-
-        if (currentData && currentData.patientRows) {
-          // 모든 약속(appt_date가 있는 것들) 찾기
-          const allAppointmentRows = currentData.patientRows
-            .map((row: any, index: number) => ({ ...row, originalIndex: index }))
-            .filter((row: any) => row.appt_date && row.name);
-
-          // 처리되지 않은 약속들 찾기 (현재 필터링된 것들 제외)
-          const unprocessedAppointments = allAppointmentRows.filter((row: any) => 
-            !processedRowIndices.includes(row.originalIndex)
-          );
-
-          if (unprocessedAppointments.length === 0 && allAppointmentRows.length > 0) {
-            // 약속이 있었고 모든 약속이 처리됨 → 전체 document 삭제
-            await deleteDoc(docRef);
-            deletedDocuments.push(docId);
-            // 로그 제거 (보안 강화)
-          } else if (allAppointmentRows.length === 0) {
-            // 애초에 약속이 없는 document → 삭제하지 않음 (로그 제거)
-          } else {
-            // 아직 처리 안 된 약속이 있음 → 처리된 것들만 빈 상태로 초기화
-            // showStatus를 pending으로 설정하지 않고 필드를 제거하거나 undefined로 설정
-            const updatedPatientRows = currentData.patientRows.map((row: any, index: number) => {
-              if (processedRowIndices.includes(index)) {
-                return {
-                  id: index + 1,
-                  name: '',
-                  office: '',
-                  appt_date: '',
-                  visit_type: '',
-                  call_in: false,
-                  call_out: false,
-                  time: '',
-                  remark: '',
-                  other_duty: ''
-                  // showStatus 필드를 제거 (pending으로 설정하지 않음)
-                };
-              }
-              return row;
-            });
-
-            const safeUpdateData = sanitizeFirebaseDataClient({
-              patientRows: updatedPatientRows,
-              lastUpdated: new Date().toISOString()
-            });
-            await updateDoc(docRef, safeUpdateData);
-            updatedDocuments.push(docId);
-            // 로그 제거 (보안 강화)
-          }
-        }
+        const docRef = doc(db, "show-noshow", safeDocId);
+        const docSnap = await getDoc(docRef);
+        const data = docSnap.exists() ? docSnap.data() : null;
+        if (!data || !Array.isArray(data.patients) || data.submissions !== undefined) continue;
+        const patients = data.patients.filter((_: any, i: number) => !rowIndices.has(i));
+        if (patients.length === 0) await deleteDoc(docRef);
+        else await updateDoc(docRef, sanitizeFirebaseDataClient({ patients, lastUpdated: new Date().toISOString() }));
+      }
+      for (const [docId, subMap] of byDocSubs) {
+        const safeDocId = sanitizeFirebaseDocIdClient(docId);
+        const docRef = doc(db, "show-noshow", safeDocId);
+        const docSnap = await getDoc(docRef);
+        const currentData = docSnap.exists() ? docSnap.data() : null;
+        if (!currentData || !Array.isArray(currentData.submissions)) continue;
+        const submissions = currentData.submissions as any[];
+        const updatedSubmissions = submissions
+          .map((sub: any, subIdx: number) => {
+            const toRemove = subMap.get(subIdx);
+            if (!toRemove || !Array.isArray(sub.patients)) return sub;
+            const patients = sub.patients.filter((_: any, i: number) => !toRemove.has(i));
+            return { ...sub, patients };
+          })
+          .filter((sub: any) => Array.isArray(sub.patients) && sub.patients.length > 0);
+        if (updatedSubmissions.length === 0) await deleteDoc(docRef);
+        else await updateDoc(docRef, sanitizeFirebaseDataClient({ submissions: updatedSubmissions, lastUpdated: new Date().toISOString() }));
       }
 
-      // 로컬 상태 업데이트 - 처리된 약속들 제거
-      setAppointments(prevAppointments => {
-        const updated = prevAppointments.filter(apt => !filteredAppointments.some(filtered => 
-          filtered.docId === apt.docId && filtered.rowIndex === apt.rowIndex
-        ));
-        appointmentsRef.current = updated; // appointmentsRef도 업데이트
-        return updated;
-      });
-      
-      setFilteredAppointments([]);
-      
-      // 로그 제거 (보안 강화)
-
+      const toRemove = new Set(appointmentsToProcess.map(p =>
+        p.submissionIndex == null ? `${p.docId}-${p.rowIndex}` : `${p.docId}-${p.submissionIndex}-${p.rowIndex}`
+      ));
+      const updated = appointmentsRef.current.filter(apt =>
+        !toRemove.has(apt.submissionIndex == null ? `${apt.docId}-${apt.rowIndex}` : `${apt.docId}-${apt.submissionIndex}-${apt.rowIndex}`)
+      );
+      setAppointments(updated);
+      appointmentsRef.current = updated;
+      setFilteredAppointments(prev =>
+        prev.filter(apt => !toRemove.has(apt.submissionIndex == null ? `${apt.docId}-${apt.rowIndex}` : `${apt.docId}-${apt.submissionIndex}-${apt.rowIndex}`))
+      );
     } catch (error) {
-      // 로그 제거 (보안 강화)
       throw error;
     }
   };
@@ -1172,11 +1070,10 @@ export default function ShowCheckSystem() {
           fontSize: '2.5rem', 
           fontWeight: 'bold',
           textShadow: '2px 2px 4px rgba(0,0,0,0.1)'
-        }}>📋 Appointment Show/No Show Check</h1>
+        }}>Appointment Show/No Show Check</h1>
 
         {/* Name 입력 섹션 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '20px' }}>👤 Name</h2>
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
@@ -1198,8 +1095,6 @@ export default function ShowCheckSystem() {
 
         {/* 필터 섹션 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '20px' }}>🔍 Filter Appointments</h2>
-          
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
@@ -1281,8 +1176,6 @@ export default function ShowCheckSystem() {
 
         {/* 약속 목록 테이블 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '20px' }}>👥 Appointments to Check</h2>
-          
           {loading ? (
             <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
               Loading appointments...
@@ -1299,7 +1192,6 @@ export default function ShowCheckSystem() {
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Patient Name</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Office</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Appt. Date</th>
-                    <th style={{ padding: '12px 8px', textAlign: 'center' }}>Visit Type</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Status</th>
                     <th style={{ padding: '12px 8px', textAlign: 'center' }}>Actions</th>
                 </tr>
@@ -1307,7 +1199,7 @@ export default function ShowCheckSystem() {
               <tbody>
                   {filteredAppointments.map((appointment: any, index: number) => (
                     <tr 
-                      key={`${appointment.docId}-${appointment.rowIndex}`} 
+                      key={`${appointment.docId}-${appointment.submissionIndex ?? 0}-${appointment.rowIndex}`} 
                       style={{ 
                         backgroundColor: getStatusColor(appointment.showStatus, index),
                         opacity: appointment.showStatus === 'pending' ? 1 : 0.8
@@ -1321,9 +1213,6 @@ export default function ShowCheckSystem() {
                     </td>
                       <td style={{ padding: '12px 8px', textAlign: 'center' }}>
                         {appointment.appt_date}
-                    </td>
-                      <td style={{ padding: '12px 8px', textAlign: 'center' }}>
-                        {appointment.visit_type}
                     </td>
                       <td style={{ padding: '12px 8px', textAlign: 'center', fontWeight: 'bold' }}>
                         {getStatusText(appointment.showStatus)}
@@ -1364,7 +1253,6 @@ export default function ShowCheckSystem() {
         {/* 통계 섹션 */}
         {filteredAppointments.length > 0 && (
         <div style={sectionStyle}>
-            <h2 style={{ color: '#0077B6', marginBottom: '20px' }}>📊 Statistics</h2>
             <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
               {(() => {
                 const showCount = filteredAppointments.filter(apt => apt.showStatus === 'show').length;
@@ -1429,33 +1317,39 @@ export default function ShowCheckSystem() {
         {filteredAppointments.length > 0 && (
           <div style={{textAlign: 'center', margin: '30px 0'}}>
           {(() => {
-            // pending 상태가 있는지 체크 (actions 또는 showStatus)
             const hasPendingStatus = filteredAppointments.some(apt => 
               apt.actions === 'pending' || 
               apt.showStatus === 'pending' || 
               (!apt.actions && !apt.showStatus) ||
               (apt.actions !== 'show' && apt.actions !== 'no-show' && apt.showStatus !== 'show' && apt.showStatus !== 'no-show')
             );
+            const nameEmpty = !name || !name.trim();
+            const canSubmit = !pdfLoading && !hasPendingStatus && !nameEmpty;
+            const titleMsg = nameEmpty
+              ? '⚠️ Please enter your Name.'
+              : hasPendingStatus
+                ? '⚠️ Please select Show or No Show for all appointments before submitting.'
+                : '';
             
             return (
               <button 
                 onClick={handleGeneratePDF}
-                disabled={pdfLoading || hasPendingStatus}
+                disabled={!canSubmit}
                 style={{
-                  backgroundColor: (pdfLoading || hasPendingStatus) ? '#9ca3af' : '#3b82f6',
+                  backgroundColor: canSubmit ? '#3b82f6' : '#9ca3af',
                   color: 'white',
                   border: 'none',
                   padding: '15px 30px',
                   borderRadius: '8px',
                   fontSize: '16px',
                   fontWeight: 'bold',
-                  cursor: (pdfLoading || hasPendingStatus) ? 'not-allowed' : 'pointer',
+                  cursor: canSubmit ? 'pointer' : 'not-allowed',
                   boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)',
                   transition: 'all 0.2s ease'
                 }}
-                title={hasPendingStatus ? '⚠️ Please select Show or No Show for all appointments before submitting.' : ''}
+                title={titleMsg}
               >
-                {pdfLoading ? '📄 Submitting...' : '📄 Submit'}
+                {pdfLoading ? '📄 Submitting...' : 'Submit'}
               </button>
             );
           })()}
