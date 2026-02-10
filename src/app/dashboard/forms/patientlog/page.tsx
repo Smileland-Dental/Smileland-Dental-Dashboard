@@ -3,9 +3,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { doc, setDoc, collection, getDocs, deleteDoc, getDoc, query, where } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase.config";
-// Firebase 인증 직접 사용
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 // 타입 정의
@@ -420,7 +419,6 @@ function PatientLogSystem(): React.ReactElement {
   const [lastSavedData, setLastSavedData] = useState({});
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
-  const [unsubmittedWarning, setUnsubmittedWarning] = useState<string>(''); // 미제출 경고 메시지
   const [previousDocId, setPreviousDocId] = useState<string | null>(null); // 이전 document ID 추적
   const [previousFormData, setPreviousFormData] = useState<{
     dutyDate: string;
@@ -438,6 +436,7 @@ function PatientLogSystem(): React.ReactElement {
   } | null>(null); // 이전 basic information ref (최신 값 추적)
   const [isUnlocked, setIsUnlocked] = useState(false); // 아래 섹션 lock 상태
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [userOfficeBasedOptions, setuserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
 
   // Rate limiting을 위한 ref
   const lastUpdatePatientRowCall = useRef<number>(0);
@@ -607,8 +606,6 @@ function PatientLogSystem(): React.ReactElement {
           setPreviousFormData(newPreviousFormData);
           previousFormDataRef.current = newPreviousFormData;
           setPreviousDocId(currentDocId);
-          // 자동 저장 성공 (메시지 표시 안함)
-          // setAutoSaveStatus('✅ Auto-saved');
         })
         .catch((error) => {
           setAutoSaveStatus('❌ Save failed');
@@ -818,57 +815,27 @@ function PatientLogSystem(): React.ReactElement {
     }
   };
 
-  // 미제출 데이터 확인 함수
+  // patient-logs에서 같은 userName, workOffice인데 다른 날짜(dutyDate)에 데이터가 있는지만 확인 (show-noshow 확인 안 함)
   const checkUnsubmittedData = useCallback(async () => {
-    // 이름과 오피스가 모두 입력되어야 확인 가능
-    if (!formData.userName || !formData.workOffice) {
-      setUnsubmittedWarning('');
-      return;
-    }
+    if (!formData.userName || !formData.workOffice) return;
 
     try {
-      // 같은 이름과 오피스의 모든 patient-logs 문서 조회
       const logsQuery = query(
         collection(db, "patient-logs"),
         where("userName", "==", formData.userName),
         where("workOffice", "==", formData.workOffice)
       );
       const logsSnapshot = await getDocs(logsQuery);
-      
-      const unsubmittedDates: string[] = [];
-      
-      // 각 로그 문서에 대해 PDF 제출 여부 확인
+      const otherDates: string[] = [];
+
       for (const logDoc of logsSnapshot.docs) {
-        const logData = logDoc.data();
-        const logDate = logData.dutyDate;
-        
-        // 현재 입력 중인 날짜는 제외
-        if (logDate === formData.dutyDate) {
-          continue;
-        }
-        
-        // 해당 날짜의 PDF가 있는지 확인 (이름과 오피스, 날짜 모두 일치해야 함)
-        const pdfQuery = query(
-          collection(db, "pdf-documents"),
-          where("date", "==", logDate),
-          where("office", "==", formData.workOffice),
-          where("name", "==", formData.userName),
-          where("type", "==", "Patient Log")
-        );
-        const pdfSnapshot = await getDocs(pdfQuery);
-        
-        // PDF가 없으면 미제출로 간주
-        if (pdfSnapshot.empty) {
-          unsubmittedDates.push(logDate);
-        }
+        const logDate = logDoc.data().dutyDate;
+        if (logDate && logDate !== formData.dutyDate) otherDates.push(logDate);
       }
-      
-      // 미제출 날짜가 있으면 경고 메시지 표시
-      if (unsubmittedDates.length > 0) {
-        const datesList = unsubmittedDates.sort().join(', ');
-        setUnsubmittedWarning(`⚠️ Please submit the following dates:: ${datesList}`);
-      } else {
-        setUnsubmittedWarning('');
+
+      if (otherDates.length > 0) {
+        const datesList = [...new Set(otherDates)].sort().join(', ');
+        alert(`You have data for these other dates: ${datesList}`);
       }
     } catch (error) {
       // 에러 발생 시 조용히 처리
@@ -976,6 +943,24 @@ function PatientLogSystem(): React.ReactElement {
         }
 
         setIsAuthorized(true);
+
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const officeBasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
+          
+          // workOfficeOptions에 포함된 값들만 필터링
+          const validOptions = officeBasedArray.filter((g: string) => workOfficeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setuserOfficeBasedOptions(validOptions);
+            // 단일 값이면 자동 선택
+            if (validOptions.length === 1) {
+              setFormData(prev => ({ ...prev, workOffice: validOptions[0] }));
+            }
+          }
+        }
       } catch (error: any) {
         alert('An error occurred while verifying authentication.');
         setIsAuthorized(false);
@@ -1191,101 +1176,14 @@ function PatientLogSystem(): React.ReactElement {
     
     // 로그 제거 (보안 강화)
 
-    // 미제출 데이터가 있는지 확인
-    if (unsubmittedWarning) {
-      const confirmSubmit = window.confirm(
-        `${unsubmittedWarning}\n\nWould you like to submit?`
-      );
-      if (!confirmSubmit) {
-        return;
-      }
-    }
-
     try {
       setLoading(true);
       setSubmitStatus('Saving...');
       setProgress(10);
 
-      // 1. Firebase에 데이터 저장 (보안 강화)
       const currentDocId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
-      
-      // 이전 formData가 있고 basic information이 변경되었으면 기존 document를 찾아서 patientRows를 가져옴
-      let rowsToSave = patientRows;
-      let previousDocIdToDelete: string | null = null;
-      
-      if (previousFormData && 
-          (previousFormData.dutyDate !== formData.dutyDate ||
-           previousFormData.userName !== formData.userName ||
-           previousFormData.workOffice !== formData.workOffice ||
-           previousFormData.workHoursFrom !== formData.workHoursFrom ||
-           previousFormData.workHoursTo !== formData.workHoursTo)) {
-        try {
-          const prevDocId = sanitizeFirebaseDocIdClient(generateDocId(
-            previousFormData.dutyDate,
-            previousFormData.userName,
-            previousFormData.workOffice,
-            previousFormData.workHoursFrom,
-            previousFormData.workHoursTo
-          ));
-          
-          const previousDocRef = doc(db, "patient-logs", prevDocId);
-          const previousDocSnap = await getDoc(previousDocRef);
-          
-          if (previousDocSnap.exists()) {
-            const previousData = previousDocSnap.data();
-            // 기존 patientRows를 유지
-            if (previousData.patientRows && Array.isArray(previousData.patientRows)) {
-              rowsToSave = previousData.patientRows;
-            }
-            
-            // 나중에 삭제할 document ID 저장
-            previousDocIdToDelete = prevDocId;
-          }
-        } catch (error) {
-          // 기존 document를 찾지 못해도 계속 진행
-        }
-      }
-      
-      // appt_date가 있는 row만 필터링하여 저장
-      const filteredRowsToSave = rowsToSave.filter(row => row.appt_date && row.appt_date.trim() !== '');
-      
-      const dataToSave = {
-        ...formData,
-        patientRows: filteredRowsToSave, // appt_date가 있는 row만 저장
-        timestamp: new Date().toISOString(),
-        // 보안 강화: 사용자 정보 강제 추가 (항상 현재 사용자로 설정)
-        userId: currentUser.uid, // 항상 현재 사용자 ID로 설정 (보안 강화)
-        ...(currentUser.email && { userEmail: currentUser.email }),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
 
-      const safeDataToSave = sanitizeFirebaseDataClient(dataToSave);
-      await setDoc(doc(db, "patient-logs", currentDocId), safeDataToSave);
-      
-      // 기존 document 삭제 (새 document 저장 성공 후)
-      if (previousDocIdToDelete && previousDocIdToDelete !== currentDocId) {
-        try {
-          await deleteDoc(doc(db, "patient-logs", previousDocIdToDelete));
-        } catch (deleteError) {
-          // 삭제 실패해도 계속 진행
-        }
-      }
-      
-      // 현재 docId를 previousDocId로 저장
-      setPreviousDocId(currentDocId);
-      // 현재 basic information을 previousFormData로 저장 (state와 ref 모두 업데이트)
-      const newPreviousFormData = {
-        dutyDate: formData.dutyDate,
-        userName: formData.userName,
-        workOffice: formData.workOffice,
-        workHoursFrom: formData.workHoursFrom,
-        workHoursTo: formData.workHoursTo
-      };
-      setPreviousFormData(newPreviousFormData);
-      previousFormDataRef.current = newPreviousFormData;
-
-      // 2. 클라이언트 사이드에서 PDF 생성
+      // 1. 클라이언트 사이드에서 PDF 생성
       setSubmitStatus('Submitting...');
       setProgress(30);
       
@@ -1349,7 +1247,15 @@ function PatientLogSystem(): React.ReactElement {
         .replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
       const safeOffice = (formData.workOffice || 'Unknown')
         .replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
-      const filename = `7) ${safeDate}_${safeOffice}_${safeName}_Patient Log.pdf`.slice(0, 255);
+      const tsNow = new Date();
+      const tsLaTime = new Date(tsNow.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+      let tsHours = tsLaTime.getHours();
+      const tsMinutes = tsLaTime.getMinutes();
+      const tsAmpm = tsHours >= 12 ? 'pm' : 'am';
+      tsHours = tsHours % 12;
+      tsHours = tsHours ? tsHours : 12;
+      const timeStamp = `${tsHours}${tsMinutes.toString().padStart(2, '0')}${tsAmpm}`;
+      const filename = `7) ${safeDate}_${safeOffice}_${safeName}_Patient Log_${timeStamp}.pdf`.slice(0, 255);
       const date = safeDate;
       const name = safeName;
       const office = safeOffice;
@@ -1359,38 +1265,59 @@ function PatientLogSystem(): React.ReactElement {
       setProgress(70);
       
       try {
-        // PDF를 Firebase Storage에 저장
+        // PDF를 Firebase Storage에 저장 (endofday-pdfs 경로 유지)
         const storage = getStorage();
         const storageRef = ref(storage, `endofday-pdfs/${office}/${date}/${filename}`);
         
-        // PDF 업로드
         await uploadBytes(storageRef, pdfBlob);
         
-        // 다운로드 URL 가져오기
-        const downloadUrl = await getDownloadURL(storageRef);
+        // patient-logs 컬렉션에서 제출한 문서 삭제
+        try {
+          await deleteDoc(doc(db, 'patient-logs', currentDocId));
+        } catch (deleteError) {
+          // 문서가 없어도 무시
+        }
         
-        // Firestore에 메타데이터 저장
-        const safeMetadata = sanitizeFirebaseDataClient({
-          filename: filename,
-          office: office,
-          date: date,
-          name: name,
-          type: 'Patient Log',
-          source: 'p_page',
-        });
-        
-        await setDoc(doc(db, 'pdf-documents', `${date}_${name}_${office}_patientlog_${Date.now()}`), {
-          ...safeMetadata,
-          url: downloadUrl,
-          storagePath: `endofday-pdfs/${office}/${date}/${filename}`,
-          createdAt: new Date(),
-        });
+        // show-noshow 컬렉션: document는 appt_date만, 같은 appt_date면 같은 문서 아래로 merge
+        const rowsWithDate = patientListForPdf.filter(row => row.appt_date && row.appt_date.trim() !== '');
+        const byApptDate = new Map<string, { name: string; office: string }[]>();
+        for (const row of rowsWithDate) {
+          const d = (row.appt_date || '').trim();
+          if (!byApptDate.has(d)) byApptDate.set(d, []);
+          byApptDate.get(d)!.push({
+            name: safeStr(row.name, 100),
+            office: safeStr(row.office, 100),
+          });
+        }
+        // show-noshow: appt_date + patients만 (submissions, duty_date, name, office, createdAt 없음)
+        for (const [apptDate, patients] of byApptDate) {
+          const showDocId = apptDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
+          const docRef = doc(db, 'show-noshow', showDocId);
+          const existing = await getDoc(docRef);
+          const existingPatients = existing.exists() && Array.isArray(existing.data()?.patients)
+            ? existing.data()!.patients
+            : [];
+          const mergedPatients = [...existingPatients, ...patients];
+          await setDoc(docRef, sanitizeFirebaseDataClient({
+            appt_date: apptDate,
+            patients: mergedPatients,
+          }));
+        }
+        if (byApptDate.size === 0) {
+          const showDocId = formData.dutyDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
+          const docRef = doc(db, 'show-noshow', showDocId);
+          const existing = await getDoc(docRef);
+          const existingPatients = existing.exists() && Array.isArray(existing.data()?.patients)
+            ? existing.data()!.patients
+            : [];
+          await setDoc(docRef, sanitizeFirebaseDataClient({
+            appt_date: formData.dutyDate,
+            patients: existingPatients,
+          }));
+        }
         
         setSubmitStatus('Submitted Successfully!');
         setProgress(100);
-        
-        // 미제출 경고 메시지 업데이트
-        await checkUnsubmittedData();
         
         // 폼 초기화
         resetForm();
@@ -1668,7 +1595,7 @@ function PatientLogSystem(): React.ReactElement {
           fontSize: '2.5rem', 
           fontWeight: 'bold',
           textShadow: '2px 2px 4px rgba(0,0,0,0.1)'
-        }}>🌴 Patient Log</h1>
+        }}>Patient Log</h1>
           {autoSaveStatus && (
             <div style={{
               position: 'absolute',
@@ -1688,27 +1615,8 @@ function PatientLogSystem(): React.ReactElement {
           )}
         </div>
 
-        {/* 미제출 경고 메시지 */}
-        {unsubmittedWarning && (
-          <div style={{
-            marginBottom: '20px',
-            padding: '15px',
-            backgroundColor: '#fff3cd',
-            border: '2px solid #ffc107',
-            borderRadius: '8px',
-            color: '#856404',
-            fontSize: '14px',
-            fontWeight: 'bold',
-            textAlign: 'center'
-          }}>
-            {unsubmittedWarning}
-          </div>
-        )}
-
         {/* 기본 정보 섹션 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>📋 Basic Information</h2>
-          
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
@@ -1739,23 +1647,38 @@ function PatientLogSystem(): React.ReactElement {
               />
             </div>
 
+            {userOfficeBasedOptions.length > 0 && (
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
                 Work Office:
               </label>
-              <select
-                value={formData.workOffice}
-                onChange={(e) => updateFormData('workOffice', e.target.value)}
-                onBlur={handleFieldBlur}
-                style={inputStyle}
-                required
-              >
-                <option value="">Select Office</option>
-                {workOfficeOptions.map(office => (
-                  <option key={office} value={office}>{office}</option>
-                ))}
-              </select>
+              {userOfficeBasedOptions.length === 1 ? (
+                <div style={{
+                  ...inputStyle,
+                  display: 'flex',
+                  alignItems: 'center',
+                  backgroundColor: '#e9ecef',
+                  fontWeight: '600',
+                  color: '#023047'
+                }}>
+                  {formData.workOffice}
+                </div>
+              ) : (
+                <select
+                  value={formData.workOffice}
+                  onChange={(e) => updateFormData('workOffice', e.target.value)}
+                  onBlur={handleFieldBlur}
+                  style={inputStyle}
+                  required
+                >
+                  <option value="">Select Office</option>
+                  {userOfficeBasedOptions.map(office => (
+                    <option key={office} value={office}>{office}</option>
+                  ))}
+                </select>
+              )}
             </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
@@ -1823,7 +1746,6 @@ function PatientLogSystem(): React.ReactElement {
         <div style={sectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-            <h2 style={{ color: '#0077B6', margin: 0 }}>👥 Patient Log</h2>
               {autoSaveStatus && (
                 <span style={{ 
                   fontSize: '12px', 
@@ -1953,7 +1875,7 @@ function PatientLogSystem(): React.ReactElement {
 
             <div style={{ display: 'flex', justifyContent: 'center', marginTop: '20px' }}>
               <button onClick={addPatientRow} style={buttonStyle}>
-                + Add Row
+                + Add
               </button>
             </div>
             </>
@@ -2008,7 +1930,7 @@ function PatientLogSystem(): React.ReactElement {
               disabled={loading} 
               style={{ ...buttonStyle, backgroundColor: '#28a745' }}
             >
-              {loading ? 'Submitting...' : '📄 Submit + Generate PDF'}
+              {loading ? 'Submitting...' : 'Submit'}
             </button>
           )}
         </div>
