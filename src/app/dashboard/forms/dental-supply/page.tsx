@@ -2,9 +2,60 @@
 
 import React, { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { collection, getDocs, addDoc, doc, setDoc, deleteDoc } from "firebase/firestore";
-import { db } from "@/lib/firebase.config";
-import { enableAllSecurityMeasures, sanitizeFirebaseDataClient } from "@/lib/security-client";
+import { collection, getDocs, addDoc, doc, setDoc, deleteDoc, getDoc, query, where, updateDoc } from "firebase/firestore";
+import { db, auth } from "@/lib/firebase.config";
+import { onAuthStateChanged } from 'firebase/auth';
+
+
+// Firebase 데이터 sanitization (prototype pollution 방지, 값 검증)
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_STRING_LENGTH = 10000;
+
+function sanitizeValue(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    return value.trim().slice(0, MAX_STRING_LENGTH);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return 0;
+    return value;
+  }
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    return value.map(sanitizeValue);
+  }
+  if (typeof value === 'object') {
+    return sanitizeData(value as Record<string, unknown>);
+  }
+  return null;
+}
+
+function sanitizeData<T extends Record<string, unknown>>(data: T): T {
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(data)) {
+    if (DANGEROUS_KEYS.has(key)) continue;
+    const sanitizedKey = String(key).trim().slice(0, 500);
+    if (!sanitizedKey) continue;
+    result[sanitizedKey] = sanitizeValue(data[key]);
+  }
+  return result as T;
+}
+
+// URL 안전성 검증 (XSS 방지)
+function getSafeUrl(url: string | undefined | null): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol === 'https:') {
+      return trimmed;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 // 개별 아이템 행 컴포넌트
 const ItemRow = React.memo(({ 
@@ -68,9 +119,9 @@ const ItemRow = React.memo(({
         {item.extraInfo}
       </td>
       <td style={{ padding: '8px' }}>
-        {item.url && item.url.trim() !== '' ? (
+        {getSafeUrl(item.url) ? (
           <a 
-            href={item.url} 
+            href={getSafeUrl(item.url)!} 
             target="_blank" 
             rel="noopener noreferrer"
             style={{ color: '#0077B6', textDecoration: 'none' }}
@@ -155,7 +206,6 @@ function SupplyViewSystemContent() {
   // Dental과 Office 아이템을 각각 저장
   const [dentalItems, setDentalItems] = useState<any[]>([]);
   const [officeItems, setOfficeItems] = useState<any[]>([]);
-  const [processingRequests, setProcessingRequests] = useState<any[]>([]);
 
   // 필터 상태
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -170,6 +220,8 @@ function SupplyViewSystemContent() {
 
   // Office 선택 상태
   const [selectedOffice, setSelectedOffice] = useState('');
+  const [userOfficeBasedOptions, setUserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
   
   // 세션 ID (브라우저 세션마다 고유)
   const [sessionId] = useState(() => {
@@ -197,80 +249,51 @@ function SupplyViewSystemContent() {
   const handleOfficeSelect = useCallback(async (office: string) => {
     if (!office) return;
     
-    // 비밀번호 확인
-    const password = prompt(`Enter password for ${office}:`);
-    if (!password) return;
-    
-    const expectedPassword = office.charAt(0).toLowerCase();
-    if (password !== expectedPassword) {
-      alert('❌ Incorrect password!');
-      return;
-    }
-    
     setSelectedOffice(office);
     
-    // 임시 저장된 quantity 불러오기 (직접 호출)
-    if (office) {
-      try {
-        const draftDoc = await getDocs(collection(db, 'office-draft-orders'));
-        const currentDraft = draftDoc.docs.find(doc => {
-          const data = doc.data();
-          return data.office === office && data.sessionId === sessionId;
-        });
-        
-        if (currentDraft) {
-          const draftData = currentDraft.data();
-          const sanitizedData = sanitizeFirebaseDataClient(draftData);
-          setOrderQuantitiesByOffice(prev => {
-            const newState = {
-              ...prev,
-              [office]: sanitizedData.quantities || {}
-            };
-            return newState;
-          });
-        } else {
-        }
-        
-        // 같은 오피스의 다른 세션 draft들은 삭제 (오래된 draft 정리)
-        const oldDrafts = draftDoc.docs.filter(doc => {
-          const data = doc.data();
-          return data.office === office && data.sessionId !== sessionId;
-        });
-        for (const oldDraft of oldDrafts) {
-          try {
-            await deleteDoc(doc(db, 'office-draft-orders', oldDraft.id));
-          } catch (err) {
-            console.error('Failed to delete old draft:', err);
-          }
-        }
-      } catch (error) {
-        console.error("Error loading draft quantities:", error);
+    // 임시 저장된 quantity 불러오기
+    try {
+      const draftDoc = await getDocs(collection(db, 'office-draft-orders'));
+      const currentDraft = draftDoc.docs.find(doc => {
+        const data = doc.data();
+        return data.office === office && data.sessionId === sessionId;
+      });
+      
+      if (currentDraft) {
+        const draftData = sanitizeData(currentDraft.data());
+        setOrderQuantitiesByOffice(prev => ({
+          ...prev,
+          [office]: draftData.quantities || {}
+        }));
       }
+      
+      // 같은 오피스의 다른 세션 draft들은 삭제 (오래된 draft 정리)
+      const oldDrafts = draftDoc.docs.filter(doc => {
+        const data = doc.data();
+        return data.office === office && data.sessionId !== sessionId;
+      });
+      for (const oldDraft of oldDrafts) {
+        try {
+          await deleteDoc(doc(db, 'office-draft-orders', oldDraft.id));
+        } catch (err) {
+          // 삭제 실패 무시
+        }
+      }
+    } catch (error) {
+      // 로드 실패 무시
     }
   }, [sessionId]);
-  
-  // 디버깅용 로그
-  React.useEffect(() => {
-    if (selectedOffice) {
-    }
-  }, [selectedOffice, orderQuantities, editingQuantities]);
   
   // debounce 타이머 저장
   const quantityTimersRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
   
+  // 이전 supplyType 추적 (useEffect에서 실제 변경 감지용)
+  const prevSupplyTypeRef = useRef(supplyType);
+  
   // Office 옵션 목록
-  const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia', 'Corporate'];
+  const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
-  // Office 비밀번호 검증 (첫 알파벳 소문자)
-  const getOfficePassword = (office: string) => {
-    return office.charAt(0).toLowerCase();
-  };
-
-
-
-  const collectionName = supplyType === 'dental' ? 'dental-supplies' : 'office-supplies';
   const supplyTypeLabel = supplyType === 'dental' ? 'Dental' : (supplyType === 'office' ? 'Office' : 'Processing Request');
-  const supplyTypeEmoji = supplyType === 'dental' ? '🦷' : (supplyType === 'office' ? '📋' : '📦');
 
   // 카테고리 옵션 (실제 데이터에서 동적으로 생성)
   const categoryOptions = [...new Set(items.map(item => item.category).filter(Boolean))].sort();
@@ -285,8 +308,11 @@ function SupplyViewSystemContent() {
 
   // supply type 변경 시 items 업데이트
   useEffect(() => {
+    const supplyTypeChanged = prevSupplyTypeRef.current !== supplyType;
+    prevSupplyTypeRef.current = supplyType;
+
     // supply type 변경 전에 편집 중인 값들을 먼저 저장
-    if (selectedOffice && Object.keys(editingQuantities).length > 0) {
+    if (supplyTypeChanged && selectedOffice && Object.keys(editingQuantities).length > 0) {
       const updatedQuantities = {
         ...(orderQuantitiesByOffice[selectedOffice] || {}),
         ...editingQuantities
@@ -303,19 +329,22 @@ function SupplyViewSystemContent() {
       setItems(dentalItems);
     } else if (supplyType === 'office') {
       setItems(officeItems);
-    } else if (supplyType === 'processing-request') {
-      // Processing Request는 selectedOffice가 있을 때만 로드
+    } else if (supplyType === 'processing-request' && supplyTypeChanged) {
+      // supplyType이 실제로 변경되었을 때만 items 초기화
+      // dentalItems/officeItems 변경으로 이 effect가 재실행될 때는 processing-request 데이터를 유지
+      setItems([]);
       if (selectedOffice) {
-        loadProcessingRequests();
-      } else {
-        setItems([]);
+        setLoading(true);
       }
     }
-    setCategoryFilter('');
-    setSellerFilter('');
-    setSearchInput('');
-    // supplyType 변경 시 모든 오피스의 editingQuantities 초기화
-    setEditingQuantitiesByOffice({});
+
+    // supplyType이 실제로 변경되었을 때만 필터/편집 상태 초기화
+    if (supplyTypeChanged) {
+      setCategoryFilter('');
+      setSellerFilter('');
+      setSearchInput('');
+      setEditingQuantitiesByOffice({});
+    }
   }, [supplyType, dentalItems, officeItems]);
 
   // Processing Requests 로드 함수 (선택된 오피스의 주문 내역)
@@ -328,70 +357,98 @@ function SupplyViewSystemContent() {
 
     try {
       setLoading(true);
-      const requestsSnapshot = await getDocs(collection(db, 'order-requests'));
+      // 서버 측에서 해당 오피스의 주문만 필터링하여 가져옴
+      const officeQuery = query(
+        collection(db, 'order-requests'),
+        where('office', '==', selectedOffice)
+      );
+      const requestsSnapshot = await getDocs(officeQuery);
       
       const requestsList: any[] = [];
       
       requestsSnapshot.forEach((doc) => {
-        const rawData = doc.data();
-        const sanitizedData = sanitizeFirebaseDataClient(rawData);
+        const sanitizedData = sanitizeData(doc.data());
         
+        // 사용자가 삭제한 주문은 제외
+        if (sanitizedData.deletedByUser === true) {
+          return;
+        }
         
-        // 현재 선택된 오피스의 주문만 필터링
-        if (sanitizedData.office === selectedOffice) {
-          
-          // 새로운 구조 (items 배열) 또는 기존 구조 (개별 문서) 처리
-          if (sanitizedData.items && sanitizedData.items.length > 0) {
-            // 새로운 구조: items 배열이 있는 경우
-            const itemsWithQuantity = sanitizedData.items.map((item: any) => {
-              const quantity = sanitizedData.quantities?.[item.id] || 0;
-              return {
-                ...item,
-                quantity: quantity
-              };
-            });
-            
-            requestsList.push({ 
-              id: doc.id, 
-              ...sanitizedData,
-              items: itemsWithQuantity,
-              displayId: requestsList.length + 1
-            });
-          } else if (sanitizedData.item) {
-            // 기존 구조: 개별 문서인 경우
-            const quantity = sanitizedData.quantity || 0;
-            const itemWithQuantity = {
-              ...sanitizedData,
+        // 새로운 구조 (items 배열) 또는 기존 구조 (개별 문서) 처리
+        if (sanitizedData.items && sanitizedData.items.length > 0) {
+          const itemsWithQuantity = sanitizedData.items.map((item: any) => {
+            const quantity = sanitizedData.quantities?.[item.id] || 0;
+            return {
+              ...item,
               quantity: quantity
             };
-            
-            requestsList.push({ 
-              id: doc.id, 
-              ...sanitizedData,
-              items: [itemWithQuantity],
-              displayId: requestsList.length + 1
-            });
-          } else {
-          }
+          });
+          
+          requestsList.push({ 
+            id: doc.id, 
+            ...sanitizedData,
+            items: itemsWithQuantity,
+            displayId: requestsList.length + 1
+          });
+        } else if (sanitizedData.item) {
+          const quantity = sanitizedData.quantity || 0;
+          const itemWithQuantity = {
+            ...sanitizedData,
+            quantity: quantity
+          };
+          
+          requestsList.push({ 
+            id: doc.id, 
+            ...sanitizedData,
+            items: [itemWithQuantity],
+            displayId: requestsList.length + 1
+          });
         }
       });
 
-      
       // 주문 날짜 기준 최신순 정렬
       requestsList.sort((a, b) => {
         return new Date(b.orderDate || 0).getTime() - new Date(a.orderDate || 0).getTime();
       });
 
-      // 주문별로 그룹화하여 표시
-      setProcessingRequests(requestsList);
       setItems(requestsList);
     } catch (error) {
-      console.error("Error loading processing requests:", error);
       alert('❌ 주문 내역 로드 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
     }
   }, [selectedOffice]);
+
+  // Processing Request 삭제 핸들러
+  const handleDeleteProcessingRequest = useCallback(async (orderId: string) => {
+    if (!confirm('Are you sure you want to delete this order?')) {
+      return;
+    }
+
+    try {
+      const orderRef = doc(db, 'order-requests', orderId);
+      const orderSnap = await getDoc(orderRef);
+
+      if (orderSnap.exists()) {
+        const data = orderSnap.data();
+        if (data.deletedByManager === true) {
+          // 양쪽 모두 삭제 확인 → Firestore에서 실제 삭제
+          await deleteDoc(orderRef);
+        } else {
+          // 사용자 측만 삭제 → soft-delete
+          await updateDoc(orderRef, sanitizeData({
+            deletedByUser: true,
+            lastUpdated: new Date().toISOString()
+          }));
+        }
+      }
+
+      // 로컬 상태에서 제거
+      setItems(prev => prev.filter(item => item.id !== orderId));
+    } catch (error) {
+      alert('❌ Failed to delete order.');
+    }
+  }, []);
 
   // Dental과 Office 데이터 모두 로드하는 함수
   const loadAllItems = useCallback(async () => {
@@ -402,9 +459,7 @@ function SupplyViewSystemContent() {
       const dentalSnapshot = await getDocs(collection(db, 'dental-supplies'));
       const dentalList: any[] = [];
       dentalSnapshot.forEach((doc) => {
-        const rawData = doc.data();
-        const sanitizedData = sanitizeFirebaseDataClient(rawData);
-        dentalList.push({ id: doc.id, ...sanitizedData, sourceType: 'dental' });
+        dentalList.push({ id: doc.id, ...sanitizeData(doc.data()), sourceType: 'dental' });
       });
       dentalList.sort((a, b) => {
         if (a.order && b.order) return a.order - b.order;
@@ -418,9 +473,7 @@ function SupplyViewSystemContent() {
       const officeSnapshot = await getDocs(collection(db, 'office-supplies'));
       const officeList: any[] = [];
       officeSnapshot.forEach((doc) => {
-        const rawData = doc.data();
-        const sanitizedData = sanitizeFirebaseDataClient(rawData);
-        officeList.push({ id: doc.id, ...sanitizedData, sourceType: 'office' });
+        officeList.push({ id: doc.id, ...sanitizeData(doc.data()), sourceType: 'office' });
       });
       officeList.sort((a, b) => {
         if (a.order && b.order) return a.order - b.order;
@@ -431,13 +484,13 @@ function SupplyViewSystemContent() {
       setOfficeItems(officeList);
       
       // 현재 선택된 supply type에 맞는 items 설정
+      // processing-request일 때는 loadProcessingRequests가 items를 관리하므로 여기서 덮어쓰지 않음
       if (supplyType === 'dental') {
         setItems(dentalList);
-      } else {
+      } else if (supplyType === 'office') {
         setItems(officeList);
       }
     } catch (error) {
-      console.error("Error loading items:", error);
       alert('❌ 데이터 로드 중 오류가 발생했습니다.');
     } finally {
       setLoading(false);
@@ -451,79 +504,102 @@ function SupplyViewSystemContent() {
 
   // 보안 조치 활성화
   useEffect(() => {
-    enableAllSecurityMeasures({
-      disableConsole: true,        // console 비활성화
-      disableRightClick: true,     // 우클릭 방지
-      disableShortcuts: true,      // F12 등 단축키 방지
-      disableCopy: false,          // 복사 허용 (사용자 편의)
-      disableSelection: false,     // 텍스트 선택 허용 (사용자 편의)
-      monitorDevTools: true        // 개발자 도구 실시간 모니터링 활성화
-    });
-
-    // 추가 보안 조치
     if (process.env.NODE_ENV === 'production') {
-      // 1. 페이지 가시성 변경 감지 (탭 전환 등)
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-        }
-      });
-
-      // 2. 페이지 포커스 감지
-      window.addEventListener('blur', () => {
-      });
-
-      // 3. 키보드 이벤트 로깅 (의심스러운 패턴 감지)
-      let keySequence: string[] = [];
-      document.addEventListener('keydown', (e) => {
-        keySequence.push(e.key);
-        if (keySequence.length > 10) {
-          keySequence.shift();
-        }
-        
-        // 의심스러운 키 조합 감지
-        const suspiciousPatterns = [
-          ['F12'],
-          ['Control', 'Shift', 'I'],
-          ['Control', 'Shift', 'J'],
-          ['Control', 'u']
-        ];
-        
-        suspiciousPatterns.forEach(pattern => {
-          if (keySequence.slice(-pattern.length).join(',') === pattern.join(',')) {
-          }
-        });
-      });
-
-      // 4. 마우스 이벤트 모니터링
-      let mouseActivity = 0;
-      document.addEventListener('mousemove', () => {
-        mouseActivity++;
-        if (mouseActivity > 10000) {
-          mouseActivity = 0;
-        }
-      });
-
-      // 5. 페이지 새로고침 방지 (Ctrl+R, F5)
-      document.addEventListener('keydown', (e) => {
+      const handleKeydown = (e: KeyboardEvent) => {
         if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
           e.preventDefault();
-          return false;
         }
-      });
+      };
 
-      // 6. 브라우저 뒤로가기 방지
-      window.addEventListener('popstate', (e) => {
+      const handlePopstate = (e: PopStateEvent) => {
         e.preventDefault();
         window.history.pushState(null, '', window.location.href);
-      });
+      };
 
-      // 7. 페이지 언로드 시 경고
-      window.addEventListener('beforeunload', (e) => {
+      const handleBeforeunload = (e: BeforeUnloadEvent) => {
         e.preventDefault();
         e.returnValue = 'Are you sure you want to leave?';
         return 'Are you sure you want to leave?';
-      });
+      };
+
+      document.addEventListener('keydown', handleKeydown);
+      window.addEventListener('popstate', handlePopstate);
+      window.addEventListener('beforeunload', handleBeforeunload);
+
+      return () => {
+        document.removeEventListener('keydown', handleKeydown);
+        window.removeEventListener('popstate', handlePopstate);
+        window.removeEventListener('beforeunload', handleBeforeunload);
+      };
     }
+  }, []);
+
+  // 컴포넌트 마운트 시 사용자 인증, role 확인 및 office_based 기반 오피스 자동 선택
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = sanitizeData(userDoc.data() || {});
+
+        if (userData?.role !== 'manager') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const officeBasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
+          
+          // officeOptions에 포함된 값들만 필터링
+          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setUserOfficeBasedOptions(validOptions);
+            // 단일 값이면 자동 선택 (비밀번호 없이)
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+              // 자동 선택된 오피스의 draft 불러오기
+              loadDraftQuantities(validOptions[0]);
+            }
+          }
+        }
+      } catch (error: any) {
+        alert('An error occurred while verifying authentication.');
+        setIsAuthorized(false);
+      }
+    });
+
+    // 프로덕션 환경에서 HTTPS 강제
+    if (process.env.NODE_ENV === 'production' && 
+        typeof window !== 'undefined' && 
+        window.location.protocol !== 'https:') {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // 컴포넌트 언마운트 시 타이머 정리 + 편집 중인 값 저장
@@ -544,14 +620,13 @@ function SupplyViewSystemContent() {
           // 동기적으로 Firebase에 저장 (async 불가능하므로 best effort)
           const draftId = `${office}-${sessionId}`;
           const draftRef = doc(db, 'office-draft-orders', draftId);
-          const draftData = {
+          const draftData = sanitizeData({
             office: office,
             sessionId: sessionId,
             quantities: updatedQuantities,
             lastUpdated: new Date().toISOString()
-          };
-          const sanitizedData = sanitizeFirebaseDataClient(draftData);
-          setDoc(draftRef, sanitizedData).catch(err => console.error('Failed to save on unmount:', err));
+          });
+          setDoc(draftRef, draftData).catch(() => {});
         }
       });
       
@@ -646,16 +721,11 @@ function SupplyViewSystemContent() {
       });
       
       if (currentDraft) {
-        const draftData = currentDraft.data();
-        const sanitizedData = sanitizeFirebaseDataClient(draftData);
-        setOrderQuantitiesByOffice(prev => {
-          const newState = {
-            ...prev,
-            [office]: sanitizedData.quantities || {}
-          };
-          return newState;
-        });
-      } else {
+        const draftData = sanitizeData(currentDraft.data());
+        setOrderQuantitiesByOffice(prev => ({
+          ...prev,
+          [office]: draftData.quantities || {}
+        }));
       }
       
       // 같은 오피스의 다른 세션 draft들은 삭제 (오래된 draft 정리)
@@ -667,11 +737,11 @@ function SupplyViewSystemContent() {
         try {
           await deleteDoc(doc(db, 'office-draft-orders', oldDraft.id));
         } catch (err) {
-          console.error('Failed to delete old draft:', err);
+          // 삭제 실패 무시
         }
       }
     } catch (error) {
-      console.error("Error loading draft quantities:", error);
+      // 로드 실패 무시
     }
   }, [sessionId]);
 
@@ -682,16 +752,15 @@ function SupplyViewSystemContent() {
     try {
       const draftId = `${office}-${sessionId}`;
       const draftRef = doc(db, 'office-draft-orders', draftId);
-      const draftData = {
+      const draftData = sanitizeData({
         office: office,
         sessionId: sessionId,
         quantities: quantities,
         lastUpdated: new Date().toISOString()
-      };
-      const sanitizedData = sanitizeFirebaseDataClient(draftData);
-      await setDoc(draftRef, sanitizedData);
+      });
+      await setDoc(draftRef, draftData);
     } catch (error) {
-      console.error("Error saving draft quantities:", error);
+      // 저장 실패 무시
     }
   }, [sessionId]);
 
@@ -783,7 +852,7 @@ function SupplyViewSystemContent() {
       const orderDate = new Date().toISOString();
 
       // 주문 데이터를 하나의 문서로 저장 (items 배열 포함)
-      const orderData = {
+      const orderData = sanitizeData({
         orderSessionId: orderSessionId,
         office: selectedOffice,
         orderDate: orderDate,
@@ -802,12 +871,9 @@ function SupplyViewSystemContent() {
           acc[item.id] = parseInt(String(currentOrderQuantities[item.id]));
           return acc;
         }, {} as { [itemId: string]: number })
-      };
+      });
 
-      // 데이터 검증 후 저장
-      const sanitizedOrderData = sanitizeFirebaseDataClient(orderData);
-      await addDoc(collection(db, 'order-requests'), sanitizedOrderData);
-      
+      await addDoc(collection(db, 'order-requests'), orderData);
 
       // 주문 내역 요약
       const dentalCount = orderedItems.filter(item => item.sourceType === 'dental').length;
@@ -846,17 +912,15 @@ function SupplyViewSystemContent() {
         const draftRef = doc(db, 'office-draft-orders', draftId);
         await deleteDoc(draftRef);
       } catch (error) {
-        console.error('Error deleting draft:', error);
         // Draft 삭제 실패해도 주문은 완료됐으므로 에러 무시
       }
       
     } catch (error) {
-      console.error('Error submitting order:', error);
       alert('❌ Failed to submit order. Please try again.');
     } finally {
       setLoading(false);
     }
-  }, [selectedOffice, dentalItems, officeItems, orderQuantitiesByOffice, editingQuantities, sessionId]);
+  }, [selectedOffice, dentalItems, officeItems, orderQuantitiesByOffice, editingQuantitiesByOffice, sessionId]);
 
   // 스타일 정의
   const containerStyle = {
@@ -961,6 +1025,45 @@ function SupplyViewSystemContent() {
     borderColor: '#0077B6'
   };
 
+  // 인증 확인 중
+  if (isAuthorized === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'linear-gradient(to bottom, #a2d2ff, #f0f8ff)',
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
+          <div style={{ fontSize: '18px', color: '#023047' }}>Verifying authentication...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // 인증 실패
+  if (isAuthorized === false) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'linear-gradient(to bottom, #a2d2ff, #f0f8ff)',
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
+          <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={bodyStyle}>
       <div style={containerStyle}>
@@ -988,26 +1091,41 @@ function SupplyViewSystemContent() {
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057', fontSize: '14px' }}>
               🏢 Select Office:
             </label>
-            <select
-              value={selectedOffice}
-              onChange={(e) => handleOfficeSelect(e.target.value)}
-              style={{
-                ...inputStyle,
-                fontSize: '16px',
+            {userOfficeBasedOptions.length === 1 ? (
+              <span style={{
+                display: 'inline-flex',
+                alignItems: 'center',
                 padding: '10px 12px',
-                cursor: 'pointer',
-                width: '100%'
-              }}
-            >
-              <option value="">-- Select an Office --</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
+                backgroundColor: '#e9ecef',
+                borderRadius: '4px',
+                fontWeight: '600',
+                color: '#0077B6',
+                fontSize: '16px',
+                width: '100%',
+                boxSizing: 'border-box' as const
+              }}>
+                {selectedOffice}
+              </span>
+            ) : (
+              <select
+                value={selectedOffice}
+                onChange={(e) => handleOfficeSelect(e.target.value)}
+                style={{
+                  ...inputStyle,
+                  fontSize: '16px',
+                  padding: '10px 12px',
+                  cursor: 'pointer',
+                  width: '100%'
+                }}
+              >
+                <option value="">-- Select an Office --</option>
+                {(userOfficeBasedOptions.length > 0 ? userOfficeBasedOptions : officeOptions).map(office => (
+                  <option key={office} value={office}>{office}</option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
-
-
 
         {/* Supply Type 선택 */}
         <div style={sectionStyle}>
@@ -1056,71 +1174,6 @@ function SupplyViewSystemContent() {
             </label>
           </div>
         </div>
-
-
-
-        {/* Processing Request가 아닐 때만 필터 적용 */}
-        {supplyType !== 'processing-request' && false && (
-        <div style={sectionStyle} hidden>
-          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>Old Section</h2>
-          <div style={{ maxWidth: '500px' }}>
-            <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057' }}>
-              Select Office:
-            </label>
-            <select
-              value={selectedOffice}
-              onChange={(e) => handleOfficeSelect(e.target.value)}
-              style={{
-                ...inputStyle,
-                fontSize: '16px',
-                padding: '10px 12px',
-                cursor: 'pointer'
-              }}
-            >
-              <option value="">-- Select an Office --</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
-            
-            
-            {/* Office가 확인된 경우 표시 */}
-            {selectedOffice && (
-              <div style={{
-                marginTop: '10px',
-                padding: '10px 12px',
-                backgroundColor: '#d4edda',
-                borderRadius: '4px',
-                color: '#155724',
-                fontSize: '15px',
-                fontWeight: 'bold',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center'
-              }}>
-                <span>✅ Confirmed: {selectedOffice}</span>
-                <button
-                  onClick={() => {
-                    setSelectedOffice('');
-                  }}
-                  style={{
-                    backgroundColor: '#6c757d',
-                    color: 'white',
-                    border: 'none',
-                    padding: '5px 10px',
-                    borderRadius: '3px',
-                    fontSize: '13px',
-                    cursor: 'pointer'
-                  }}
-                >
-                  Change
-                </button>
-              </div>
-            )}
-          </div>
-          
-        </div>
-        )}
 
         {/* 통합 아이템 관리 섹션 */}
         <div style={sectionStyle}>
@@ -1217,7 +1270,7 @@ function SupplyViewSystemContent() {
                 <div key={order.id} style={{ marginBottom: '30px', border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden' }}>
                   {/* 주문 헤더 */}
                   <div style={{ 
-                    backgroundColor: '#0077B6', 
+                    backgroundColor: order.deletedByManager ? '#28a745' : '#0077B6', 
                     color: 'white', 
                     padding: '15px 20px',
                     display: 'flex',
@@ -1225,14 +1278,62 @@ function SupplyViewSystemContent() {
                     alignItems: 'center'
                   }}>
                     <div>
-                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold' }}>
+                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
                         📦 Order #{startIndex + orderIndex + 1}
+                        {order.deletedByManager ? (
+                          <span style={{
+                            fontSize: '13px',
+                            padding: '3px 10px',
+                            borderRadius: '12px',
+                            backgroundColor: 'rgba(255,255,255,0.25)',
+                            fontWeight: '600'
+                          }}>
+                            ✅ Completed
+                          </span>
+                        ) : order.status === 'processing' ? (
+                          <span style={{
+                            fontSize: '13px',
+                            padding: '3px 10px',
+                            borderRadius: '12px',
+                            backgroundColor: 'rgba(255,255,255,0.25)',
+                            fontWeight: '600'
+                          }}>
+                            🔄 Processing
+                          </span>
+                        ) : (
+                          <span style={{
+                            fontSize: '13px',
+                            padding: '3px 10px',
+                            borderRadius: '12px',
+                            backgroundColor: 'rgba(255,255,255,0.15)',
+                            fontWeight: '600'
+                          }}>
+                            ⏳ Pending
+                          </span>
+                        )}
                       </h3>
                       <div style={{ fontSize: '14px', opacity: 0.9, marginTop: '5px' }}>
                         📅 {order.orderDate ? new Date(order.orderDate).toLocaleDateString() : 'N/A'} | 
                         📊 {order.items?.length || 0} items
                       </div>
                     </div>
+                    <button
+                      onClick={() => handleDeleteProcessingRequest(order.id)}
+                      style={{
+                        backgroundColor: 'rgba(255,255,255,0.2)',
+                        color: 'white',
+                        border: '1px solid rgba(255,255,255,0.4)',
+                        padding: '8px 16px',
+                        borderRadius: '6px',
+                        fontSize: '14px',
+                        fontWeight: 'bold',
+                        cursor: 'pointer',
+                        transition: 'all 0.2s ease',
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      🗑️ Delete
+                    </button>
                   </div>
 
                   {/* 주문 아이템 테이블 */}
@@ -1276,9 +1377,9 @@ function SupplyViewSystemContent() {
                               {item.extraInfo}
                             </td>
                             <td style={{ padding: '8px' }}>
-                              {item.url && item.url.trim() !== '' ? (
+                              {getSafeUrl(item.url) ? (
                                 <a 
-                                  href={item.url} 
+                                  href={getSafeUrl(item.url)!} 
                                   target="_blank" 
                                   rel="noopener noreferrer"
                                   style={{ color: '#0077B6', textDecoration: 'none' }}
