@@ -682,7 +682,7 @@ function SupplyManagerSystemContent() {
 
   // 주문 그룹 완료 처리 (soft-delete: Firestore에서 삭제하지 않고 완료 표시)
   const deleteOrderGroup = useCallback(async (orderSessionId: string, itemCount: number) => {
-    if (!confirm(`Mark this order as completed? (${itemCount} items)\n\nThe order will be marked as completed and hidden from this view.`)) {
+    if (!confirm(`Are you sure you want to mark the order as completed?`)) {
       return;
     }
 
