@@ -91,7 +91,7 @@ const ItemRow = React.memo(({
             backgroundColor: item.supplyType === 'dental' ? '#e7f3ff' : '#f0f8ff',
             color: item.supplyType === 'dental' ? '#0077B6' : '#495057'
           }}>
-            {item.supplyType === 'dental' ? '🦷 Dental' : '📋 Office'}
+            {item.supplyType === 'dental' ? 'Dental' : 'Office'}
           </span>
         </td>
       )}
@@ -881,8 +881,8 @@ function SupplyViewSystemContent() {
       
       let summary = `✅ Order submitted successfully!\n\n`;
       summary += `Total: ${orderedItems.length} items from ${selectedOffice}\n`;
-      if (dentalCount > 0) summary += `🦷 Dental: ${dentalCount} items\n`;
-      if (officeCount > 0) summary += `📋 Office: ${officeCount} items`;
+      if (dentalCount > 0) summary += `Dental: ${dentalCount} items\n`;
+      if (officeCount > 0) summary += `Office: ${officeCount} items`;
       
       alert(summary);
       
@@ -1084,12 +1084,12 @@ function SupplyViewSystemContent() {
             paddingBottom: 0, 
             borderBottom: 'none',
             flex: '0 0 auto'
-          }}>📋 Supply View</h1>
+          }}>Supply View</h1>
           
           {/* Office 선택 - 헤더 옆에 배치 */}
           <div style={{ flex: '0 0 auto', minWidth: '300px' }}>
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057', fontSize: '14px' }}>
-              🏢 Select Office:
+              Select Office:
             </label>
             {userOfficeBasedOptions.length === 1 ? (
               <span style={{
@@ -1129,7 +1129,7 @@ function SupplyViewSystemContent() {
 
         {/* Supply Type 선택 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>📋 Supply Type Selection</h2>
+          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>Supply Type Selection</h2>
           <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
@@ -1140,7 +1140,7 @@ function SupplyViewSystemContent() {
                 onChange={(e) => setSupplyType(e.target.value)}
                 style={{ margin: 0 }}
               />
-              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>🦷 Dental Supply</span>
+              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>Dental Supply</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
@@ -1151,7 +1151,7 @@ function SupplyViewSystemContent() {
                 onChange={(e) => setSupplyType(e.target.value)}
                 style={{ margin: 0 }}
               />
-              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>📋 Office Supply</span>
+              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>Office Supply</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
@@ -1168,7 +1168,7 @@ function SupplyViewSystemContent() {
                 fontWeight: 'bold',
                 color: !selectedOffice ? '#ccc' : 'inherit'
               }}>
-                📦 Processing Request
+                Processing Request
                 {!selectedOffice && ' (Select Office First)'}
               </span>
             </label>
@@ -1179,12 +1179,12 @@ function SupplyViewSystemContent() {
         <div style={sectionStyle}>
           {/* 헤더와 통계 정보 */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h2 style={{ color: '#0077B6', margin: 0 }}>📋 {supplyTypeLabel} Supply Items</h2>
+            <h2 style={{ color: '#0077B6', margin: 0 }}>{supplyTypeLabel} Supply Items</h2>
             <div style={{ 
               fontSize: '14px',
               color: '#666'
             }}>
-              📊 {filteredItems.length} of {items.length} {supplyType === 'processing-request' ? 'orders' : 'items'}
+               {filteredItems.length} of {items.length} {supplyType === 'processing-request' ? 'orders' : 'items'}
               {categoryFilter && ` • ${categoryFilter}`}
               {sellerFilter && ` • ${sellerFilter}`}
               {searchInput && ` • "${searchInput}"`}
@@ -1279,7 +1279,7 @@ function SupplyViewSystemContent() {
                   }}>
                     <div>
                       <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        📦 Order #{startIndex + orderIndex + 1}
+                        Order #{startIndex + orderIndex + 1}
                         {order.deletedByManager ? (
                           <span style={{
                             fontSize: '13px',
@@ -1308,13 +1308,12 @@ function SupplyViewSystemContent() {
                             backgroundColor: 'rgba(255,255,255,0.15)',
                             fontWeight: '600'
                           }}>
-                            ⏳ Pending
+                            Pending
                           </span>
                         )}
                       </h3>
                       <div style={{ fontSize: '14px', opacity: 0.9, marginTop: '5px' }}>
-                        📅 {order.orderDate ? new Date(order.orderDate).toLocaleDateString() : 'N/A'} | 
-                        📊 {order.items?.length || 0} items
+                        {order.orderDate ? new Date(order.orderDate).toLocaleDateString() : 'N/A'}
                       </div>
                     </div>
                     <button
@@ -1365,7 +1364,7 @@ function SupplyViewSystemContent() {
                                 backgroundColor: item.supplyType === 'dental' ? '#e7f3ff' : '#f0f8ff',
                                 color: item.supplyType === 'dental' ? '#0077B6' : '#495057'
                               }}>
-                                {item.supplyType === 'dental' ? '🦷 Dental' : '📋 Office'}
+                                {item.supplyType === 'dental' ? 'Dental' : 'Office'}
                               </span>
                             </td>
                             <td style={{ padding: '8px' }}>
@@ -1518,7 +1517,7 @@ function SupplyViewSystemContent() {
                 transition: 'all 0.3s ease'
               }}
             >
-              {loading ? '⏳ Submitting...' : '📦 Submit Order'}
+              {loading ? 'Submitting...' : '📦 Submit Order'}
             </button>
           </div>
         )}
