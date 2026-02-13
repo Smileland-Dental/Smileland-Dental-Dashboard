@@ -5,7 +5,6 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { doc, setDoc, collection, getDocs, getDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase.config";
 import { onAuthStateChanged } from 'firebase/auth';
-// Firebase 데이터 sanitization (prototype pollution 방지, 값 검증)
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 const MAX_STRING_LENGTH = 10000;
 
@@ -826,38 +825,6 @@ function SupplyManagerSystemContent() {
     };
   }, []);
 
-  // 보안 조치 활성화
-  useEffect(() => {
-    if (process.env.NODE_ENV === 'production') {
-      const handleKeydown = (e: KeyboardEvent) => {
-        if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
-          e.preventDefault();
-        }
-      };
-
-      const handlePopstate = (e: PopStateEvent) => {
-        e.preventDefault();
-        window.history.pushState(null, '', window.location.href);
-      };
-
-      const handleBeforeunload = (e: BeforeUnloadEvent) => {
-        e.preventDefault();
-        e.returnValue = 'Are you sure you want to leave?';
-        return 'Are you sure you want to leave?';
-      };
-
-      document.addEventListener('keydown', handleKeydown);
-      window.addEventListener('popstate', handlePopstate);
-      window.addEventListener('beforeunload', handleBeforeunload);
-
-      return () => {
-        document.removeEventListener('keydown', handleKeydown);
-        window.removeEventListener('popstate', handlePopstate);
-        window.removeEventListener('beforeunload', handleBeforeunload);
-      };
-    }
-  }, []);
-
   // 컴포넌트 언마운트 시 타이머 정리
   useEffect(() => {
     return () => {
@@ -997,11 +964,11 @@ function SupplyManagerSystemContent() {
     <div style={bodyStyle}>
       <div style={containerStyle}>
         {/* 헤더 */}
-        <h1 style={headerStyle}>📋 Supply Manager</h1>
+        <h1 style={headerStyle}>Supply Manager</h1>
 
         {/* Supply Type 선택 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>📋 Supply Type Selection</h2>
+          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>Supply Type Selection</h2>
           <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
@@ -1023,7 +990,7 @@ function SupplyManagerSystemContent() {
                 onChange={(e) => setSupplyType(e.target.value)}
                 style={{ margin: 0 }}
               />
-              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>🦷 Dental Supply</span>
+              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>Dental Supply</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
@@ -1034,7 +1001,7 @@ function SupplyManagerSystemContent() {
                 onChange={(e) => setSupplyType(e.target.value)}
                 style={{ margin: 0 }}
               />
-              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>📋 Office Supply</span>
+              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>Office Supply</span>
             </label>
           </div>
         </div>
@@ -1044,7 +1011,7 @@ function SupplyManagerSystemContent() {
         {supplyType !== 'order-request' && (
         <div style={sectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h2 style={{ color: '#0077B6', margin: 0 }}>➕ Add New Item</h2>
+            <h2 style={{ color: '#0077B6', margin: 0 }}>Add New Item</h2>
           </div>
           
           <div style={{ 
@@ -1189,7 +1156,7 @@ function SupplyManagerSystemContent() {
         {/* 엑셀 스타일 데이터 테이블 */}
         <div style={sectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h2 style={{ color: '#0077B6', margin: 0 }}>📊 {supplyTypeLabel} {supplyType === 'order-request' ? 'List' : 'Supply Items'}</h2>
+            <h2 style={{ color: '#0077B6', margin: 0 }}>{supplyTypeLabel} {supplyType === 'order-request' ? 'List' : 'Supply Items'}</h2>
             {supplyType !== 'order-request' && (
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
               <button
@@ -1225,8 +1192,6 @@ function SupplyManagerSystemContent() {
           {supplyType !== 'order-request' && (
           <>
             <div style={{ marginBottom: '20px' }}>
-              <h3 style={{ color: '#0077B6', marginBottom: '15px', fontSize: '18px' }}>🔍 Filter & Search</h3>
-              
               <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
                 {supplyType === 'dental' && (
                   <div style={{ flex: '1', minWidth: '200px' }}>
@@ -1296,7 +1261,7 @@ function SupplyManagerSystemContent() {
                 marginBottom: '15px',
                 textAlign: 'right'
               }}>
-                📊 {filteredItems.length} of {items.length} items
+                {filteredItems.length} of {items.length} items
                 {categoryFilter && ` • ${categoryFilter}`}
                 {sellerFilter && ` • ${sellerFilter}`}
                 {searchInput && ` • "${searchInput}"`}
@@ -1374,7 +1339,7 @@ function SupplyManagerSystemContent() {
                                     color: type === 'dental' ? '#0077B6' : '#495057'
                                   }}
                                 >
-                                  {type === 'dental' ? '🦷 Dental' : '📋 Office'}
+                                  {type === 'dental' ? 'Dental' : 'Office'}
                                 </span>
                               ))}
                             </div>
@@ -1439,7 +1404,7 @@ function SupplyManagerSystemContent() {
                                           color: item.supplyType === 'dental' ? '#0077B6' : '#495057',
                                           alignSelf: 'flex-start'
                                         }}>
-                                          {item.supplyType === 'dental' ? '🦷 Dental' : '📋 Office'}
+                                          {item.supplyType === 'dental' ? 'Dental' : 'Office'}
                                         </span>
                                       </div>
                                     </td>
@@ -1490,10 +1455,10 @@ function SupplyManagerSystemContent() {
                                                       item.status === 'cancelled' ? '#dc3545' : '#6c757d'
                                         }}
                                       >
-                                        <option value="pending">⏳ Requested</option>
-                                        <option value="processing">🔄 Processing</option>
-                                        <option value="completed">✅ Completed</option>
-                                        <option value="cancelled">❌ Cancelled</option>
+                                        <option value="pending">Requested</option>
+                                        <option value="processing">Processing</option>
+                                        <option value="completed">Completed</option>
+                                        <option value="cancelled">Cancelled</option>
                                       </select>
                                     </td>
                                   </tr>
