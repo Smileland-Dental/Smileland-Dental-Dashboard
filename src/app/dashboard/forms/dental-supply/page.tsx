@@ -220,24 +220,8 @@ function SupplyViewSystemContent() {
 
   // Office 선택 상태
   const [selectedOffice, setSelectedOffice] = useState('');
-  const [userOfficeBasedOptions, setUserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
+  const [userOfficeBasedOptions, setuserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
-  
-  // 세션 ID (브라우저 세션마다 고유)
-  const [sessionId] = useState(() => {
-    // 브라우저 환경에서만 sessionStorage 사용
-    if (typeof window !== 'undefined') {
-      // sessionStorage에서 기존 ID 가져오거나 새로 생성
-      let id = sessionStorage.getItem('dental-supply-session-id');
-      if (!id) {
-        id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        sessionStorage.setItem('dental-supply-session-id', id);
-      }
-      return id;
-    }
-    // 서버 사이드에서는 임시 ID 생성
-    return `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-  });
   
   // 현재 선택된 오피스의 orderQuantities
   const orderQuantities = orderQuantitiesByOffice[selectedOffice] || {};
@@ -253,36 +237,20 @@ function SupplyViewSystemContent() {
     
     // 임시 저장된 quantity 불러오기
     try {
-      const draftDoc = await getDocs(collection(db, 'office-draft-orders'));
-      const currentDraft = draftDoc.docs.find(doc => {
-        const data = doc.data();
-        return data.office === office && data.sessionId === sessionId;
-      });
+      const draftRef = doc(db, 'office-draft-orders', office);
+      const draftSnap = await getDoc(draftRef);
       
-      if (currentDraft) {
-        const draftData = sanitizeData(currentDraft.data());
+      if (draftSnap.exists()) {
+        const draftData = sanitizeData(draftSnap.data());
         setOrderQuantitiesByOffice(prev => ({
           ...prev,
           [office]: draftData.quantities || {}
         }));
       }
-      
-      // 같은 오피스의 다른 세션 draft들은 삭제 (오래된 draft 정리)
-      const oldDrafts = draftDoc.docs.filter(doc => {
-        const data = doc.data();
-        return data.office === office && data.sessionId !== sessionId;
-      });
-      for (const oldDraft of oldDrafts) {
-        try {
-          await deleteDoc(doc(db, 'office-draft-orders', oldDraft.id));
-        } catch (err) {
-          // 삭제 실패 무시
-        }
-      }
     } catch (error) {
       // 로드 실패 무시
     }
-  }, [sessionId]);
+  }, []);
   
   // debounce 타이머 저장
   const quantityTimersRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
@@ -413,7 +381,7 @@ function SupplyViewSystemContent() {
 
       setItems(requestsList);
     } catch (error) {
-      alert('❌ 주문 내역 로드 중 오류가 발생했습니다.');
+      alert('❌ Error occured.');
     } finally {
       setLoading(false);
     }
@@ -502,38 +470,6 @@ function SupplyViewSystemContent() {
     loadAllItems();
   }, [loadAllItems]);
 
-  // 보안 조치 활성화
-  useEffect(() => {
-    if (process.env.NODE_ENV === 'production') {
-      const handleKeydown = (e: KeyboardEvent) => {
-        if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
-          e.preventDefault();
-        }
-      };
-
-      const handlePopstate = (e: PopStateEvent) => {
-        e.preventDefault();
-        window.history.pushState(null, '', window.location.href);
-      };
-
-      const handleBeforeunload = (e: BeforeUnloadEvent) => {
-        e.preventDefault();
-        e.returnValue = 'Are you sure you want to leave?';
-        return 'Are you sure you want to leave?';
-      };
-
-      document.addEventListener('keydown', handleKeydown);
-      window.addEventListener('popstate', handlePopstate);
-      window.addEventListener('beforeunload', handleBeforeunload);
-
-      return () => {
-        document.removeEventListener('keydown', handleKeydown);
-        window.removeEventListener('popstate', handlePopstate);
-        window.removeEventListener('beforeunload', handleBeforeunload);
-      };
-    }
-  }, []);
-
   // 컴포넌트 마운트 시 사용자 인증, role 확인 및 office_based 기반 오피스 자동 선택
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
@@ -567,15 +503,15 @@ function SupplyViewSystemContent() {
 
         // office_based 처리: 배열이거나 단일 값일 수 있음
         if (userData?.office_based) {
-          const officeBasedArray = Array.isArray(userData.office_based) 
+          const OfficeBasedArray = Array.isArray(userData.office_based) 
             ? userData.office_based 
             : [userData.office_based];
           
           // officeOptions에 포함된 값들만 필터링
-          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+          const validOptions = OfficeBasedArray.filter((g: string) => officeOptions.includes(g));
           
           if (validOptions.length > 0) {
-            setUserOfficeBasedOptions(validOptions);
+            setuserOfficeBasedOptions(validOptions);
             // 단일 값이면 자동 선택 (비밀번호 없이)
             if (validOptions.length === 1) {
               setSelectedOffice(validOptions[0]);
@@ -618,11 +554,9 @@ function SupplyViewSystemContent() {
             ...editingValues
           };
           // 동기적으로 Firebase에 저장 (async 불가능하므로 best effort)
-          const draftId = `${office}-${sessionId}`;
-          const draftRef = doc(db, 'office-draft-orders', draftId);
+          const draftRef = doc(db, 'office-draft-orders', office);
           const draftData = sanitizeData({
             office: office,
-            sessionId: sessionId,
             quantities: updatedQuantities,
             lastUpdated: new Date().toISOString()
           });
@@ -635,7 +569,7 @@ function SupplyViewSystemContent() {
         clearTimeout(quantityTimersRef.current[key]);
       });
     };
-  }, [selectedOffice, editingQuantitiesByOffice, orderQuantitiesByOffice, sessionId]);
+  }, [selectedOffice, editingQuantitiesByOffice, orderQuantitiesByOffice]);
 
   // supply type 변경 시 편집 중인 값 초기화 (office 변경은 유지)
   useEffect(() => {
@@ -714,47 +648,29 @@ function SupplyViewSystemContent() {
     if (!office) return;
     
     try {
-      const draftDoc = await getDocs(collection(db, 'office-draft-orders'));
-      const currentDraft = draftDoc.docs.find(doc => {
-        const data = doc.data();
-        return data.office === office && data.sessionId === sessionId;
-      });
+      const draftRef = doc(db, 'office-draft-orders', office);
+      const draftSnap = await getDoc(draftRef);
       
-      if (currentDraft) {
-        const draftData = sanitizeData(currentDraft.data());
+      if (draftSnap.exists()) {
+        const draftData = sanitizeData(draftSnap.data());
         setOrderQuantitiesByOffice(prev => ({
           ...prev,
           [office]: draftData.quantities || {}
         }));
       }
-      
-      // 같은 오피스의 다른 세션 draft들은 삭제 (오래된 draft 정리)
-      const oldDrafts = draftDoc.docs.filter(doc => {
-        const data = doc.data();
-        return data.office === office && data.sessionId !== sessionId;
-      });
-      for (const oldDraft of oldDrafts) {
-        try {
-          await deleteDoc(doc(db, 'office-draft-orders', oldDraft.id));
-        } catch (err) {
-          // 삭제 실패 무시
-        }
-      }
     } catch (error) {
       // 로드 실패 무시
     }
-  }, [sessionId]);
+  }, []);
 
   // Firebase에 오피스별 임시 quantity 저장
   const saveDraftQuantities = useCallback(async (office: string, quantities: { [itemId: string]: string | number }) => {
     if (!office || office === 'temp') return;
     
     try {
-      const draftId = `${office}-${sessionId}`;
-      const draftRef = doc(db, 'office-draft-orders', draftId);
+      const draftRef = doc(db, 'office-draft-orders', office);
       const draftData = sanitizeData({
         office: office,
-        sessionId: sessionId,
         quantities: quantities,
         lastUpdated: new Date().toISOString()
       });
@@ -762,7 +678,7 @@ function SupplyViewSystemContent() {
     } catch (error) {
       // 저장 실패 무시
     }
-  }, [sessionId]);
+  }, []);
 
   // Order Quantity 변경 핸들러 (편집 중인 값을 별도 관리 + Firebase에 저장)
   const handleQuantityChange = useCallback((itemId: string, value: string) => {
@@ -906,10 +822,9 @@ function SupplyViewSystemContent() {
       // 페이지 초기화
       setCurrentPage(1);
       
-      // Firebase에서 임시 저장 삭제 (현재 세션의 draft만)
+      // Firebase에서 임시 저장 삭제
       try {
-        const draftId = `${selectedOffice}-${sessionId}`;
-        const draftRef = doc(db, 'office-draft-orders', draftId);
+        const draftRef = doc(db, 'office-draft-orders', selectedOffice);
         await deleteDoc(draftRef);
       } catch (error) {
         // Draft 삭제 실패해도 주문은 완료됐으므로 에러 무시
@@ -920,7 +835,7 @@ function SupplyViewSystemContent() {
     } finally {
       setLoading(false);
     }
-  }, [selectedOffice, dentalItems, officeItems, orderQuantitiesByOffice, editingQuantitiesByOffice, sessionId]);
+  }, [selectedOffice, dentalItems, officeItems, orderQuantitiesByOffice, editingQuantitiesByOffice]);
 
   // 스타일 정의
   const containerStyle = {
@@ -1191,7 +1106,8 @@ function SupplyViewSystemContent() {
             </div>
           </div>
           
-          {/* 필터 컨트롤 */}
+          {/* 필터 컨트롤 - Processing Request가 아닐 때만 표시 */}
+          {supplyType !== 'processing-request' && (
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
             {supplyType === 'dental' && (
               <div style={{ flex: '1', minWidth: '200px' }}>
@@ -1254,6 +1170,7 @@ function SupplyViewSystemContent() {
               </button>
             </div>
           </div>
+          )}
           
           {loading ? (
             <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
