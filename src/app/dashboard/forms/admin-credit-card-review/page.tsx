@@ -89,15 +89,12 @@ const AdminCreditCardReview = () => {
       while (retryCount < maxRetries && !creditCardSnapshot) {
         try {
           creditCardSnapshot = await getDocs(collection(db, 'credit-card-receipts'));
-          console.log('✅ Firestore query successful for credit-card-receipts');
         } catch (firestoreError) {
           retryCount++;
-          console.error(`❌ Firestore query error (attempt ${retryCount}/${maxRetries}):`, firestoreError);
           
           if (retryCount < maxRetries) {
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
           } else {
-            console.error('Failed to load credit-card-receipts after all retries');
             break;
           }
         }
@@ -142,15 +139,12 @@ const AdminCreditCardReview = () => {
       while (retryCount < maxRetries && !reimbursementSnapshot) {
         try {
           reimbursementSnapshot = await getDocs(collection(db, 'reimbursement-requests'));
-          console.log('✅ Firestore query successful for reimbursement-requests');
         } catch (firestoreError) {
           retryCount++;
-          console.error(`❌ Firestore query error (attempt ${retryCount}/${maxRetries}):`, firestoreError);
           
           if (retryCount < maxRetries) {
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
           } else {
-            console.error('Failed to load reimbursement-requests after all retries');
             break;
           }
         }
@@ -161,7 +155,6 @@ const AdminCreditCardReview = () => {
           const data: any = doc.data();
           // Check if data.data exists and is an array
           if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
-            console.warn('⚠️ Skipping reimbursement request with no data:', doc.id);
             return;
           }
           
@@ -229,7 +222,6 @@ const AdminCreditCardReview = () => {
       submissions.sort((a: Submission, b: Submission) => b.submittedAt.getTime() - a.submittedAt.getTime());
       setSubmissions(submissions);
     } catch (error) {
-      console.error('Error loading submissions:', error);
       alert('Error loading submissions: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
@@ -256,35 +248,15 @@ const AdminCreditCardReview = () => {
         // For reimbursement requests, cardNumber may be empty, so handle it differently
         const cardNumberPart = submission.cardNumber && submission.cardNumber.trim() !== '' ? `${submission.cardNumber}_` : '';
         submissionPrefix = `${submission.employeeName}_${cardNumberPart}${submission.submissionId}`;
-        console.log('🔍 Using submission ID for matching:', submission.submissionId);
       } else {
-        // No submission ID - cannot reliably match files, so don't load any
-        console.log('⚠️ No submission ID found, skipping file loading to avoid loading wrong files');
         setReceiptFiles([]);
         setLoadingFiles(false);
         return;
       }
       
-      console.log('🔍 Filtering files for submission:', {
-        employeeName: submission.employeeName,
-        cardNumber: submission.cardNumber,
-        submissionId: submission.submissionId,
-        prefix: submissionPrefix
-      });
-      
-      console.log('🔍 Total files in storage:', result.items.length);
-      console.log('🔍 All files in storage:');
-      result.items.forEach((item: any, index: number) => {
-        console.log(`🔍   ${index + 1}. ${item.name}`);
-      });
-      
       for (const itemRef of result.items) {
-        console.log('🔍 Checking file:', itemRef.name);
-        console.log('🔍 Against prefix:', submissionPrefix);
-        
         // Check if file starts with the submission prefix
         const matches = itemRef.name.startsWith(submissionPrefix);
-        console.log(`🔍 File "${itemRef.name}" matches prefix "${submissionPrefix}": ${matches}`);
         
         if (matches) {
           try {
@@ -295,13 +267,9 @@ const AdminCreditCardReview = () => {
               fullPath: itemRef.fullPath,
               purchaseNumber: 0 // Will be set later when grouping
             });
-            console.log('✅ Found matching file:', itemRef.name);
           } catch (urlError) {
-            console.warn('Error getting download URL for file:', itemRef.name, urlError instanceof Error ? urlError.message : 'Unknown error');
             // Continue with other files even if one fails
           }
-        } else {
-          console.log('❌ File does not match prefix:', itemRef.name);
         }
       }
       
@@ -311,48 +279,26 @@ const AdminCreditCardReview = () => {
       // Group files by purchase number
       // New filename pattern: Name_CardNumber_Timestamp_purchaseX_SequenceNumber_Filename
       files.forEach((file: ReceiptFile) => {
-        console.log('🔍 Processing file:', file.name);
-        
         // Split filename and find purchase number
         const parts = file.name.split('_');
         let purchaseNum = 0;
         
         for (let i = 0; i < parts.length; i++) {
-          console.log(`🔍 Checking part ${i}: "${parts[i]}"`);
-          
           // Check if this part contains "purchase" followed by a number
           const purchaseMatch = parts[i].match(/purchase(\d+)/i);
           if (purchaseMatch) {
             const potentialPurchaseNum = parseInt(purchaseMatch[1], 10);
-            console.log(`🔍 Found purchase match: "${purchaseMatch[0]}" -> number: ${potentialPurchaseNum}`);
             if (!isNaN(potentialPurchaseNum) && potentialPurchaseNum > 0) {
               purchaseNum = potentialPurchaseNum;
-              console.log(`🔍 Set purchase number to: ${purchaseNum}`);
               break;
             }
           }
         }
         
-        console.log('📁 File grouped under purchase:', purchaseNum, 'from parts:', parts);
-        console.log('📁 Purchase number found:', purchaseNum, 'for file:', file.name);
-        
         if (!filesByPurchase[purchaseNum]) {
           filesByPurchase[purchaseNum] = [];
         }
         filesByPurchase[purchaseNum].push(file);
-      });
-      
-      console.log('📁 Files grouped by purchase:', filesByPurchase);
-      console.log('📁 Total files found:', files.length);
-      console.log('📁 Purchase groups:', Object.keys(filesByPurchase));
-      
-      // Log details about each purchase group
-      Object.keys(filesByPurchase).forEach((purchaseNum: string) => {
-        const purchaseNumInt = parseInt(purchaseNum, 10);
-        console.log(`📁 Purchase ${purchaseNum}: ${filesByPurchase[purchaseNumInt].length} files`);
-        filesByPurchase[purchaseNumInt].forEach((file: ReceiptFile) => {
-          console.log(`📁   - ${file.name}`);
-        });
       });
       
       // Sort files within each purchase group by sequence number
@@ -389,10 +335,7 @@ const AdminCreditCardReview = () => {
       files.push(...sortedFiles);
       
       setReceiptFiles(files);
-      console.log('📁 Loaded receipt files:', files.length);
     } catch (error) {
-      console.error('Error loading receipt files:', error);
-      console.log('📁 CORS error or other issue - continuing without receipt files');
       setReceiptFiles([]);
     } finally {
       setLoadingFiles(false);
@@ -421,36 +364,23 @@ const AdminCreditCardReview = () => {
     }
   }, [selectedSubmission]);
 
-  // Load saved signature to canvas (Elements 탭에서 URL 숨기기)
+  // Load saved signature to canvas
   useEffect(() => {
-    const loadSavedSignature = async () => {
-      if (selectedSubmission?.signatureURL && savedSignatureCanvasRef.current) {
-        const canvas = savedSignatureCanvasRef.current;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+    if (selectedSubmission?.signatureURL && savedSignatureCanvasRef.current) {
+      const canvas = savedSignatureCanvasRef.current;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
 
-        // White background
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        try {
-          // Use API proxy to avoid CORS and hide URL
-          const response = await fetch(`/api/get-signature-image?url=${encodeURIComponent(selectedSubmission.signatureURL)}`);
-          if (!response.ok) throw new Error('Failed to fetch');
-          
-          const data = await response.json();
-          const img = new Image();
-          img.onload = () => {
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          };
-          img.src = data.dataUrl;
-        } catch (error) {
-          // Failed to load signature
-        }
-      }
-    };
-
-    loadSavedSignature();
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      };
+      img.src = selectedSubmission.signatureURL;
+    }
   }, [selectedSubmission]);
 
   // Filter submissions based on date range and office
@@ -489,15 +419,6 @@ const AdminCreditCardReview = () => {
           submissionDateStr = `${year}-${month}-${day}`;
         }
         
-        console.log('Filtering submission:', {
-          date: submission.date,
-          submittedAt: submission.submittedAt,
-          submissionDateStr,
-          filterDateFrom,
-          filterDateTo,
-          submission: submission.employeeName
-        });
-        
         // If only From date is set
         if (filterDateFrom && !filterDateTo) {
           return submissionDateStr >= filterDateFrom;
@@ -524,7 +445,6 @@ const AdminCreditCardReview = () => {
       );
     }
 
-    console.log('Filtered results:', filtered.length, 'of', submissions.length);
     return filtered;
   };
 
@@ -649,7 +569,6 @@ const AdminCreditCardReview = () => {
       alert('✅ Added on Numbers checked successfully!');
       
     } catch (error) {
-      console.error('Error checking Added on Numbers:', error);
       alert('Error checking Added on Numbers: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
@@ -737,21 +656,17 @@ const AdminCreditCardReview = () => {
           const sanitizedData = sanitizeFirebaseDataClient(updateData);
           await setDoc(docRef, sanitizedData, { merge: true });
           firestoreSuccess = true;
-          console.log('✅ Firestore update successful (Not Approved)');
         } catch (firestoreError) {
           retryCount++;
-          console.error(`❌ Firestore error (attempt ${retryCount}/${maxRetries}):`, firestoreError);
           
           if (retryCount < maxRetries) {
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-          } else {
-            console.warn('⚠️ Firestore update failed after all retries');
           }
         }
       }
       
       // Generate PDF with rejection status (saveToExcel handles not approved status via Firestore data)
-      await saveToExcel(true); // Pass notApproved flag
+      await saveToExcel();
       
       alert('❌ Reimbursement request marked as Not Approved. Signature saved and PDF generated.');
       
@@ -766,7 +681,6 @@ const AdminCreditCardReview = () => {
       loadSubmissions();
       
     } catch (error) {
-      console.error('Error processing Not Approved:', error);
       alert('Error processing Not Approved: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
@@ -854,17 +768,11 @@ const AdminCreditCardReview = () => {
           const sanitizedData = sanitizeFirebaseDataClient(updateData);
           await setDoc(docRef, sanitizedData, { merge: true });
           firestoreSuccess = true;
-          console.log('✅ Firestore update successful');
         } catch (firestoreError) {
           retryCount++;
-          console.error(`❌ Firestore error (attempt ${retryCount}/${maxRetries}):`, firestoreError);
           
           if (retryCount < maxRetries) {
-            // Wait before retry
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-          } else {
-            console.warn('⚠️ Firestore update failed after all retries, continuing with PDF generation...');
-            // Continue without Firestore update - signature is still saved in Storage
           }
         }
       }
@@ -872,7 +780,7 @@ const AdminCreditCardReview = () => {
       // Generate PDF and save to Excel (without opening print dialog)
       await saveToExcel();
       
-      alert('✅ Dr. Oh approved! Signature saved and PDF generated. Data saved to Excel file.');
+      alert('✅ Approved! Signature saved and PDF generated. Data saved to Excel file.');
       
       // Close modal and refresh submissions
       setSelectedSubmission(null);
@@ -885,129 +793,7 @@ const AdminCreditCardReview = () => {
       loadSubmissions();
       
     } catch (error) {
-      console.error('Error approving submission:', error);
       alert('Error approving submission: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Generate PDF and save to Excel (without opening print dialog)
-  const generatePDFAndSaveToExcel = async () => {
-    try {
-      // Save to Excel file (which will generate PDF and include PDF link)
-      await saveToExcel();
-      
-      // DO NOT delete data automatically - only save to Excel
-      console.log('✅ PDF generated and saved to Excel successfully');
-    } catch (error) {
-      console.error('Error generating PDF and saving to Excel:', error);
-      throw error;
-    }
-  };
-
-  // Generate PDF with saved signature and delete all data
-  const generatePDF = async () => {
-    if (!selectedSubmission) {
-      alert('No submission selected');
-      return;
-    }
-    
-    console.log('🔵 [generatePDF] Function called');
-    // Check if signature exists (either saved in current session or already saved in submission)
-    const signatureToUse = savedSignature || selectedSubmission?.signatureURL;
-    
-    if (!signatureToUse) {
-      alert('Please save a signature first before generating PDF.');
-      return;
-    }
-
-    try {
-      setLoading(true);
-      
-      // Get signature data - prefer current session signature, fallback to saved signature URL
-      let signatureData: string | null = null;
-      
-      // Check if we have a current session signature
-      if (signatureToUse && signatureToUse.trim() !== '') {
-        signatureData = signatureToUse;
-      }
-      // If no current session signature, try to get from saved signature URL
-      else if (selectedSubmission?.signatureURL && selectedSubmission.signatureURL.trim() !== '') {
-        try {
-          // Use API proxy to avoid CORS issues
-          const response = await fetch(`/api/get-signature-image?url=${encodeURIComponent(selectedSubmission.signatureURL)}`);
-          
-          if (!response.ok) {
-            throw new Error('Failed to fetch signature image');
-          }
-          
-          const data = await response.json();
-          signatureData = data.dataUrl;
-        } catch (error) {
-          signatureData = selectedSubmission.signatureURL; // Fallback to URL
-        }
-      } else {
-        // No signature data available
-      }
-      
-      console.log('📄 Final signature data type:', typeof signatureData);
-      console.log('📄 Final signature data length:', signatureData ? signatureData.length : 0);
-      console.log('📄 Final signature data start:', signatureData ? signatureData.substring(0, 50) + '...' : 'None');
-      console.log('📄 Final signature data value:', signatureData);
-      console.log('📄 About to send to API:', {
-        signature: signatureData,
-        signatureType: typeof signatureData,
-        isNull: signatureData === null,
-        isUndefined: signatureData === undefined,
-        isString: typeof signatureData === 'string',
-        isEmpty: signatureData === '',
-        isMissing: signatureData === 'Missing'
-      });
-      
-      // Generate PDF (use appropriate API endpoint based on form type)
-      const pdfApiEndpoint = selectedSubmission.formType === 'reimbursement' ? '/api/generate-reimbursement-pdf' : '/api/generate-credit-card-pdf';
-      const pdfResponse = await fetch(pdfApiEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: selectedSubmission.employeeName,
-          cardNumber: selectedSubmission.cardNumber,
-          date: selectedSubmission.date,
-          office: selectedSubmission.office,
-          purchases: selectedSubmission.purchases,
-          filesData: receiptFiles, // Include receipt files with URLs
-          signature: signatureData,
-          // Include adjustment info and approval status for reimbursement
-          amountAdjustedTo: selectedSubmission.formType === 'reimbursement' ? (selectedSubmission.amountAdjustedTo || amountAdjustedTo || '') : '',
-          reasonForAdjustment: selectedSubmission.formType === 'reimbursement' ? (selectedSubmission.reasonForAdjustment || reasonForAdjustment || '') : '',
-          approved: selectedSubmission.formType === 'reimbursement' ? (selectedSubmission.approved !== undefined ? selectedSubmission.approved : true) : undefined
-        })
-      });
-
-      const pdfResult = await pdfResponse.json();
-      
-      if (pdfResult.success) {
-        // PDF generated successfully (no print dialog)
-        console.log('✅ PDF generated successfully');
-        
-        // Save to Excel file (optional)
-        try {
-          await saveToExcel();
-        } catch (error) {
-          console.log('Excel save failed, continuing with PDF generation');
-        }
-        
-        // DO NOT delete data automatically - only generate PDF
-        
-      } else {
-        throw new Error(pdfResult.error || 'PDF generation failed');
-      }
-    } catch (error) {
-      console.error('Error generating PDF:', error);
-      alert('Error generating PDF: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
     }
@@ -1035,10 +821,9 @@ const AdminCreditCardReview = () => {
         
         alert('📊 CSV file downloaded successfully!');
       } catch (error) {
-        alert('❌ CSV file not found. Please generate a PDF first to create the CSV file.');
+        alert('❌ CSV file not found. Please approve a submission first to create the CSV file.');
       }
     } catch (error) {
-      console.error('Error downloading CSV file:', error);
       alert('Error downloading CSV file: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
@@ -1046,11 +831,8 @@ const AdminCreditCardReview = () => {
   };
 
   // Save data to Excel file (client-side)
-  const saveToExcel = async (notApproved: boolean = false) => {
-    console.log('🟡 [saveToExcel] Function called');
-    
+  const saveToExcel = async () => {
     if (!selectedSubmission) {
-      console.log('📊 No submission selected');
       return;
     }
     
@@ -1061,16 +843,8 @@ const AdminCreditCardReview = () => {
     const hasSignatureURL = submission.signatureURL && submission.signatureURL.trim() !== '';
     const hasCurrentSignature = (savedSignature && savedSignature.trim() !== '') || (signature && signature.trim() !== '');
     
-    console.log('📊 Signature check:', {
-      hasSignatureURL,
-      hasCurrentSignature,
-      signatureURL: submission.signatureURL,
-      savedSignature: savedSignature ? 'Present' : 'Missing',
-      currentSignature: signature ? 'Present' : 'Missing'
-    });
-    
     if (!hasSignatureURL && !hasCurrentSignature) {
-      alert('❌ This submission has no signature. Please sign first before generating PDF.');
+      alert('❌ This submission has no signature. Please sign first before saving.');
       return;
     }
     
@@ -1079,179 +853,6 @@ const AdminCreditCardReview = () => {
         return sum + (parseFloat(purchase.amount) || 0);
       }, 0);
 
-      // Generate PDF and save to Firebase Storage first
-      // Build filesData from submission data instead of receiptFiles state
-      const filesData: Array<{name: string, url: string, fullPath: string}> = [];
-      for (const purchase of submission.purchases) {
-        if (purchase.receiptFiles) {
-          let receiptFiles: string[] = [];
-          
-          // Handle different data types
-          if (typeof purchase.receiptFiles === 'string') {
-            const filesString: string = purchase.receiptFiles;
-            receiptFiles = filesString.split(', ');
-          } else if (Array.isArray(purchase.receiptFiles)) {
-            receiptFiles = purchase.receiptFiles;
-          }
-          
-          for (const fileName of receiptFiles) {
-            if (fileName && typeof fileName === 'string' && fileName.trim()) {
-              try {
-                // Use appropriate storage path based on form type
-                const storagePath = submission.formType === 'reimbursement' ? 'reimbursement-receipts/' : 'receipts/';
-                const fileRef = ref(storage, `${storagePath}${fileName.trim()}`);
-                const downloadURL = await getDownloadURL(fileRef);
-                filesData.push({
-                  name: fileName.trim(),
-                  url: downloadURL,
-                  fullPath: `${storagePath}${fileName.trim()}`
-                });
-              } catch (error) {
-                console.warn(`⚠️ Could not get download URL for ${fileName}:`, error);
-              }
-            }
-          }
-        }
-      }
-      
-      console.log('📄 Generating PDF with receipt files:', filesData.length);
-      console.log('📄 Files data:', filesData);
-      console.log('📄 Saved signature:', savedSignature);
-      console.log('📄 Saved signature type:', typeof savedSignature);
-      console.log('📄 Selected submission signature URL:', selectedSubmission?.signatureURL);
-      console.log('📄 Selected submission data:', {
-        hasSignatureURL: !!selectedSubmission?.signatureURL,
-        signatureURL: selectedSubmission?.signatureURL,
-        hasSignatureSavedAt: !!selectedSubmission?.signatureSavedAt,
-        signatureSavedAt: selectedSubmission?.signatureSavedAt
-      });
-      
-      // Get signature data - prefer current session signature, fallback to saved signature URL
-      let signatureData: string | null = null;
-      
-      // Check if we have a current session signature (prefer signature over savedSignature)
-      if (signature && signature.trim() !== '') {
-        signatureData = signature;
-      }
-      else if (savedSignature && savedSignature.trim() !== '') {
-        signatureData = savedSignature;
-      }
-      // If no current session signature, try to get from saved signature URL
-      else if (selectedSubmission?.signatureURL && selectedSubmission.signatureURL.trim() !== '') {
-        try {
-          // Use API proxy to avoid CORS issues
-          const response = await fetch(`/api/get-signature-image?url=${encodeURIComponent(selectedSubmission.signatureURL)}`);
-          
-          if (!response.ok) {
-            throw new Error('Failed to fetch signature image');
-          }
-          
-          const data = await response.json();
-          signatureData = data.dataUrl;
-        } catch (error) {
-          signatureData = selectedSubmission.signatureURL; // Fallback to URL
-        }
-      } else {
-        // No signature data available
-      }
-      
-      console.log('📄 Final signature data type:', typeof signatureData);
-      console.log('📄 Final signature data length:', signatureData ? signatureData.length : 0);
-      console.log('📄 Final signature data start:', signatureData ? signatureData.substring(0, 50) + '...' : 'None');
-      console.log('📄 Final signature data value:', signatureData);
-      console.log('📄 About to send to API:', {
-        signature: signatureData,
-        signatureType: typeof signatureData,
-        isNull: signatureData === null,
-        isUndefined: signatureData === undefined,
-        isString: typeof signatureData === 'string',
-        isEmpty: signatureData === '',
-        isMissing: signatureData === 'Missing'
-      });
-      
-      // Use appropriate API endpoint based on form type
-      const pdfApiEndpoint = submission.formType === 'reimbursement' ? '/api/generate-reimbursement-pdf' : '/api/generate-credit-card-pdf';
-      const pdfResponse = await fetch(pdfApiEndpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: submission.employeeName,
-          cardNumber: submission.cardNumber,
-          date: submission.date,
-          office: submission.office,
-          purchases: submission.purchases,
-          filesData: filesData, // Built from submission data
-          signature: signatureData,
-          // Include adjustment info and approval status for reimbursement
-          amountAdjustedTo: submission.formType === 'reimbursement' ? (submission.amountAdjustedTo || amountAdjustedTo || '') : '',
-          reasonForAdjustment: submission.formType === 'reimbursement' ? (submission.reasonForAdjustment || reasonForAdjustment || '') : '',
-          approved: submission.formType === 'reimbursement' ? (notApproved ? false : (submission.approved !== undefined ? submission.approved : true)) : undefined
-        })
-      });
-
-      console.log('📄 PDF API response status:', pdfResponse.status);
-
-      const pdfResult = await pdfResponse.json();
-      let pdfDownloadURL = '';
-
-      console.log('📄 PDF generation result:', pdfResult);
-      console.log('📄 PDF success status:', pdfResult.success);
-      console.log('📄 PDF error message:', pdfResult.error);
-
-      if (pdfResult.success) {
-        // Save PDF to Firebase Storage (with error handling)
-        try {
-          const pdfBlob = new Blob([pdfResult.html], { type: 'text/html' });
-          const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-          // For reimbursement requests, cardNumber may be empty, so handle it differently
-          const cardNumberPart = submission.cardNumber && submission.cardNumber.trim() !== '' 
-            ? `${submission.cardNumber}_` 
-            : '';
-          const pdfFileName = `pdfs/${submission.employeeName}_${cardNumberPart}${timestamp}.html`;
-          const pdfRef = ref(storage, pdfFileName);
-          await uploadBytes(pdfRef, pdfBlob);
-          pdfDownloadURL = await getDownloadURL(pdfRef);
-          console.log('📄 PDF saved to Firebase Storage:', pdfDownloadURL);
-          console.log('📄 PDF download URL set to:', pdfDownloadURL);
-          
-          // Save PDF URL to Firestore for future Excel generation
-          try {
-            // Use appropriate collection based on form type
-            const collectionName = submission.formType === 'reimbursement' ? 'reimbursement-requests' : 'credit-card-receipts';
-            const docRef = doc(db, collectionName, submission.id);
-            await setDoc(docRef, {
-              pdfURL: pdfDownloadURL,
-              pdfGeneratedAt: new Date()
-            }, { merge: true });
-            console.log('📄 PDF URL saved to Firestore');
-          } catch (firestoreError) {
-            console.warn('⚠️ Could not save PDF URL to Firestore:', firestoreError);
-          }
-        } catch (error) {
-          console.error('Error saving PDF to Storage (non-critical):', error);
-          // Continue without PDF link if storage fails
-          pdfDownloadURL = '';
-          console.log('📄 PDF download URL set to empty due to storage error');
-        }
-      } else {
-        console.error('PDF generation failed:', pdfResult.error);
-        // Use signature URL as fallback if PDF generation fails
-        pdfDownloadURL = selectedSubmission?.signatureURL || '';
-        console.log('📄 PDF download URL set to signature URL as fallback:', pdfDownloadURL);
-      }
-
-      // Build cumulative CSV from Firestore data (avoid CORS issues)
-      console.log('📊 Building cumulative CSV from Firestore data...');
-      console.log('📊 Current submission:', {
-        id: submission.id,
-        employeeName: submission.employeeName,
-        office: submission.office,
-        cardNumber: submission.cardNumber,
-        purchases: submission.purchases.length
-      });
-      
       // Define CSV file reference (use combined file for both types)
       const mainFileName = 'all-submissions.csv';
       const mainFileRef = ref(storage, `excel/${mainFileName}`);
@@ -1304,8 +905,6 @@ const AdminCreditCardReview = () => {
           }
         });
         
-        console.log('📊 Found', processedSubmissions.length, 'processed submissions in Firestore');
-        
         // Add all processed submissions to CSV data (excluding current submission)
         for (const submission of processedSubmissions) {
           // Skip current submission to avoid duplication
@@ -1339,15 +938,9 @@ const AdminCreditCardReview = () => {
             });
         }
         
-        console.log('📊 Built cumulative CSV with', existingData.length, 'total rows');
-        
       } catch (error) {
-        console.error('Error building cumulative CSV:', error);
-        console.log('📊 Using header-only CSV due to error');
       }
 
-      // Add new data to existing data
-      console.log('📊 Creating new rows with PDF download URL:', pdfDownloadURL);
       // Use submission constant defined at function start
       const currentSubmission = selectedSubmission;
       if (!currentSubmission) return;
@@ -1366,19 +959,12 @@ const AdminCreditCardReview = () => {
         index === 0 ? sanitizeCSVCell(`$${totalAmount.toFixed(2)}`) : '',
         sanitizeCSVCell(new Date().toLocaleDateString()),
         sanitizeCSVCell('Approved & PDF Generated'),
-        index === 0 ? sanitizeCSVCell(pdfDownloadURL) : '' // PDF URL
+        ''
       ]);
 
       // Combine existing and new data
       const updatedData = [...existingData, ...newRows];
       
-      console.log('📊 Before combining:');
-      console.log('📊 Existing data rows:', existingData.length);
-      console.log('📊 New data rows:', newRows.length);
-      console.log('📊 Total after combining:', updatedData.length);
-      console.log('📊 New rows content:', newRows);
-      console.log('📊 PDF URL in new rows:', newRows[0] ? newRows[0][11] : 'No rows');
-
       // Convert to CSV string with proper escaping (secure version)
       // sanitizeCSVCell already handles CSV injection protection
       // For extra safety, ensure proper CSV formatting with quotes when needed
@@ -1399,22 +985,12 @@ const AdminCreditCardReview = () => {
       // Create blob and upload to Firebase Storage (like credit-card-receipts.tsx)
       try {
         const blob = new Blob([csvString], { type: 'text/csv' });
-        console.log('📊 Uploading cumulative CSV file...');
-        
-        // Simple upload like credit-card-receipts.tsx
         await uploadBytes(mainFileRef, blob);
-        
-        console.log('✅ Cumulative CSV file updated successfully!');
-        console.log('📊 Total rows in file:', updatedData.length);
-        console.log('📊 Added', newRows.length, 'new rows for submission:', currentSubmission.employeeName);
-        console.log('📄 PDF link included:', pdfDownloadURL ? 'Yes' : 'No');
-        console.log('📊 This CSV now contains ALL processed submissions');
       } catch (error) {
-        console.error('Error uploading CSV file:', error);
         // Continue execution even if CSV upload fails
       }
       
-      // 🗑️ PDF 생성 및 CSV 저장 완료 후 Storage에서 서명 삭제
+      // CSV 저장 완료 후 Storage에서 서명 삭제
       if (selectedSubmission?.signatureURL && selectedSubmission.signatureURL.startsWith('https://')) {
         try {
           const url = new URL(selectedSubmission.signatureURL);
@@ -1431,8 +1007,6 @@ const AdminCreditCardReview = () => {
       }
       
     } catch (error) {
-      console.error('Error saving CSV file:', error);
-      // CSV 저장 실패해도 PDF 생성은 계속 진행
     }
   };
 
@@ -1512,24 +1086,15 @@ const AdminCreditCardReview = () => {
       }
       
       // Delete Storage files for completed submissions FIRST
-      console.log('🗑️ Deleting Storage files for completed submissions only...');
       
       try {
-        console.log(`🗑️ Found ${completedSubmissions.length} completed submissions to clean up files for`);
-        
         // Delete files for each completed submission
         for (const submission of completedSubmissions) {
           try {
-            // Delete receipt files for this submission (now safe to delete since PDF uses Base64)
-            console.log(`🗑️ Processing submission: ${submission.employeeName} (${submission.cardNumber || 'N/A'}) - ${submission.formType}`);
-            console.log(`🗑️ Submission data:`, submission.data);
-            
             // Determine storage path based on form type
             const receiptStoragePath = submission.formType === 'reimbursement' ? 'reimbursement-receipts/' : 'receipts/';
             
             for (const purchase of submission.data) {
-              console.log(`🗑️ Processing purchase:`, purchase);
-              
               if (purchase.receiptFiles) {
                 let receiptFiles: string[] = [];
                 
@@ -1540,21 +1105,15 @@ const AdminCreditCardReview = () => {
                   receiptFiles = purchase.receiptFiles;
                 }
                 
-                console.log(`🗑️ Receipt files to delete:`, receiptFiles);
-                
                 for (const fileName of receiptFiles) {
                   if (fileName && typeof fileName === 'string' && fileName.trim()) {
                     const receiptRef = ref(storage, `${receiptStoragePath}${fileName.trim()}`);
                     try {
                       await deleteObject(receiptRef);
-                      console.log(`🗑️ Deleted receipt: ${fileName}`);
                     } catch (error) {
-                      console.warn(`⚠️ Could not delete receipt ${fileName}:`, error);
                     }
                   }
                 }
-              } else {
-                console.log(`🗑️ No receipt files found for purchase:`, purchase);
               }
             }
             
@@ -1565,27 +1124,18 @@ const AdminCreditCardReview = () => {
                 ? `${submission.cardNumber}_` 
                 : '';
               const signatureSearchPattern = `${submission.employeeName}_${cardNumberPart}`;
-              console.log(`🗑️ Looking for signature files matching: ${signatureSearchPattern}`);
               const signaturesRef = ref(storage, 'signatures/');
               const signaturesList = await listAll(signaturesRef);
-              console.log(`🗑️ Found ${signaturesList.items.length} signature files in storage`);
               
               for (const item of signaturesList.items) {
-                console.log(`🗑️ Checking signature file: ${item.name}`);
                 if (item.name.includes(signatureSearchPattern)) {
                   await deleteObject(item);
-                  console.log(`🗑️ Deleted signature: ${item.name}`);
                 }
               }
             } catch (error) {
-              console.warn(`⚠️ Could not delete signature for ${submission.employeeName}:`, error);
             }
             
-            // Keep PDF files for Excel links to work
-            console.log(`📄 Keeping PDF files for ${submission.employeeName} - Excel links will remain functional`);
-            
           } catch (submissionError) {
-            console.warn(`⚠️ Error deleting files for submission ${submission.employeeName}:`, submissionError);
           }
         }
         
@@ -1594,11 +1144,9 @@ const AdminCreditCardReview = () => {
         const excelList = await listAll(excelRef);
         for (const item of excelList.items) {
           await deleteObject(item);
-          console.log(`🗑️ Deleted Excel: ${item.name}`);
         }
         
       } catch (storageError) {
-        console.warn('⚠️ Error deleting Storage files:', storageError);
         // Continue even if some Storage files fail to delete
       }
       
@@ -1608,8 +1156,6 @@ const AdminCreditCardReview = () => {
       }
       
       await Promise.all(deletePromises);
-      
-      console.log(`Successfully deleted ${completedCount} completed submissions and associated Storage files`);
       
       // Reset state
       setSubmissions([]);
@@ -1622,7 +1168,6 @@ const AdminCreditCardReview = () => {
       alert(`✅ Reset completed! Deleted ${completedCount} completed submissions. ${incompleteCount} incomplete submissions were kept.`);
       
     } catch (error) {
-      console.error('Error resetting data:', error);
       alert('Error resetting data: ' + (error instanceof Error ? error.message : 'Unknown error'));
     } finally {
       setLoading(false);
@@ -1646,7 +1191,6 @@ const AdminCreditCardReview = () => {
           const fileRef = ref(storage, file.fullPath);
           await deleteObject(fileRef);
         } catch (error) {
-          console.error('Error deleting file:', file.name, error);
         }
       }
       
@@ -1660,16 +1204,11 @@ const AdminCreditCardReview = () => {
             const filePath = decodeURIComponent(pathMatch[1]);
             const signatureRef = ref(storage, filePath);
             await deleteObject(signatureRef);
-            console.log('Signature file deleted:', filePath);
           }
         } catch (error) {
-          console.error('Error deleting signature file (non-critical):', error);
           // Continue execution even if signature deletion fails
         }
       }
-      
-      // Note: Excel file is NOT deleted - it accumulates all submissions
-      console.log('✅ Submission data deleted, but Excel file preserved for record keeping');
       
       alert('✅ PDF generated and data saved to Excel! Submission removed from review list.');
       setSelectedSubmission(null);
@@ -1680,7 +1219,6 @@ const AdminCreditCardReview = () => {
       loadSubmissions(); // Reload submissions
       
     } catch (error) {
-      console.error('Error deleting submission data:', error);
       alert('Error deleting data: ' + (error instanceof Error ? error.message : 'Unknown error'));
     }
   };
@@ -2161,7 +1699,7 @@ const AdminCreditCardReview = () => {
                   
                   {submission.signatureURL && (
                     <p style={{color: '#0066cc', fontWeight: 'bold', marginTop: '8px'}}>
-                      ✅ Dr. Oh has signed this submission
+                      ✅ Signed this submission
                     </p>
                   )}
                 </div>
@@ -2300,30 +1838,22 @@ const AdminCreditCardReview = () => {
                           // Find the purchase number by looking for "purchaseX" pattern
                           // Pattern: Name_CardNumber_SubmissionID_purchaseX_SequenceNumber_Filename
                           for (let i = 0; i < parts.length; i++) {
-                            console.log(`🔍 UI Checking part ${i}: "${parts[i]}"`);
-                            
                             // Check if this part contains "purchase" followed by a number
                             const purchaseMatch = parts[i].match(/purchase(\d+)/i);
                             if (purchaseMatch) {
                               const potentialPurchaseNum = parseInt(purchaseMatch[1], 10);
-                              console.log(`🔍 UI Found purchase match: "${purchaseMatch[0]}" -> number: ${potentialPurchaseNum}`);
                               if (!isNaN(potentialPurchaseNum) && potentialPurchaseNum > 0) {
                                 purchaseNum = potentialPurchaseNum;
-                                console.log(`🔍 UI Set purchase number to: ${purchaseNum}`);
                                 break;
                               }
                             }
                           }
-                          
-                          console.log('🔍 UI Processing file:', file.name, '-> Purchase:', purchaseNum);
                           
                           if (!filesByPurchase[purchaseNum]) {
                             filesByPurchase[purchaseNum] = [];
                           }
                           filesByPurchase[purchaseNum].push(file);
                         });
-                        
-                        console.log('🔍 UI Files grouped by purchase:', filesByPurchase);
                         
                         // Sort purchase numbers and render each group
                         const purchaseNumbers = Object.keys(filesByPurchase).map(Number).sort((a: number, b: number) => a - b);
@@ -2560,7 +2090,7 @@ const AdminCreditCardReview = () => {
                           border: '2px solid #dc3545',
                           textAlign: 'center'
                         }}>
-                          <h4 style={{margin: '0 0 10px 0', color: '#721c24'}}>❌ Not Approved by Dr. Oh</h4>
+                          <h4 style={{margin: '0 0 10px 0', color: '#721c24'}}>❌ Not Approved</h4>
                           <p style={{margin: '0', color: '#721c24', fontSize: '14px'}}>
                             This reimbursement request has been marked as not approved and PDF has been generated.
                           </p>
@@ -2574,7 +2104,7 @@ const AdminCreditCardReview = () => {
                           border: '2px solid #28a745',
                           textAlign: 'center'
                         }}>
-                          <h4 style={{margin: '0 0 10px 0', color: '#155724'}}>✅ Approved by Dr. Oh</h4>
+                          <h4 style={{margin: '0 0 10px 0', color: '#155724'}}>✅ Approved</h4>
                           <p style={{margin: '0', color: '#155724', fontSize: '14px'}}>
                             This submission has been approved and PDF has been generated.
                           </p>
@@ -2597,7 +2127,7 @@ const AdminCreditCardReview = () => {
                               onClick={managerApprove}
                               disabled={!signature || loading}
                             >
-                              {loading ? 'Approving...' : '✅ Dr. Oh Approve'}
+                              {loading ? 'Approving...' : '✅ Approve'}
                             </button>
                             <button
                               style={{...styles.button, backgroundColor: '#dc3545'}}
@@ -2614,7 +2144,7 @@ const AdminCreditCardReview = () => {
                             onClick={managerApprove}
                             disabled={!signature || loading}
                           >
-                            {loading ? 'Approving...' : '✅ Dr. Oh Approve'}
+                            {loading ? 'Approving...' : '✅ Approve'}
                           </button>
                         )}
                       </>
