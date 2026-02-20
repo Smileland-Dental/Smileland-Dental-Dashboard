@@ -1,8 +1,8 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { doc, setDoc, getDoc, deleteDoc, onSnapshot } from "firebase/firestore";
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { db, auth } from "@/lib/firebase.config";
 // Firebase 인증 직접 사용
 import { onAuthStateChanged } from 'firebase/auth';
@@ -13,6 +13,7 @@ function safeStr(v: unknown, max: number): string {
   if (v == null) return '';
   return String(v).trim().slice(0, max).replace(/[<>]/g, '');
 }
+
 
 // Daily Office Duty PDF 생성 함수
 function createDailyOfficeDutyPDFDocument(props: {
@@ -60,6 +61,7 @@ function createDailyOfficeDutyPDFDocument(props: {
     React.createElement(View, { style: s.tableCellDesc }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Duty Description')),
     React.createElement(View, { style: s.tableCellDetails }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Details')),
     React.createElement(View, { style: s.tableCellName }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Done By')),
+    React.createElement(View, { style: s.tableCellTime }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Time')),
     React.createElement(View, { style: s.tableCellName }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Checked By')),
     React.createElement(View, { style: s.tableCellTime }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Time')),
   );
@@ -143,7 +145,7 @@ function createDailyOfficeDutyPDFDocument(props: {
       const o2 = safeStr(safeDutyData[`${rowKey}_O2`], 10) || '0';
       const n2o = safeStr(safeDutyData[`${rowKey}_N2O`], 10) || '0';
       const he = safeStr(safeDutyData[`${rowKey}_He`], 10) || '0';
-      detailsText = `O₂: ${o2}\nN₂O: ${n2o}\nHe: ${he}`;
+      detailsText = `O2: ${o2}\nN2O: ${n2o}\nHe: ${he}`;
     } else if (rowNum === 21) {
       detailsText = safeStr(safeDutyData[`${rowKey}_YesNo`], 100);
     } else if (rowNum === 22) {
@@ -157,16 +159,18 @@ function createDailyOfficeDutyPDFDocument(props: {
     }
 
     const doneBy = safeStr(safeDutyData[`${rowKey}_Done`], 100);
-    const checkedBy = safeStr(safeDutyData[`${rowKey}_Checked`], 100);
     const time = safeStr(safeDutyData[`${rowKey}_Time`], 20);
+    const checkedBy = safeStr(safeDutyData[`${rowKey}_Checked`], 100);
+    const checkedTime = safeStr(safeDutyData[`${rowKey}_Checked_Time`], 20);
 
     return React.createElement(View, { key: rowNum, style: s.tableRow },
       React.createElement(View, { style: s.tableCellNo }, React.createElement(Text, null, String(rowNum))),
       React.createElement(View, { style: s.tableCellDesc }, renderDutyDescription(duty.main, duty.details)),
       React.createElement(View, { style: s.tableCellDetails }, React.createElement(Text, null, detailsText || '-')),
       React.createElement(View, { style: s.tableCellName }, React.createElement(Text, null, doneBy || '-')),
-      React.createElement(View, { style: s.tableCellName }, React.createElement(Text, null, checkedBy || '-')),
       React.createElement(View, { style: s.tableCellTime }, React.createElement(Text, null, time || '-')),
+      React.createElement(View, { style: s.tableCellName }, React.createElement(Text, null, checkedBy || '-')),
+      React.createElement(View, { style: s.tableCellTime }, React.createElement(Text, null, checkedTime || '-')),
     );
   });
 
@@ -182,6 +186,159 @@ function createDailyOfficeDutyPDFDocument(props: {
   );
 }
 
+type RowConfig = {
+  num: number;
+  title: string;
+  suffix?: string;
+  instructions?: string[];
+  details?: string[];
+  yesNo?: string;
+  noLabel?: string;
+  deadlineDisplay?: string;
+  textarea?: { field: string; placeholder: string };
+  textInput?: { field: string; placeholder: string };
+  numberInputs?: { field: string; label: string }[];
+};
+
+const ROW_CONFIGS: RowConfig[] = [
+  {
+    num: 1,
+    title: 'Turn Off Answering Service',
+    instructions: [
+      '1) Go to phone system website',
+      '2) Log in',
+      '4) Ensure your office is selected',
+      '5) Select override office hours',
+      '6) Select "Reset Default Office Hours"',
+    ],
+    deadlineDisplay: 'Deadline: 9:00 AM',
+  },
+  {
+    num: 2,
+    title: 'All charts filed back?',
+    yesNo: 'Row2_YesNo',
+    deadlineDisplay: 'Deadline: 4 PM',
+  },
+  {
+    num: 3,
+    title: 'Charts pulled for next day',
+    deadlineDisplay: 'Deadline: 12:00 PM',
+  },
+  {
+    num: 4,
+    title: 'Check eligibility',
+    details: ['1st of every month come in early to check eligibility by 8:30 am'],
+    deadlineDisplay: 'Deadline: 4:30 PM',
+  },
+  {
+    num: 5,
+    title: 'If pt is not eligible call and inform',
+    textInput: { field: 'Row5_CallNum', placeholder: "How many pt's did you call?" },
+  },
+  {
+    num: 6,
+    title: "Insurance breakdown for next day's patients",
+    details: ['Call and get ins. info if necessary'],
+    deadlineDisplay: 'Deadline: 4:30 PM',
+  },
+  {
+    num: 7,
+    title: 'Check ledger for any balance on the account',
+    details: [
+      'Fill out "Account with Balances Form" and fax to the AR Department',
+      'Called to inform patient of balance?',
+    ],
+    yesNo: 'Row7_YesNo',
+    deadlineDisplay: 'Deadline: 12:00 PM',
+  },
+  {
+    num: 8,
+    title: 'Morning confirmations',
+    details: ['At least by noon'],
+    deadlineDisplay: 'Deadline: 12:00 PM',
+  },
+  { num: 9, title: 'No shows entered on ledger' },
+  { num: 10, title: 'No shows stamped in patient charts' },
+  {
+    num: 11,
+    title: 'Reconfirming completed?',
+    details: ['Start at 4:00pm'],
+    deadlineDisplay: 'Deadline: 4:30 PM',
+  },
+  {
+    num: 12,
+    title: 'One week reminders completed?',
+    deadlineDisplay: 'Deadline: 3:00 PM',
+  },
+  { num: 13, title: 'Call all treatment patients from today for post op' },
+  {
+    num: 14,
+    title: 'Total lab case deposits/deliveries',
+    textarea: { field: 'Row14_Name/DOB', placeholder: 'Name/DOB(mm/dd/yyyy) 1\n\nName/DOB(mm/dd/yyyy) 2\n\nName/DOB(mm/dd/yyyy) 3' },
+  },
+  {
+    num: 15,
+    title: 'Check all undelivered lab cases and make appointments',
+    details: ['Any Lab case that is more than 3 weeks old must be sent to corporate along with $20 deposit'],
+    textarea: { field: 'Row15_LabCases', placeholder: '1)\n\n2)\n\n3)' },
+  },
+  {
+    num: 16,
+    title: 'Check all lab cases for next day',
+    details: ["Call lab for next day pick up's"],
+  },
+  { num: 17, title: 'N₂O/ Compressor Off' },
+  {
+    num: 18,
+    title: 'Did you read the meter on the Oxygen/N₂O/Helium tank?',
+    yesNo: 'Row18_YesNo',
+  },
+  {
+    num: 19,
+    title: 'How many tanks are empty & need to be replaced?',
+    numberInputs: [
+      { field: 'Row19_O2', label: 'O₂:' },
+      { field: 'Row19_N2O', label: 'N₂O:' },
+      { field: 'Row19_He', label: 'He:' },
+    ],
+  },
+  { num: 20, title: 'Check restrooms initial logs hourly' },
+  { num: 21, title: 'Swept/Mopped', yesNo: 'Row21_YesNo' },
+  { num: 22, title: 'Cleaned Breakroom', yesNo: 'Row22_YesNo' },
+  {
+    num: 23,
+    title: 'Sterilizers: Cycle Complete',
+    yesNo: 'Row23_YesNo',
+    noLabel: 'No (Do Not Push Stop)',
+  },
+  { num: 24, title: 'Drained Ultrasonic', yesNo: 'Row24_YesNo' },
+  {
+    num: 25,
+    title: 'Spore Test',
+    details: ['Every Monday'],
+    deadlineDisplay: 'Deadline: 11:00 AM (Mondays only)',
+  },
+  { num: 26, title: "Turn Off All TV's and Computers at the End of the Day" },
+  { num: 27, title: 'Postcards Ready for Pick-up' },
+  { num: 28, title: 'Clean traps everyday', suffix: '(chair)' },
+  { num: 29, title: 'Clean main trap 1st/15th', suffix: '(by vacuum)' },
+  { num: 30, title: 'Did you flush the lines with hot water?', yesNo: 'Row30_YesNo' },
+  { num: 31, title: 'Check all doors are locked' },
+  {
+    num: 32,
+    title: 'Turn On Answering Service',
+    instructions: [
+      '1) Go to phone system website',
+      '2) Log in',
+      '3) Click on user icon',
+      '4) Select override office hours',
+      '5) Select "Office is Closed"',
+      '6) For "1day"',
+      '7) Call the office to verify that calls were transferred correctly. (For Holiday Weekends, Set for 1 week)',
+    ],
+  },
+];
+
 export default function DailyOfficeDuties() {
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
@@ -189,10 +346,12 @@ export default function DailyOfficeDuties() {
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [OfficeBasedOptions, setOfficeBasedOptions] = useState<string[]>([]);
   
   // Rate limiting을 위한 ref
   const lastUpdateDutyDataCall = useRef<number>(0);
   const lastSubmitCall = useRef<number>(0);
+  const fieldRateLimit = useRef<Record<string, number>>({});
   
   // 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
@@ -218,196 +377,57 @@ export default function DailyOfficeDuties() {
 
   // 오피스 선택 상태
   const [selectedOffice, setSelectedOffice] = useState('');
-  // 비밀번호 확인 상태
-  const [officePasswordVerified, setOfficePasswordVerified] = useState(false);
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
-  const [pendingOffice, setPendingOffice] = useState('');
   
   // 오피스 옵션
   const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
-  
-  // 오피스 비밀번호 가져오기 함수
-  const getOfficePassword = (office: string): string => {
-    if (!office) return '';
-    return office.charAt(0).toUpperCase();
-  };
 
   // 모든 업무 항목 상태
   const [dutyData, setDutyData] = useState({
-    // Row 1
-    Row1_Done: '',
-    Row1_Checked: '',
-    Row1_Time: '',
-    
-    // Row 2
-    Row2_YesNo: '',
-    Row2_Done: '',
-    Row2_Checked: '',
-    Row2_Time: '',
-    
-    // Row 3
-    Row3_Done: '',
-    Row3_Checked: '',
-    Row3_Time: '',
-    
-    // Row 4
-    Row4_Done: '',
-    Row4_Checked: '',
-    Row4_Time: '',
-    
-    // Row 5
-    Row5_CallNum: '',
-    Row5_Done: '',
-    Row5_Checked: '',
-    Row5_Time: '',
-    
-    // Row 6
-    Row6_Done: '',
-    Row6_Checked: '',
-    Row6_Time: '',
-    
-    // Row 7
-    Row7_YesNo: '',
-    Row7_Done: '',
-    Row7_Checked: '',
-    Row7_Time: '',
-    
-    // Row 8
-    Row8_Done: '',
-    Row8_Checked: '',
-    Row8_Time: '',
-    
-    // Row 9
-    Row9_Done: '',
-    Row9_Checked: '',
-    Row9_Time: '',
-    
-    // Row 10
-    Row10_Done: '',
-    Row10_Checked: '',
-    Row10_Time: '',
-    
-    // Row 11
-    Row11_Done: '',
-    Row11_Checked: '',
-    Row11_Time: '',
-    
-    // Row 12
-    Row12_Done: '',
-    Row12_Checked: '',
-    Row12_Time: '',
-    
-    // Row 13
-    Row13_Done: '',
-    Row13_Checked: '',
-    Row13_Time: '',
-    
-    // Row 14
-    'Row14_Name/DOB': '',
-    Row14_Done: '',
-    Row14_Checked: '',
-    Row14_Time: '',
-    
-    // Row 15
-    Row15_LabCases: '',
-    Row15_Done: '',
-    Row15_Checked: '',
-    Row15_Time: '',
-    
-    // Row 16
-    Row16_Done: '',
-    Row16_Checked: '',
-    Row16_Time: '',
-    
-    // Row 17
-    Row17_Done: '',
-    Row17_Checked: '',
-    Row17_Time: '',
-    
-    // Row 18
-    Row18_YesNo: '',
-    Row18_Done: '',
-    Row18_Checked: '',
-    Row18_Time: '',
-    
-    // Row 19
-    Row19_O2: '',
-    Row19_N2O: '',
-    Row19_He: '',
-    Row19_Done: '',
-    Row19_Checked: '',
-    Row19_Time: '',
-    
-    // Row 20
-    Row20_Done: '',
-    Row20_Checked: '',
-    Row20_Time: '',
-    
-    // Row 21
-    Row21_YesNo: '',
-    Row21_Done: '',
-    Row21_Checked: '',
-    Row21_Time: '',
-    
-    // Row 22
-    Row22_YesNo: '',
-    Row22_Done: '',
-    Row22_Checked: '',
-    Row22_Time: '',
-    
-    // Row 23
-    Row23_YesNo: '',
-    Row23_Done: '',
-    Row23_Checked: '',
-    Row23_Time: '',
-    
-    // Row 24
-    Row24_YesNo: '',
-    Row24_Done: '',
-    Row24_Checked: '',
-    Row24_Time: '',
-    
-    // Row 25
-    Row25_Done: '',
-    Row25_Checked: '',
-    Row25_Time: '',
-    
-    // Row 26
-    Row26_Done: '',
-    Row26_Checked: '',
-    Row26_Time: '',
-    
-    // Row 27
-    Row27_Done: '',
-    Row27_Checked: '',
-    Row27_Time: '',
-    
-    // Row 28
-    Row28_Done: '',
-    Row28_Checked: '',
-    Row28_Time: '',
-    
-    // Row 29
-    Row29_Done: '',
-    Row29_Checked: '',
-    Row29_Time: '',
-    
-    // Row 30
-    Row30_YesNo: '',
-    Row30_Done: '',
-    Row30_Checked: '',
-    Row30_Time: '',
-    
-    // Row 31
-    Row31_Done: '',
-    Row31_Checked: '',
-    Row31_Time: '',
-    
-    // Row 32
-    Row32_Done: '',
-    Row32_Checked: '',
-    Row32_Time: ''
+    Row1_Done: '', Row1_Time: '', Row1_Checked: '', Row1_Checked_Time: '',
+    Row2_YesNo: '', Row2_Done: '', Row2_Time: '', Row2_Checked: '', Row2_Checked_Time: '',
+    Row3_Done: '', Row3_Time: '', Row3_Checked: '', Row3_Checked_Time: '',
+    Row4_Done: '', Row4_Time: '', Row4_Checked: '', Row4_Checked_Time: '',
+    Row5_CallNum: '', Row5_Done: '', Row5_Time: '', Row5_Checked: '', Row5_Checked_Time: '',
+    Row6_Done: '', Row6_Time: '', Row6_Checked: '', Row6_Checked_Time: '',
+    Row7_YesNo: '', Row7_Done: '', Row7_Time: '', Row7_Checked: '', Row7_Checked_Time: '',
+    Row8_Done: '', Row8_Time: '', Row8_Checked: '', Row8_Checked_Time: '',
+    Row9_Done: '', Row9_Time: '', Row9_Checked: '', Row9_Checked_Time: '',
+    Row10_Done: '', Row10_Time: '', Row10_Checked: '', Row10_Checked_Time: '',
+    Row11_Done: '', Row11_Time: '', Row11_Checked: '', Row11_Checked_Time: '',
+    Row12_Done: '', Row12_Time: '', Row12_Checked: '', Row12_Checked_Time: '',
+    Row13_Done: '', Row13_Time: '', Row13_Checked: '', Row13_Checked_Time: '',
+    'Row14_Name/DOB': '', Row14_Done: '', Row14_Time: '', Row14_Checked: '', Row14_Checked_Time: '',
+    Row15_LabCases: '', Row15_Done: '', Row15_Time: '', Row15_Checked: '', Row15_Checked_Time: '',
+    Row16_Done: '', Row16_Time: '', Row16_Checked: '', Row16_Checked_Time: '',
+    Row17_Done: '', Row17_Time: '', Row17_Checked: '', Row17_Checked_Time: '',
+    Row18_YesNo: '', Row18_Done: '', Row18_Time: '', Row18_Checked: '', Row18_Checked_Time: '',
+    Row19_O2: '', Row19_N2O: '', Row19_He: '', Row19_Done: '', Row19_Time: '', Row19_Checked: '', Row19_Checked_Time: '',
+    Row20_Done: '', Row20_Time: '', Row20_Checked: '', Row20_Checked_Time: '',
+    Row21_YesNo: '', Row21_Done: '', Row21_Time: '', Row21_Checked: '', Row21_Checked_Time: '',
+    Row22_YesNo: '', Row22_Done: '', Row22_Time: '', Row22_Checked: '', Row22_Checked_Time: '',
+    Row23_YesNo: '', Row23_Done: '', Row23_Time: '', Row23_Checked: '', Row23_Checked_Time: '',
+    Row24_YesNo: '', Row24_Done: '', Row24_Time: '', Row24_Checked: '', Row24_Checked_Time: '',
+    Row25_Done: '', Row25_Time: '', Row25_Checked: '', Row25_Checked_Time: '',
+    Row26_Done: '', Row26_Time: '', Row26_Checked: '', Row26_Checked_Time: '',
+    Row27_Done: '', Row27_Time: '', Row27_Checked: '', Row27_Checked_Time: '',
+    Row28_Done: '', Row28_Time: '', Row28_Checked: '', Row28_Checked_Time: '',
+    Row29_Done: '', Row29_Time: '', Row29_Checked: '', Row29_Checked_Time: '',
+    Row30_YesNo: '', Row30_Done: '', Row30_Time: '', Row30_Checked: '', Row30_Checked_Time: '',
+    Row31_Done: '', Row31_Time: '', Row31_Checked: '', Row31_Checked_Time: '',
+    Row32_Done: '', Row32_Time: '', Row32_Checked: '', Row32_Checked_Time: '',
   });
+
+  // 🔒 보안: Firebase에서 로드한 데이터에서 허용된 필드만 추출
+  const VALID_DUTY_KEYS = useRef(new Set(Object.keys(dutyData))).current;
+  const filterFirebaseData = (data: Record<string, any>): Record<string, string> => {
+    const filtered: Record<string, string> = {};
+    for (const key of VALID_DUTY_KEYS) {
+      if (key in data && typeof data[key] === 'string') {
+        filtered[key] = data[key].slice(0, 500).replace(/[<>]/g, '');
+      }
+    }
+    return filtered;
+  };
 
   // 마감 시간 정의
   const DEADLINES = {
@@ -444,7 +464,7 @@ export default function DailyOfficeDuties() {
 
   // 자동 저장 함수
   const autoSave = useCallback(async () => {
-    if (!dutyDate || isUpdatingFromFirebase || !officePasswordVerified) return;
+    if (!dutyDate || !selectedOffice || isUpdatingFromFirebase) return;
 
     // 데이터가 실제로 변경되었는지 확인
     const hasChanges = JSON.stringify(dutyData) !== JSON.stringify(lastSavedData);
@@ -477,9 +497,10 @@ export default function DailyOfficeDuties() {
       // 저장 성공 시 마지막 저장된 데이터 업데이트
       setLastSavedData({ ...dutyData });
       
-    } catch (error) {
+    } catch {
+      // auto-save failure is silently ignored; real-time listener will resync
     }
-  }, [dutyDate, selectedOffice, dutyData, lastSavedData, isUpdatingFromFirebase, officePasswordVerified, userSessionId]);
+  }, [dutyDate, selectedOffice, dutyData, lastSavedData, isUpdatingFromFirebase, userSessionId]);
 
   // 데이터 변경 시에만 자동 저장
   useEffect(() => {
@@ -491,37 +512,27 @@ export default function DailyOfficeDuties() {
 
   // 데이터 로드
   const loadData = async () => {
-    if (!dutyDate || !selectedOffice || !officePasswordVerified) return;
+    if (!dutyDate || !selectedOffice) return;
 
     try {
-      console.log("Loading data for date:", dutyDate, "office:", selectedOffice);
       setSubmitStatus('Loading data...');
       
       const docId = `${dutyDate}_${selectedOffice}`;
-      const docSnap = await getDocs(collection(db, "daily-office-duties")).then(snapshot => {
-        const foundDoc = snapshot.docs.find(d => d.id === docId);
-        return foundDoc ? { 
-          exists: (): boolean => true, 
-          data: (): any => foundDoc.data() 
-        } : { 
-          exists: (): boolean => false,
-          data: (): undefined => undefined
-        };
-      });
+      const docSnap = await getDoc(doc(db, "daily-office-duties", docId));
       
       if (docSnap.exists()) {
-        const data = docSnap.data();
+        const safeData = filterFirebaseData(docSnap.data());
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
         
         setDutyData(prevData => ({
           ...prevData,
-          ...data
+          ...safeData
         }));
         
         // 로드된 데이터를 마지막 저장된 데이터로 설정
-        setLastSavedData({ ...data });
+        setLastSavedData({ ...safeData });
         
         // 짧은 지연 후 Firebase 업데이트 플래그 해제
         setTimeout(() => {
@@ -531,7 +542,6 @@ export default function DailyOfficeDuties() {
         setSubmitStatus('Data loaded successfully');
         setTimeout(() => setSubmitStatus(''), 2000);
       } else {
-        console.log("No data found for date:", dutyDate);
         // 데이터가 없으면 초기화
         const initialData: { [key: string]: string } = {};
         Object.keys(dutyData).forEach(key => {
@@ -544,56 +554,42 @@ export default function DailyOfficeDuties() {
       }
       
     } catch (error) {
-      // 에러 메시지 추출 및 보안 강화
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      
-      // 민감한 정보 필터링
-      const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
-      const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
-        errorMessage.toLowerCase().includes(keyword.toLowerCase())
-      );
-      
-      const safeErrorMessage = hasSensitiveInfo 
-        ? 'An error occurred while loading. Please try again.' 
-        : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
-      
-      setSubmitStatus('Error loading data: ' + safeErrorMessage);
+      setSubmitStatus('Error loading data. Please try again.');
       setTimeout(() => setSubmitStatus(''), 3000);
     }
   };
 
   // 날짜 또는 오피스 변경 시 데이터 로드
   useEffect(() => {
-    if (dutyDate && selectedOffice && officePasswordVerified) {
+    if (dutyDate && selectedOffice) {
       loadData();
     }
-  }, [dutyDate, selectedOffice, officePasswordVerified]);
+  }, [dutyDate, selectedOffice]);
 
   // 실시간 데이터 동기화
   useEffect(() => {
-    if (!dutyDate || !selectedOffice || !officePasswordVerified) return;
+    if (!dutyDate || !selectedOffice) return;
 
-    console.log("Setting up real-time listener for date:", dutyDate, "office:", selectedOffice);
     const docId = `${dutyDate}_${selectedOffice}`;
     const docRef = doc(db, "daily-office-duties", docId);
     
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
-        const data = docSnap.data();
+        const rawData = docSnap.data();
+        const safeData = filterFirebaseData(rawData);
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
         
         setDutyData(prevData => {
-          console.log("Updating dutyData from:", prevData, "to:", { ...prevData, ...data });
           return {
             ...prevData,
-            ...data
+            ...safeData
           };
         });
         
         // 실시간 업데이트된 데이터를 마지막 저장된 데이터로 설정
-        setLastSavedData({ ...data });
+        setLastSavedData({ ...safeData });
         
         // 짧은 지연 후 Firebase 업데이트 플래그 해제
         setTimeout(() => {
@@ -601,17 +597,15 @@ export default function DailyOfficeDuties() {
         }, 100);
         
         // 다른 사용자의 업데이트만 표시 (자신의 업데이트는 제외)
-        if (data.timestamp && 
-            new Date(data.timestamp).getTime() > Date.now() - 5000 && 
-            data.lastUpdatedBy && 
-            data.lastUpdatedBy !== userSessionId) {
+        if (rawData.timestamp && 
+            new Date(rawData.timestamp).getTime() > Date.now() - 5000 && 
+            rawData.lastUpdatedBy && 
+            rawData.lastUpdatedBy !== userSessionId) {
           setAutoSaveStatus('🔄 Updated from another user');
           setTimeout(() => setAutoSaveStatus(''), 2000);
         }
-      } else {
       }
     }, (error) => {
-      console.error("Real-time listener error:", error);
       setAutoSaveStatus('❌ Connection error');
       setTimeout(() => setAutoSaveStatus(''), 3000);
     });
@@ -619,7 +613,7 @@ export default function DailyOfficeDuties() {
     return () => {
       unsubscribe();
     };
-  }, [dutyDate, selectedOffice, officePasswordVerified]);
+  }, [dutyDate, selectedOffice]);
 
   // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
@@ -646,6 +640,20 @@ export default function DailyOfficeDuties() {
         }
 
         setIsAuthorized(true);
+
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const officeBasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
+          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+          if (validOptions.length > 0) {
+            setOfficeBasedOptions(validOptions);
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+            }
+          }
+        }
       } catch (error: any) {
         setIsAuthorized(false);
       }
@@ -671,11 +679,7 @@ export default function DailyOfficeDuties() {
   // 🔒 보안: 입력 검증 함수
   const validateInput = (value: string, maxLength: number = 500): string => {
     if (typeof value !== 'string') return '';
-    // 길이 제한
-    if (value.length > maxLength) {
-      return value.substring(0, maxLength);
-    }
-    return value;
+    return value.slice(0, maxLength).replace(/[<>]/g, '');
   };
 
   // 데이터 업데이트 함수 (Rate limiting 적용)
@@ -683,8 +687,7 @@ export default function DailyOfficeDuties() {
     // Rate limiting: 입력 반응성을 위해 완화된 제한 적용
     // (자동 저장은 별도 debounce로 처리되므로 입력 자체는 빠르게 반응)
     const now = Date.now();
-    const fieldKey = `lastUpdate_${field}`;
-    const lastCall = (window as any)[fieldKey] || 0;
+    const lastCall = fieldRateLimit.current[field] || 0;
 
     // 전역 rate limiting: 모든 업데이트에 대해 50ms 제한 (입력 반응성 향상)
     if (now - lastUpdateDutyDataCall.current < 50) {
@@ -696,7 +699,7 @@ export default function DailyOfficeDuties() {
     if (now - lastCall < 100) {
       return;
     }
-    (window as any)[fieldKey] = now;
+    fieldRateLimit.current[field] = now;
 
     // 🔒 보안: 입력 검증 및 길이 제한
     const validatedValue = validateInput(value, 500);
@@ -721,6 +724,26 @@ export default function DailyOfficeDuties() {
         if (rowNumber) {
           const timeField = `Row${rowNumber}_Time`;
           newData[timeField] = '';
+        }
+      }
+
+      // Checked by 필드가 입력되면 시간 자동 기록
+      if (field.endsWith('_Checked') && validatedValue.trim() !== '' && (prev[field as keyof typeof prev] as string)?.trim() === '') {
+        const rowNumber = field.match(/Row(\d+)_Checked/)?.[1];
+        if (rowNumber) {
+          const checkedTimeField = `Row${rowNumber}_Checked_Time`;
+          if (!newData[checkedTimeField]) {
+            newData[checkedTimeField] = getCurrentTime12Hour();
+          }
+        }
+      }
+
+      // Checked by 필드가 비워지면 시간도 비움
+      if (field.endsWith('_Checked') && validatedValue.trim() === '') {
+        const rowNumber = field.match(/Row(\d+)_Checked/)?.[1];
+        if (rowNumber) {
+          const checkedTimeField = `Row${rowNumber}_Checked_Time`;
+          newData[checkedTimeField] = '';
         }
       }
       
@@ -773,13 +796,25 @@ export default function DailyOfficeDuties() {
       setSubmitStatus('Saving...');
       setProgress(10);
 
+      // 🔒 보안: 경로 조작 방지를 위한 값 검증
+      if (!dutyDate || !/^\d{4}-\d{2}-\d{2}$/.test(dutyDate)) {
+        alert('Invalid date format.');
+        setLoading(false);
+        return;
+      }
+      if (!selectedOffice || !officeOptions.includes(selectedOffice)) {
+        alert('Invalid office selection.');
+        setLoading(false);
+        return;
+      }
+
       // 1. PDF 생성 (클라이언트 사이드)
       setSubmitStatus('Submitting...');
       setProgress(30);
       
       // 데이터 sanitize
-      const safeDutyDate = (dutyDate || '').trim().slice(0, 50).replace(/[<>]/g, '');
-      const safeSelectedOffice = (selectedOffice || '').trim().slice(0, 100).replace(/[<>]/g, '');
+      const safeDutyDate = dutyDate.trim().slice(0, 10);
+      const safeSelectedOffice = selectedOffice.trim().slice(0, 100);
       const safeDutyData: { [key: string]: string } = {};
       for (const [key, value] of Object.entries(dutyData)) {
         if (typeof value === 'string' && value.length <= 500) {
@@ -823,44 +858,27 @@ export default function DailyOfficeDuties() {
         
         try {
           const storage = getStorage();
-          const filename = `2) ${dutyDate}_${selectedOffice}_Daily Office Duty.pdf`;
+          const now = new Date();
+          const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+          let hours = laTime.getHours();
+          const minutes = laTime.getMinutes();
+          const ampm = hours >= 12 ? 'pm' : 'am';
+          hours = hours % 12;
+          hours = hours ? hours : 12;
+          const timeStamp = `${hours}${minutes.toString().padStart(2, '0')}${ampm}`;
+          const filename = `2) ${dutyDate}_${selectedOffice}_Daily Office Duty_${timeStamp}.pdf`;
           const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${dutyDate}/${filename}`);
           
           // PDF 업로드
           await uploadBytes(storageRef, pdfBlob);
           
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // Firestore에 메타데이터 저장
-          await setDoc(doc(db, 'pdf-documents', `${dutyDate}_${selectedOffice}_daily-office-duty_${Date.now()}`), {
-            filename,
-            office: selectedOffice,
-            date: dutyDate,
-            type: 'Daily Office Duty',
-            url: downloadUrl,
-            storagePath: `endofday-pdfs/${selectedOffice}/${dutyDate}/${filename}`,
-            source: 'd_page',
-            createdAt: new Date(),
-          });
-          
           setSubmitStatus('✅ PDF saved to archive successfully!');
-        } catch (storageError: any) {
-          // 에러 메시지 추출 및 보안 강화
-          const errorMessage = storageError?.message || 'Error';
-          
-          // 민감한 정보 필터링
-          const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
-          const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
-            errorMessage.toLowerCase().includes(keyword.toLowerCase())
-          );
-          
-          const safeErrorMessage = hasSensitiveInfo 
-            ? 'An error occurred while submitting. Please try again.' 
-            : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
-          
-          alert(`An error occurred while submitting. Please try again.: ${safeErrorMessage}`);
+        } catch (storageError) {
+          alert('An error occurred while submitting. Please try again.');
           setSubmitStatus('❌ Submission failed. Please try again.');
+          setProgress(0);
+          setTimeout(() => { setLoading(false); setSubmitStatus(''); }, 3000);
+          return;
         }
         
         // 2. 데이터 삭제
@@ -892,20 +910,7 @@ export default function DailyOfficeDuties() {
       }
 
     } catch (error) {
-      // 에러 메시지 추출 및 보안 강화
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      
-      // 민감한 정보 필터링
-      const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
-      const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
-        errorMessage.toLowerCase().includes(keyword.toLowerCase())
-      );
-      
-      const safeErrorMessage = hasSensitiveInfo 
-        ? '제출 중 오류가 발생했습니다.' 
-        : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
-      
-      setSubmitStatus('❌ Submission failed: ' + safeErrorMessage);
+      setSubmitStatus('❌ Submission failed. Please try again.');
       setProgress(0);
       setTimeout(() => {
         setLoading(false);
@@ -919,7 +924,7 @@ export default function DailyOfficeDuties() {
     body: {
       fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
       padding: '20px',
-      background: 'linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%)',
+      background: 'linear-gradient(135deg, #fce4ec 0%, #f8bbd0 100%)',
       color: '#2c3e50',
       lineHeight: '1.6',
       minHeight: '100vh'
@@ -1017,10 +1022,6 @@ export default function DailyOfficeDuties() {
       boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
       zIndex: 1000
     },
-    overdueRow: {
-      backgroundColor: '#ffcdd2 !important',
-      borderLeft: '4px solid #d32f2f !important'
-    },
     overdueWarning: {
       color: '#d32f2f',
       fontWeight: 'bold',
@@ -1086,7 +1087,7 @@ export default function DailyOfficeDuties() {
           justifyContent: 'center',
           alignItems: 'center',
           height: '100vh',
-          background: 'linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%)',
+          background: 'linear-gradient(135deg, #fce4ec 0%, #f8bbd0 100%)',
           fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
         }}>
           <div style={{ textAlign: 'center' }}>
@@ -1106,7 +1107,7 @@ export default function DailyOfficeDuties() {
           justifyContent: 'center',
           alignItems: 'center',
           height: '100vh',
-          background: 'linear-gradient(135deg, #fff3cd 0%, #ffeaa7 100%)',
+          background: 'linear-gradient(135deg, #fce4ec 0%, #f8bbd0 100%)',
           fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
         }}>
           <div style={{ textAlign: 'center' }}>
@@ -1181,11 +1182,6 @@ export default function DailyOfficeDuties() {
               margin: "0 0 20px 0",
               lineHeight: "1.4"
             }}>
-              {submitStatus === 'Saving...'}
-              {submitStatus === 'Generating PDF...'}
-              {submitStatus === 'Processing PDF...'}
-              {submitStatus === 'Cleaning up...'}
-              {submitStatus === 'Complete!'}
               {!submitStatus && 'Processing... Please wait'}
             </p>
             {/* 진행률 바 */}
@@ -1255,27 +1251,35 @@ export default function DailyOfficeDuties() {
               required
             />
           </div>
-          <div style={styles.formGroup}>
-            <label style={styles.label} htmlFor="selectedOffice">Office:</label>
-            <select
-              id="selectedOffice"
-              value={selectedOffice}
-              onChange={(e) => {
-                const newOffice = e.target.value;
-                if (newOffice && newOffice !== selectedOffice) {
-                  setPendingOffice(newOffice);
-                  setShowPasswordModal(true);
-                }
-              }}
-              style={styles.input}
-              required
-            >
-              <option value="">-- Select Office --</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
-          </div>
+          {OfficeBasedOptions.length > 0 && (
+            <div style={styles.formGroup}>
+              <label style={styles.label} htmlFor="selectedOffice">Office:</label>
+              {OfficeBasedOptions.length === 1 ? (
+                <span style={{
+                  ...styles.input,
+                  display: 'inline-block',
+                  backgroundColor: '#e9ecef',
+                  fontWeight: '600',
+                  color: '#2c3e50'
+                }}>
+                  {selectedOffice}
+                </span>
+              ) : (
+                <select
+                  id="selectedOffice"
+                  value={selectedOffice}
+                  onChange={(e) => setSelectedOffice(e.target.value)}
+                  style={styles.input}
+                  required
+                >
+                  <option value="">-- Select Office --</option>
+                  {OfficeBasedOptions.map(office => (
+                    <option key={office} value={office}>{office}</option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
         </div>
 
         {/* 업무 테이블 */}
@@ -1285,1586 +1289,106 @@ export default function DailyOfficeDuties() {
               <th style={{ ...styles.th, width: '60px' }}>No.</th>
               <th style={styles.th}>Duty</th>
               <th style={styles.th}>Done by</th>
+              <th style={{ ...styles.th, width: '100px' }}>Time</th>
               <th style={styles.th}>Checked by</th>
               <th style={{ ...styles.th, width: '100px' }}>Time</th>
             </tr>
           </thead>
           <tbody>
-            {/* Row 1 */}
-            <tr className={isRowOverdue('Row1_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row1_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>1</strong></td>
-              <td style={styles.td}>
-                <strong>Turn Off Answering Service</strong>
-                <div style={styles.dutyDetails}>
-                  1) Go to phone system website<br/>
-                  2) Log in<br/>
-                  4) Ensure your office is selected<br/>
-                  5) Select override office hours<br/>
-                  6) Select "Reset Default Office Hours"
-                </div>
-                <div style={styles.deadlineInfo}>Deadline: 9:00 AM</div>
-                {isRowOverdue('Row1_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ Turn Off Answering Service should be done by 9:00 AM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row1_Done}
-                  onChange={(e) => updateDutyData('Row1_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row1_Checked}
-                  onChange={(e) => updateDutyData('Row1_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row1_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
+            {ROW_CONFIGS.map((row) => {
+              const doneKey = `Row${row.num}_Done`;
+              const checkedKey = `Row${row.num}_Checked`;
+              const timeKey = `Row${row.num}_Time`;
+              const deadlineEntry = DEADLINES[doneKey as keyof typeof DEADLINES];
+              const overdue = deadlineEntry ? isRowOverdue(doneKey as keyof typeof DEADLINES) : false;
+              const cellInput: React.CSSProperties = { ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' };
+              const cellInputRO: React.CSSProperties = { ...cellInput, backgroundColor: '#f8f9fa', color: '#6c757d' };
+              const textareaCSS: React.CSSProperties = { ...cellInput, minHeight: '80px', resize: 'vertical', whiteSpace: 'pre-wrap' };
 
-            {/* Row 2 */}
-            <tr className={isRowOverdue('Row2_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row2_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>2</strong></td>
-              <td style={styles.td}>
-                <strong>All charts filed back?</strong><br/>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row2_YesNo_Yes"
-                    name="Row2_YesNo"
-                    value="Yes"
-                    checked={dutyData.Row2_YesNo === 'Yes'}
-                    onChange={(e) => updateDutyData('Row2_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row2_YesNo_Yes">Yes</label>
-                </div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row2_YesNo_No"
-                    name="Row2_YesNo"
-                    value="No"
-                    checked={dutyData.Row2_YesNo === 'No'}
-                    onChange={(e) => updateDutyData('Row2_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row2_YesNo_No">No</label>
-                </div>
-                <div style={styles.deadlineInfo}>Deadline: 4 PM</div>
-                {isRowOverdue('Row2_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ All charts filed back should be done by 4:00 PM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row2_Done}
-                  onChange={(e) => updateDutyData('Row2_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row2_Checked}
-                  onChange={(e) => updateDutyData('Row2_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row2_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 3 */}
-            <tr className={isRowOverdue('Row3_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row3_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>3</strong></td>
-              <td style={styles.td}>
-                <strong>Charts pulled for next day</strong>
-                <div style={styles.deadlineInfo}>Deadline: 12:00 PM</div>
-                {isRowOverdue('Row3_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ Charts pulled for next day should be done by 12:00 PM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row3_Done}
-                  onChange={(e) => updateDutyData('Row3_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row3_Checked}
-                  onChange={(e) => updateDutyData('Row3_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row3_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 4 */}
-            <tr className={isRowOverdue('Row4_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row4_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>4</strong></td>
-              <td style={styles.td}>
-                <strong>Check eligibility</strong>
-                <div style={styles.dutyDetails}>
-                  1st of every month come in early to check eligibility by 8:30 am
-                </div>
-                <div style={styles.deadlineInfo}>Deadline: 4:30 PM</div>
-                {isRowOverdue('Row4_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ Check eligibility should be done by 4:30 PM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row4_Done}
-                  onChange={(e) => updateDutyData('Row4_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row4_Checked}
-                  onChange={(e) => updateDutyData('Row4_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row4_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 5 */}
-            <tr>
-              <td style={styles.td}><strong>5</strong></td>
-              <td style={styles.td}>
-                <strong>If pt is not eligible call and inform</strong><br/>
-                <input
-                  type="text"
-                  value={dutyData.Row5_CallNum}
-                  onChange={(e) => updateDutyData('Row5_CallNum', e.target.value)}
-                  placeholder="How many pt's did you call?"
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row5_Done}
-                  onChange={(e) => updateDutyData('Row5_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row5_Checked}
-                  onChange={(e) => updateDutyData('Row5_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row5_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 6 */}
-            <tr style={isRowOverdue('Row6_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>6</strong></td>
-              <td style={styles.td}>
-                <strong>Insurance breakdown for next day's patients</strong>
-                <div style={styles.dutyDetails}>Call and get ins. info if necessary</div>
-                <div style={styles.deadlineInfo}>Deadline: 4:30 PM</div>
-                {isRowOverdue('Row6_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ Insurance breakdown should be done by 4:30 PM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row6_Done}
-                  onChange={(e) => updateDutyData('Row6_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row6_Checked}
-                  onChange={(e) => updateDutyData('Row6_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row6_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 7 */}
-            <tr className={isRowOverdue('Row7_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row7_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>7</strong></td>
-              <td style={styles.td}>
-                <strong>Check ledger for any balance on the account</strong><br/>
-                <div style={styles.dutyDetails}>
-                  Fill out "Account with Balances Form" and fax to the AR Department
-                </div>
-                <div style={styles.dutyDetails}>Called to inform patient of balance?</div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row7_YesNo_Yes"
-                    name="Row7_YesNo"
-                    value="Yes"
-                    checked={dutyData.Row7_YesNo === 'Yes'}
-                    onChange={(e) => updateDutyData('Row7_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row7_YesNo_Yes">Yes</label>
-                </div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row7_YesNo_No"
-                    name="Row7_YesNo"
-                    value="No"
-                    checked={dutyData.Row7_YesNo === 'No'}
-                    onChange={(e) => updateDutyData('Row7_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row7_YesNo_No">No</label>
-                </div>
-                <div style={styles.deadlineInfo}>Deadline: 12:00 PM</div>
-                {isRowOverdue('Row7_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ Check ledger for balance should be done by 12:00 PM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row7_Done}
-                  onChange={(e) => updateDutyData('Row7_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row7_Checked}
-                  onChange={(e) => updateDutyData('Row7_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row7_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 8 */}
-            <tr className={isRowOverdue('Row8_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row8_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>8</strong></td>
-              <td style={styles.td}>
-                <strong>Morning confirmations</strong><br/>
-                <div style={styles.dutyDetails}>At least by noon</div>
-                <div style={styles.deadlineInfo}>Deadline: 12:00 PM</div>
-                {isRowOverdue('Row8_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ Morning confirmations should be done by 12:00 PM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row8_Done}
-                  onChange={(e) => updateDutyData('Row8_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row8_Checked}
-                  onChange={(e) => updateDutyData('Row8_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row8_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 9 */}
-            <tr>
-              <td style={styles.td}><strong>9</strong></td>
-              <td style={styles.td}>
-                <strong>No shows entered on ledger</strong>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row9_Done}
-                  onChange={(e) => updateDutyData('Row9_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row9_Checked}
-                  onChange={(e) => updateDutyData('Row9_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row9_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 10 */}
-            <tr>
-              <td style={styles.td}><strong>10</strong></td>
-              <td style={styles.td}>
-                <strong>No shows stamped in patient charts</strong>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row10_Done}
-                  onChange={(e) => updateDutyData('Row10_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row10_Checked}
-                  onChange={(e) => updateDutyData('Row10_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row10_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 11 */}
-            <tr className={isRowOverdue('Row11_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row11_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>11</strong></td>
-              <td style={styles.td}>
-                <strong>Reconfirming completed?</strong><br/>
-                <div style={styles.dutyDetails}>Start at 4:00pm</div>
-                <div style={styles.deadlineInfo}>Deadline: 4:30 PM</div>
-                {isRowOverdue('Row11_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ Reconfirming should be completed by 4:30 PM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row11_Done}
-                  onChange={(e) => updateDutyData('Row11_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row11_Checked}
-                  onChange={(e) => updateDutyData('Row11_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row11_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 12 */}
-            <tr style={isRowOverdue('Row12_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>12</strong></td>
-              <td style={styles.td}>
-                <strong>One week reminders completed?</strong>
-                <div style={styles.deadlineInfo}>Deadline: 3:00 PM</div>
-                {isRowOverdue('Row12_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ One week reminders should be done by 3:00 PM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row12_Done}
-                  onChange={(e) => updateDutyData('Row12_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row12_Checked}
-                  onChange={(e) => updateDutyData('Row12_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row12_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 13 */}
-            <tr>
-              <td style={styles.td}><strong>13</strong></td>
-              <td style={styles.td}>
-                <strong>Call all treatment patients from today for post op</strong>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row13_Done}
-                  onChange={(e) => updateDutyData('Row13_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row13_Checked}
-                  onChange={(e) => updateDutyData('Row13_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row13_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 14 */}
-            <tr>
-              <td style={styles.td}><strong>14</strong></td>
-              <td style={styles.td}>
-                <strong>Total lab case deposits/deliveries</strong>
-                <textarea
-                  value={dutyData['Row14_Name/DOB']}
-                  onChange={(e) => updateDutyData('Row14_Name/DOB', e.target.value)}
-                  placeholder="Name/DOB(mm/dd/yyyy) 1&#10;&#10;Name/DOB(mm/dd/yyyy) 2&#10;&#10;Name/DOB(mm/dd/yyyy) 3"
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    minHeight: '80px',
-                    resize: 'vertical',
-                    whiteSpace: 'pre-wrap'
-                  }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row14_Done}
-                  onChange={(e) => updateDutyData('Row14_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row14_Checked}
-                  onChange={(e) => updateDutyData('Row14_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row14_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 15 */}
-            <tr>
-              <td style={styles.td}><strong>15</strong></td>
-              <td style={styles.td}>
-                <strong>Check all undelivered lab cases and make appointments</strong>
-                <div style={styles.dutyDetails}>
-                  Any Lab case that is more than 3 weeks old must be sent to corporate along with $20 deposit
-                </div>
-                <textarea
-                  value={dutyData.Row15_LabCases}
-                  onChange={(e) => updateDutyData('Row15_LabCases', e.target.value)}
-                  placeholder="1)&#10;&#10;2)&#10;&#10;3)"
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    minHeight: '80px',
-                    resize: 'vertical',
-                    whiteSpace: 'pre-wrap'
-                  }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row15_Done}
-                  onChange={(e) => updateDutyData('Row15_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row15_Checked}
-                  onChange={(e) => updateDutyData('Row15_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row15_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 16 */}
-            <tr>
-              <td style={styles.td}><strong>16</strong></td>
-              <td style={styles.td}>
-                <strong>Check all lab cases for next day</strong>
-                <div style={styles.dutyDetails}>Call lab for next day pick up's</div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row16_Done}
-                  onChange={(e) => updateDutyData('Row16_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row16_Checked}
-                  onChange={(e) => updateDutyData('Row16_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row16_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 17 */}
-            <tr>
-              <td style={styles.td}><strong>17</strong></td>
-              <td style={styles.td}>
-                <strong>N₂O/ Compressor Off</strong>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row17_Done}
-                  onChange={(e) => updateDutyData('Row17_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row17_Checked}
-                  onChange={(e) => updateDutyData('Row17_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row17_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 18 */}
-            <tr>
-              <td style={styles.td}><strong>18</strong></td>
-              <td style={styles.td}>
-                <strong>Did you read the meter on the Oxygen/N₂O/Helium tank?</strong><br/>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row18_YesNo_Yes"
-                    name="Row18_YesNo"
-                    value="Yes"
-                    checked={dutyData.Row18_YesNo === 'Yes'}
-                    onChange={(e) => updateDutyData('Row18_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row18_YesNo_Yes">Yes</label>
-                </div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row18_YesNo_No"
-                    name="Row18_YesNo"
-                    value="No"
-                    checked={dutyData.Row18_YesNo === 'No'}
-                    onChange={(e) => updateDutyData('Row18_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row18_YesNo_No">No</label>
-                </div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row18_Done}
-                  onChange={(e) => updateDutyData('Row18_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row18_Checked}
-                  onChange={(e) => updateDutyData('Row18_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row18_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 19 */}
-            <tr>
-              <td style={styles.td}><strong>19</strong></td>
-              <td style={styles.td}>
-                <strong>How many tanks are empty & need to be replaced?</strong>
-                <div style={styles.inlineOption}>
-                  <label htmlFor="Row19_O2">O₂:</label>
-                  <input
-                    type="number"
-                    id="Row19_O2"
-                    value={dutyData.Row19_O2}
-                    onChange={(e) => updateDutyData('Row19_O2', e.target.value)}
-                    style={{ width: '50px', marginLeft: '5px' }}
-                  />
-                </div>
-                <div style={styles.inlineOption}>
-                  <label htmlFor="Row19_N2O">N₂O:</label>
-                  <input
-                    type="number"
-                    id="Row19_N2O"
-                    value={dutyData.Row19_N2O}
-                    onChange={(e) => updateDutyData('Row19_N2O', e.target.value)}
-                    style={{ width: '50px', marginLeft: '5px' }}
-                  />
-                </div>
-                <div style={styles.inlineOption}>
-                  <label htmlFor="Row19_He">He:</label>
-                  <input
-                    type="number"
-                    id="Row19_He"
-                    value={dutyData.Row19_He}
-                    onChange={(e) => updateDutyData('Row19_He', e.target.value)}
-                    style={{ width: '50px', marginLeft: '5px' }}
-                  />
-                </div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row19_Done}
-                  onChange={(e) => updateDutyData('Row19_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row19_Checked}
-                  onChange={(e) => updateDutyData('Row19_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row19_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 20 */}
-            <tr>
-              <td style={styles.td}><strong>20</strong></td>
-              <td style={styles.td}>
-                <strong>Check restrooms initial logs hourly</strong>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row20_Done}
-                  onChange={(e) => updateDutyData('Row20_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row20_Checked}
-                  onChange={(e) => updateDutyData('Row20_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row20_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 21 */}
-            <tr>
-              <td style={styles.td}><strong>21</strong></td>
-              <td style={styles.td}>
-                <strong>Swept/Mopped</strong><br/>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row21_YesNo_Yes"
-                    name="Row21_YesNo"
-                    value="Yes"
-                    checked={dutyData.Row21_YesNo === 'Yes'}
-                    onChange={(e) => updateDutyData('Row21_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row21_YesNo_Yes">Yes</label>
-                </div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row21_YesNo_No"
-                    name="Row21_YesNo"
-                    value="No"
-                    checked={dutyData.Row21_YesNo === 'No'}
-                    onChange={(e) => updateDutyData('Row21_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row21_YesNo_No">No</label>
-                </div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row21_Done}
-                  onChange={(e) => updateDutyData('Row21_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row21_Checked}
-                  onChange={(e) => updateDutyData('Row21_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row21_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 22 */}
-            <tr>
-              <td style={styles.td}><strong>22</strong></td>
-              <td style={styles.td}>
-                <strong>Cleaned Breakroom</strong><br/>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row22_YesNo_Yes"
-                    name="Row22_YesNo"
-                    value="Yes"
-                    checked={dutyData.Row22_YesNo === 'Yes'}
-                    onChange={(e) => updateDutyData('Row22_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row22_YesNo_Yes">Yes</label>
-                </div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row22_YesNo_No"
-                    name="Row22_YesNo"
-                    value="No"
-                    checked={dutyData.Row22_YesNo === 'No'}
-                    onChange={(e) => updateDutyData('Row22_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row22_YesNo_No">No</label>
-                </div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row22_Done}
-                  onChange={(e) => updateDutyData('Row22_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row22_Checked}
-                  onChange={(e) => updateDutyData('Row22_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row22_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 23 */}
-            <tr>
-              <td style={styles.td}><strong>23</strong></td>
-              <td style={styles.td}>
-                <strong>Sterilizers: Cycle Complete</strong><br/>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row23_YesNo_Yes"
-                    name="Row23_YesNo"
-                    value="Yes"
-                    checked={dutyData.Row23_YesNo === 'Yes'}
-                    onChange={(e) => updateDutyData('Row23_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row23_YesNo_Yes">Yes</label>
-                </div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row23_YesNo_No"
-                    name="Row23_YesNo"
-                    value="No"
-                    checked={dutyData.Row23_YesNo === 'No'}
-                    onChange={(e) => updateDutyData('Row23_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row23_YesNo_No">No (Do Not Push Stop)</label>
-                </div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row23_Done}
-                  onChange={(e) => updateDutyData('Row23_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row23_Checked}
-                  onChange={(e) => updateDutyData('Row23_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row23_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 24 */}
-            <tr>
-              <td style={styles.td}><strong>24</strong></td>
-              <td style={styles.td}>
-                <strong>Drained Ultrasonic</strong><br/>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row24_YesNo_Yes"
-                    name="Row24_YesNo"
-                    value="Yes"
-                    checked={dutyData.Row24_YesNo === 'Yes'}
-                    onChange={(e) => updateDutyData('Row24_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row24_YesNo_Yes">Yes</label>
-                </div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row24_YesNo_No"
-                    name="Row24_YesNo"
-                    value="No"
-                    checked={dutyData.Row24_YesNo === 'No'}
-                    onChange={(e) => updateDutyData('Row24_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row24_YesNo_No">No</label>
-                </div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row24_Done}
-                  onChange={(e) => updateDutyData('Row24_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row24_Checked}
-                  onChange={(e) => updateDutyData('Row24_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row24_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 25 */}
-            <tr className={isRowOverdue('Row25_Done') ? 'overdue-row' : ''} style={isRowOverdue('Row25_Done') ? styles.overdueRow : {}}>
-              <td style={styles.td}><strong>25</strong></td>
-              <td style={styles.td}>
-                <strong>Spore Test</strong>
-                <div style={styles.dutyDetails}>Every Monday</div>
-                <div style={styles.deadlineInfo}>Deadline: 11:00 AM (Mondays only)</div>
-                {isRowOverdue('Row25_Done') && (
-                  <div style={styles.overdueWarning}>⚠️ Spore Test should be done by 11:00 AM</div>
-                )}
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row25_Done}
-                  onChange={(e) => updateDutyData('Row25_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row25_Checked}
-                  onChange={(e) => updateDutyData('Row25_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row25_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 26 */}
-            <tr>
-              <td style={styles.td}><strong>26</strong></td>
-              <td style={styles.td}>
-                <strong>Turn Off All TV's and Computers at the End of the Day</strong>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row26_Done}
-                  onChange={(e) => updateDutyData('Row26_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row26_Checked}
-                  onChange={(e) => updateDutyData('Row26_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row26_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 27 */}
-            <tr>
-              <td style={styles.td}><strong>27</strong></td>
-              <td style={styles.td}>
-                <strong>Postcards Ready for Pick-up</strong>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row27_Done}
-                  onChange={(e) => updateDutyData('Row27_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row27_Checked}
-                  onChange={(e) => updateDutyData('Row27_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row27_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 28 */}
-            <tr>
-              <td style={styles.td}><strong>28</strong></td>
-              <td style={styles.td}>
-                <strong>Clean traps everyday</strong> (chair)
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row28_Done}
-                  onChange={(e) => updateDutyData('Row28_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row28_Checked}
-                  onChange={(e) => updateDutyData('Row28_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row28_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 29 */}
-            <tr>
-              <td style={styles.td}><strong>29</strong></td>
-              <td style={styles.td}>
-                <strong>Clean main trap 1st/15th</strong> (by vacuum)
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row29_Done}
-                  onChange={(e) => updateDutyData('Row29_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row29_Checked}
-                  onChange={(e) => updateDutyData('Row29_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row29_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 30 */}
-            <tr>
-              <td style={styles.td}><strong>30</strong></td>
-              <td style={styles.td}>
-                <strong>Did you flush the lines with hot water?</strong><br/>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row30_YesNo_Yes"
-                    name="Row30_YesNo"
-                    value="Yes"
-                    checked={dutyData.Row30_YesNo === 'Yes'}
-                    onChange={(e) => updateDutyData('Row30_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row30_YesNo_Yes">Yes</label>
-                </div>
-                <div style={styles.inlineOption}>
-                  <input
-                    type="radio"
-                    id="Row30_YesNo_No"
-                    name="Row30_YesNo"
-                    value="No"
-                    checked={dutyData.Row30_YesNo === 'No'}
-                    onChange={(e) => updateDutyData('Row30_YesNo', e.target.value)}
-                    style={{ marginRight: '5px', cursor: 'pointer' }}
-                  />
-                  <label htmlFor="Row30_YesNo_No">No</label>
-                </div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row30_Done}
-                  onChange={(e) => updateDutyData('Row30_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row30_Checked}
-                  onChange={(e) => updateDutyData('Row30_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row30_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 31 */}
-            <tr>
-              <td style={styles.td}><strong>31</strong></td>
-              <td style={styles.td}>
-                <strong>Check all doors are locked</strong>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row31_Done}
-                  onChange={(e) => updateDutyData('Row31_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row31_Checked}
-                  onChange={(e) => updateDutyData('Row31_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row31_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
-
-            {/* Row 32 - 마지막 행 */}
-            <tr>
-              <td style={styles.td}><strong>32</strong></td>
-              <td style={styles.td}>
-                <strong>Turn On Answering Service</strong><br/>
-                <div style={styles.dutyDetails}>
-                  1) Go to phone system website<br/>
-                  2) Log in<br/>
-                  3) Click on user icon<br/>
-                  4) Select override office hours<br/>
-                  5) Select "Office is Closed"<br/>
-                  6) For "1day"<br/>
-                  7) Call the office to verify that calls were transferred correctly. (For Holiday Weekends, Set for 1 week)
-                </div>
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row32_Done}
-                  onChange={(e) => updateDutyData('Row32_Done', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row32_Checked}
-                  onChange={(e) => updateDutyData('Row32_Checked', e.target.value)}
-                  style={{ ...styles.input, margin: 0, fontSize: '13px', padding: '6px 8px' }}
-                />
-              </td>
-              <td style={styles.td}>
-                <input
-                  type="text"
-                  value={dutyData.Row32_Time}
-                  readOnly
-                  style={{ 
-                    ...styles.input, 
-                    margin: 0, 
-                    fontSize: '13px', 
-                    padding: '6px 8px',
-                    backgroundColor: '#f8f9fa',
-                    color: '#6c757d'
-                  }}
-                />
-              </td>
-            </tr>
+              return (
+                <tr key={row.num} className={overdue ? 'overdue-row' : ''}>
+                  <td style={styles.td}><strong>{row.num}</strong></td>
+                  <td style={styles.td}>
+                    <strong>{row.title}</strong>{row.suffix && ` ${row.suffix}`}
+                    {row.instructions && (
+                      <div style={styles.dutyDetails}>
+                        {row.instructions.map((line, i) => (
+                          <React.Fragment key={i}>{i > 0 && <br/>}{line}</React.Fragment>
+                        ))}
+                      </div>
+                    )}
+                    {row.details?.map((d, i) => (
+                      <div key={i} style={styles.dutyDetails}>{d}</div>
+                    ))}
+                    {row.yesNo && (
+                      <>
+                        <br/>
+                        <div style={styles.inlineOption}>
+                          <input type="radio" id={`${row.yesNo}_Yes`} name={row.yesNo} value="Yes"
+                            checked={(dutyData as any)[row.yesNo] === 'Yes'}
+                            onChange={(e) => updateDutyData(row.yesNo!, e.target.value)}
+                            style={{ marginRight: '5px', cursor: 'pointer' }} />
+                          <label htmlFor={`${row.yesNo}_Yes`}>Yes</label>
+                        </div>
+                        <div style={styles.inlineOption}>
+                          <input type="radio" id={`${row.yesNo}_No`} name={row.yesNo} value="No"
+                            checked={(dutyData as any)[row.yesNo] === 'No'}
+                            onChange={(e) => updateDutyData(row.yesNo!, e.target.value)}
+                            style={{ marginRight: '5px', cursor: 'pointer' }} />
+                          <label htmlFor={`${row.yesNo}_No`}>{row.noLabel || 'No'}</label>
+                        </div>
+                      </>
+                    )}
+                    {row.textInput && (
+                      <>
+                        <br/>
+                        <input type="text"
+                          value={(dutyData as any)[row.textInput.field] || ''}
+                          onChange={(e) => updateDutyData(row.textInput!.field, e.target.value)}
+                          placeholder={row.textInput.placeholder}
+                          style={cellInput} />
+                      </>
+                    )}
+                    {row.textarea && (
+                      <textarea
+                        value={(dutyData as any)[row.textarea.field] || ''}
+                        onChange={(e) => updateDutyData(row.textarea!.field, e.target.value)}
+                        placeholder={row.textarea.placeholder}
+                        style={textareaCSS} />
+                    )}
+                    {row.numberInputs?.map((ni) => (
+                      <div key={ni.field} style={styles.inlineOption}>
+                        <label htmlFor={ni.field}>{ni.label}</label>
+                        <input type="text" id={ni.field}
+                          value={(dutyData as any)[ni.field] || ''}
+                          onChange={(e) => updateDutyData(ni.field, e.target.value)}
+                          style={{ width: '50px', marginLeft: '5px' }} />
+                      </div>
+                    ))}
+                    {row.deadlineDisplay && (
+                      <div style={styles.deadlineInfo}>{row.deadlineDisplay}</div>
+                    )}
+                    {overdue && deadlineEntry && (
+                      <div style={styles.overdueWarning}>⚠️ {deadlineEntry.message}</div>
+                    )}
+                  </td>
+                  <td style={styles.td}>
+                    <input type="text" value={(dutyData as any)[doneKey] || ''}
+                      onChange={(e) => updateDutyData(doneKey, e.target.value)} style={cellInput} />
+                  </td>
+                  <td style={styles.td}>
+                    <input type="text" value={(dutyData as any)[timeKey] || ''} readOnly style={cellInputRO} />
+                  </td>
+                  <td style={styles.td}>
+                    <input type="text" value={(dutyData as any)[checkedKey] || ''}
+                      onChange={(e) => updateDutyData(checkedKey, e.target.value)} style={cellInput} />
+                  </td>
+                  <td style={styles.td}>
+                    <input type="text" value={(dutyData as any)[`Row${row.num}_Checked_Time`] || ''} readOnly style={cellInputRO} />
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
 
@@ -2898,134 +1422,6 @@ export default function DailyOfficeDuties() {
           </div>
         )}
 
-      {/* 비밀번호 확인 모달 */}
-      {showPasswordModal && (
-        <div style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'rgba(0, 0, 0, 0.5)',
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          zIndex: 1000
-        }}>
-          <div style={{
-            backgroundColor: 'white',
-            padding: '30px',
-            borderRadius: '8px',
-            maxWidth: '400px',
-            width: '90%',
-            boxShadow: '0 4px 6px rgba(0, 0, 0, 0.1)'
-          }}>
-            <h3 style={{
-              marginTop: 0,
-              marginBottom: '20px',
-              color: '#2c3e50',
-              fontSize: '18px'
-            }}>
-              Office Password Required
-            </h3>
-            <p style={{
-              marginBottom: '20px',
-              color: '#666',
-              fontSize: '14px'
-            }}>
-              Enter the password for <strong>{pendingOffice}</strong>
-            </p>
-            <input
-              type="password"
-              id="officePasswordInput"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  const input = e.target as HTMLInputElement;
-                  const password = input.value;
-                  const expectedPassword = getOfficePassword(pendingOffice);
-                  
-                  if (password === expectedPassword) {
-                    setSelectedOffice(pendingOffice);
-                    setOfficePasswordVerified(true);
-                    setShowPasswordModal(false);
-                    setPendingOffice('');
-                  } else {
-                    alert("Incorrect password. Access denied.");
-                    input.value = '';
-                  }
-                }
-              }}
-              style={{
-                width: '100%',
-                padding: '10px',
-                fontSize: '16px',
-                border: '1px solid #e9ecef',
-                borderRadius: '4px',
-                marginBottom: '20px',
-                boxSizing: 'border-box'
-              }}
-              placeholder="Enter password"
-            />
-            <div style={{
-              display: 'flex',
-              gap: '10px',
-              justifyContent: 'flex-end'
-            }}>
-              <button
-                onClick={() => {
-                  setShowPasswordModal(false);
-                  setPendingOffice('');
-                  // 선택을 취소하고 드롭다운을 빈 값으로 복원
-                  const selectElement = document.getElementById('selectedOffice') as HTMLSelectElement;
-                  if (selectElement) {
-                    selectElement.value = selectedOffice || '';
-                  }
-                }}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#95a5a6',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '14px'
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  const input = document.getElementById('officePasswordInput') as HTMLInputElement;
-                  const password = input?.value || '';
-                  const expectedPassword = getOfficePassword(pendingOffice);
-                  
-                  if (password === expectedPassword) {
-                    setSelectedOffice(pendingOffice);
-                    setOfficePasswordVerified(true);
-                    setShowPasswordModal(false);
-                    setPendingOffice('');
-                  } else {
-                    alert("Incorrect password. Access denied.");
-                    if (input) input.value = '';
-                  }
-                }}
-                style={{
-                  padding: '10px 20px',
-                  backgroundColor: '#3498db',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  fontSize: '14px'
-                }}
-              >
-                Verify
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       </div>
     </div>
     </>
