@@ -54,7 +54,7 @@ export default function RestroomInspection() {
     "California": ["Kindal"],
     "Delano": ["Helen", "Stephanie"],
     "Fresno": ["Cynthia"],
-    "Ming": ["Kindal", "Hopie"],
+    "Ming": ["Kindal", "Hopie", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Dianne"],
     "Visalia": ["Dianne"]
@@ -1131,4 +1131,5 @@ export default function RestroomInspection() {
     </>
   );
 }
+
 
