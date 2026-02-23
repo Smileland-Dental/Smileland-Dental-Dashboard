@@ -35,7 +35,7 @@ export default function LobbyInspectionPage() {
     "California": ["Kindal"],
     "Delano": ["Helen", "Stephanie"],
     "Fresno": ["Cynthia"],
-    "Ming": ["Kindal", "Hopie"],
+    "Ming": ["Kindal", "Hopie", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Dianne"],
     "Visalia": ["Dianne"]
@@ -1091,5 +1091,6 @@ export default function LobbyInspectionPage() {
     </>
   );
 }
+
 
 
