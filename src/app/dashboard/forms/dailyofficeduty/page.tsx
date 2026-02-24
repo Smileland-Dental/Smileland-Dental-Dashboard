@@ -634,7 +634,7 @@ export default function DailyOfficeDuties() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'MANAGER') {
+        if (userData?.role !== 'MANAGER' && userData?.role !== 'USER') {
           setIsAuthorized(false);
           return;
         }
@@ -1427,4 +1427,5 @@ export default function DailyOfficeDuties() {
     </>
   );
 }
+
 
