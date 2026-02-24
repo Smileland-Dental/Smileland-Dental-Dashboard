@@ -804,7 +804,7 @@ function SupplyManagerSystemContent() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'Manager' && userData?.role !== 'User') {
+        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           if (typeof window !== 'undefined') {
@@ -1554,5 +1554,6 @@ export default function SupplyManagerSystem() {
     </>
   );
 }
+
 
 
