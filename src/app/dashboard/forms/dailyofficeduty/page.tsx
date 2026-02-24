@@ -346,7 +346,7 @@ export default function DailyOfficeDuties() {
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
-  const [OfficeBasedOptions, setOfficeBasedOptions] = useState<string[]>([]);
+  const [OfficesOptions, setOfficesOptions] = useState<string[]>([]);
   
   // Rate limiting을 위한 ref
   const lastUpdateDutyDataCall = useRef<number>(0);
@@ -634,21 +634,21 @@ export default function DailyOfficeDuties() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'manager') {
+        if (userData?.role !== 'MANAGER') {
           setIsAuthorized(false);
           return;
         }
 
         setIsAuthorized(true);
 
-        // office_based 처리: 배열이거나 단일 값일 수 있음
-        if (userData?.office_based) {
-          const officeBasedArray = Array.isArray(userData.office_based) 
-            ? userData.office_based 
-            : [userData.office_based];
-          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+        // offices 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.offices) {
+          const officesArray = Array.isArray(userData.offices) 
+            ? userData.offices 
+            : [userData.offices];
+          const validOptions = officesArray.filter((g: string) => officeOptions.includes(g));
           if (validOptions.length > 0) {
-            setOfficeBasedOptions(validOptions);
+            setOfficesOptions(validOptions);
             if (validOptions.length === 1) {
               setSelectedOffice(validOptions[0]);
             }
@@ -1251,10 +1251,10 @@ export default function DailyOfficeDuties() {
               required
             />
           </div>
-          {OfficeBasedOptions.length > 0 && (
+          {OfficesOptions.length > 0 && (
             <div style={styles.formGroup}>
               <label style={styles.label} htmlFor="selectedOffice">Office:</label>
-              {OfficeBasedOptions.length === 1 ? (
+              {OfficesOptions.length === 1 ? (
                 <span style={{
                   ...styles.input,
                   display: 'inline-block',
@@ -1273,7 +1273,7 @@ export default function DailyOfficeDuties() {
                   required
                 >
                   <option value="">-- Select Office --</option>
-                  {OfficeBasedOptions.map(office => (
+                  {OfficesOptions.map(office => (
                     <option key={office} value={office}>{office}</option>
                   ))}
                 </select>
@@ -1427,3 +1427,4 @@ export default function DailyOfficeDuties() {
     </>
   );
 }
+
