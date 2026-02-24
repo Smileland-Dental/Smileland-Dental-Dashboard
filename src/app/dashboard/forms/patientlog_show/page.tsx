@@ -273,7 +273,7 @@ export default function ShowCheckSystem() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'Manager' && userData?.role !== 'User') {
+        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           // 다른 페이지로 리다이렉트하거나 홈으로 이동
@@ -1360,5 +1360,6 @@ export default function ShowCheckSystem() {
     </>
   );
 }
+
 
 
