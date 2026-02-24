@@ -65,7 +65,7 @@ export default function AddOnTreatment() {
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
-  const [userOfficeBasedOptions, setUserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_basedes 옵션들
+  const [userOfficesOptions, setUserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
   
   // 🔒 보안: 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   // 더 안전한 UUID 생성 방식을 사용하는 것을 권장합니다 (예: crypto.randomUUID)
@@ -798,7 +798,7 @@ export default function AddOnTreatment() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'manager') {
+        if (userData?.role !== 'MANAGER') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           // 다른 페이지로 리다이렉트하거나 홈으로 이동
@@ -811,17 +811,17 @@ export default function AddOnTreatment() {
         setIsAuthorized(true);
         setDutyDate(getCurrentCaliforniaTime());
 
-        // office_based 처리: 배열이거나 단일 값일 수 있음
-        if (userData?.office_based) {
-          const officeBasedArray = Array.isArray(userData.office_based) 
-            ? userData.office_based 
-            : [userData.office_based];
+        // offices 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.offices) {
+          const officesArray = Array.isArray(userData.offices) 
+            ? userData.offices 
+            : [userData.offices];
           
           // officeOptions에 포함된 값들만 필터링
-          const validOptions = officeBasedArray.filter((g: string) => officeOptions.includes(g));
+          const validOptions = officesArray.filter((g: string) => officeOptions.includes(g));
           
           if (validOptions.length > 0) {
-            setUserOfficeBasedOptions(validOptions);
+            setUserOfficesOptions(validOptions);
             // 단일 값이면 자동 선택
             if (validOptions.length === 1) {
               setSelectedOffice(validOptions[0]);
@@ -1055,11 +1055,11 @@ export default function AddOnTreatment() {
                 required
               />
             </div>
-            {/* office_basedes 옵션이 있는 경우에만 Office 표시 */}
-            {userOfficeBasedOptions.length > 0 && (
+            {/* offices 옵션이 있는 경우에만 Office 표시 */}
+            {userOfficesOptions.length > 0 && (
               <div style={styles.formGroup}>
                 <label style={styles.label} htmlFor="selectedOffice">Office:</label>
-                {userOfficeBasedOptions.length === 1 ? (
+                {userOfficesOptions.length === 1 ? (
                   <span style={{
                     ...styles.input,
                     display: 'inline-flex',
@@ -1079,7 +1079,7 @@ export default function AddOnTreatment() {
                     required
                   >
                     <option value="">--Select Office--</option>
-                    {userOfficeBasedOptions.map(office => (
+                    {userOfficesOptions.map(office => (
                       <option key={office} value={office}>{office}</option>
                     ))}
                   </select>
@@ -1242,4 +1242,5 @@ export default function AddOnTreatment() {
     </>
   );
 }
+
 
