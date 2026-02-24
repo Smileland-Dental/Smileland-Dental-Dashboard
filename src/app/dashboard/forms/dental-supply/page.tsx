@@ -220,7 +220,7 @@ function SupplyViewSystemContent() {
 
   // Office 선택 상태
   const [selectedOffice, setSelectedOffice] = useState('');
-  const [userOfficeBasedOptions, setuserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
+  const [userOfficesOptions, setuserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
   
   // 현재 선택된 오피스의 orderQuantities
@@ -470,7 +470,7 @@ function SupplyViewSystemContent() {
     loadAllItems();
   }, [loadAllItems]);
 
-  // 컴포넌트 마운트 시 사용자 인증, role 확인 및 office_based 기반 오피스 자동 선택
+  // 컴포넌트 마운트 시 사용자 인증, role 확인 및 offices 기반 오피스 자동 선택
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
@@ -490,7 +490,7 @@ function SupplyViewSystemContent() {
 
         const userData = sanitizeData(userDoc.data() || {});
 
-        if (userData?.role !== 'manager') {
+        if (userData?.role !== 'MANAGER' && userData?.role !== 'USER') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           if (typeof window !== 'undefined') {
@@ -501,17 +501,17 @@ function SupplyViewSystemContent() {
 
         setIsAuthorized(true);
 
-        // office_based 처리: 배열이거나 단일 값일 수 있음
-        if (userData?.office_based) {
-          const OfficeBasedArray = Array.isArray(userData.office_based) 
-            ? userData.office_based 
-            : [userData.office_based];
+        // offices 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.offices) {
+          const OfficesArray = Array.isArray(userData.offices) 
+            ? userData.offices 
+            : [userData.offices];
           
           // officeOptions에 포함된 값들만 필터링
-          const validOptions = OfficeBasedArray.filter((g: string) => officeOptions.includes(g));
+          const validOptions = OfficesArray.filter((g: string) => officeOptions.includes(g));
           
           if (validOptions.length > 0) {
-            setuserOfficeBasedOptions(validOptions);
+            setuserOfficesOptions(validOptions);
             // 단일 값이면 자동 선택 (비밀번호 없이)
             if (validOptions.length === 1) {
               setSelectedOffice(validOptions[0]);
@@ -1006,7 +1006,7 @@ function SupplyViewSystemContent() {
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057', fontSize: '14px' }}>
               Select Office:
             </label>
-            {userOfficeBasedOptions.length === 1 ? (
+            {userOfficesOptions.length === 1 ? (
               <span style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -1034,7 +1034,7 @@ function SupplyViewSystemContent() {
                 }}
               >
                 <option value="">-- Select an Office --</option>
-                {(userOfficeBasedOptions.length > 0 ? userOfficeBasedOptions : officeOptions).map(office => (
+                {(userOfficesOptions.length > 0 ? userOfficesOptions : officeOptions).map(office => (
                   <option key={office} value={office}>{office}</option>
                 ))}
               </select>
@@ -1481,3 +1481,4 @@ export default function SupplyViewPage() {
     </>
   );
 }
+
