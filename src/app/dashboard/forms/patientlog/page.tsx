@@ -436,7 +436,7 @@ function PatientLogSystem(): React.ReactElement {
   } | null>(null); // 이전 basic information ref (최신 값 추적)
   const [isUnlocked, setIsUnlocked] = useState(false); // 아래 섹션 lock 상태
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
-  const [userOfficeBasedOptions, setuserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
+  const [userOfficesOptions, setuserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
 
   // Rate limiting을 위한 ref
   const lastUpdatePatientRowCall = useRef<number>(0);
@@ -932,7 +932,7 @@ function PatientLogSystem(): React.ReactElement {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'manager') {
+        if (userData?.role !== 'MANAGER') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           // 다른 페이지로 리다이렉트하거나 홈으로 이동
@@ -944,17 +944,17 @@ function PatientLogSystem(): React.ReactElement {
 
         setIsAuthorized(true);
 
-        // office_based 처리: 배열이거나 단일 값일 수 있음
-        if (userData?.office_based) {
-          const officeBasedArray = Array.isArray(userData.office_based) 
-            ? userData.office_based 
-            : [userData.office_based];
+        // offices 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.offices) {
+          const officesArray = Array.isArray(userData.offices) 
+            ? userData.offices 
+            : [userData.offices];
           
           // workOfficeOptions에 포함된 값들만 필터링
-          const validOptions = officeBasedArray.filter((g: string) => workOfficeOptions.includes(g));
+          const validOptions = officesArray.filter((g: string) => workOfficeOptions.includes(g));
           
           if (validOptions.length > 0) {
-            setuserOfficeBasedOptions(validOptions);
+            setuserOfficesOptions(validOptions);
             // 단일 값이면 자동 선택
             if (validOptions.length === 1) {
               setFormData(prev => ({ ...prev, workOffice: validOptions[0] }));
@@ -1647,12 +1647,12 @@ function PatientLogSystem(): React.ReactElement {
               />
             </div>
 
-            {userOfficeBasedOptions.length > 0 && (
+            {userOfficesOptions.length > 0 && (
             <div style={{ flex: '1', minWidth: '200px' }}>
               <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
                 Work Office:
               </label>
-              {userOfficeBasedOptions.length === 1 ? (
+              {userOfficesOptions.length === 1 ? (
                 <div style={{
                   ...inputStyle,
                   display: 'flex',
@@ -1672,7 +1672,7 @@ function PatientLogSystem(): React.ReactElement {
                   required
                 >
                   <option value="">Select Office</option>
-                  {userOfficeBasedOptions.map(office => (
+                  {userOfficesOptions.map(office => (
                     <option key={office} value={office}>{office}</option>
                   ))}
                 </select>
@@ -1944,3 +1944,4 @@ function PatientLogSystem(): React.ReactElement {
 export default function PatientLogPage() {
   return <PatientLogSystem />;
 }
+
