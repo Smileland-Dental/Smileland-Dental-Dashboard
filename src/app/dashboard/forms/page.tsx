@@ -56,11 +56,11 @@ export default function Page() {
           setUserRole(userData.role);
 
 
-          const officeIds: string[] = userData.offices || [];
+          const officeIds: string[] = userData.forms || [];
 
           // If office IDs exist, fetch their documents to get links
           if (officeIds.length > 0) {
-            const officePromises = officeIds.map(id => getDoc(doc(db, 'offices', id)));
+            const officePromises = officeIds.map(id => getDoc(doc(db, 'forms', id)));
             const officeDocsSnapshots = await Promise.all(officePromises);
 
             // Process the snapshots into an array of links for each office.
