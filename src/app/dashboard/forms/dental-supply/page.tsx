@@ -490,7 +490,7 @@ function SupplyViewSystemContent() {
 
         const userData = sanitizeData(userDoc.data() || {});
 
-        if (userData?.role !== 'MANAGER' && userData?.role !== 'USER') {
+        if (userData?.role !== 'Manager' && userData?.role !== 'User') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           if (typeof window !== 'undefined') {
@@ -1481,4 +1481,5 @@ export default function SupplyViewPage() {
     </>
   );
 }
+
 
