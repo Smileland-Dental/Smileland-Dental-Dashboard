@@ -1242,8 +1242,3 @@ export default function AddOnTreatment() {
     </>
   );
 }
-
-
-
-
-

@@ -1864,6 +1864,3 @@ export default function AttendanceTrack() {
     </div>
   );
 }
-
-
-

@@ -1944,7 +1944,3 @@ function PatientLogSystem(): React.ReactElement {
 export default function PatientLogPage() {
   return <PatientLogSystem />;
 }
-
-
-
-

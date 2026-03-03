@@ -35,6 +35,7 @@ export default function Page() {
   const [groupedOfficeLinks, setGroupedOfficeLinks] = useState<OfficeLinkGroup[]>([]);
   // State to keep track of loading status of the page
   const [loading, setLoading] = useState(true);
+  //console.log("Rendering /dashboard/forms page. Current user:", user, "Role:", userRole, "Grouped Links:", groupedOfficeLinks);
 
   // Effect to set up the auth state listener and fetch user role and links
   useEffect(() => {
@@ -57,16 +58,19 @@ export default function Page() {
 
 
           const officeIds: string[] = userData.forms || [];
+          console.log("User's office IDs for forms:", officeIds);
 
           // If office IDs exist, fetch their documents to get links
           if (officeIds.length > 0) {
             const officePromises = officeIds.map(id => getDoc(doc(db, 'forms', id)));
             const officeDocsSnapshots = await Promise.all(officePromises);
+            console.log(officeDocsSnapshots, "office documents fetched for user.");
 
             // Process the snapshots into an array of links for each office.
             const allGroupedLinks = officeDocsSnapshots.map(snapshot => {
               if (snapshot.exists()) {
                 const officeData = snapshot.data();
+                console.log(officeData);
                 // Create an object with the office name and its links
                 return {
                   officeName: officeData.name || 'Unnamed Office', // If there isn't a name, default to 'Unnamed Office'
@@ -84,7 +88,7 @@ export default function Page() {
         } 
         // Default to 'user' role if none found
         else {
-          setUserRole('user');
+          setUserRole('User');
         }
     } 
     // If no user is logged in, clear the user and role state
@@ -117,7 +121,7 @@ export default function Page() {
           {/*<p className="capitalize mb-5">Role: {userRole}</p>*/}
 
           {/* Rendering logic for grouped links for managers */}
-          {userRole === 'Manager' && groupedOfficeLinks.length > 0 && (
+          {userRole === 'Manager' || userRole === 'HR' && groupedOfficeLinks.length > 0 && (
             <div className="flex flex-wrap gap-8 w-screen sm:w-[100vw] md:w-[70vw]">
               {/* Outer loop: iterates through each office group */}
               {groupedOfficeLinks.map((officeGroup, groupIndex) => (
@@ -131,7 +135,7 @@ export default function Page() {
                     {/* Inner loop: iterates through links for the current office */}
                     {officeGroup.links.map((link, linkIndex) => (
                       <Button asChild key={linkIndex} variant="secondary" className="py-2.5 px-5 me-2 mb-2 text-lg font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">
-                        <Link href={link.url ?? ''} target="_blank" rel="noopener noreferrer">
+                        <Link href={link.url} target="_blank" rel="noopener noreferrer">
                           {link.title}
                         </Link>
                       </Button>
@@ -143,7 +147,7 @@ export default function Page() {
           )} 
 
           {/* Other role-based components (discontinuted for now)*/}
-          {userRole === 'employee' && groupedOfficeLinks.length > 0 && (
+          {userRole === 'Employee' && groupedOfficeLinks.length > 0 && (
             <div className="flex flex-wrap gap-8 w-screen">
               {/* Outer loop: iterates through each office group */}
               {groupedOfficeLinks.map((officeGroup, groupIndex) => (
@@ -157,7 +161,7 @@ export default function Page() {
                     {/* Inner loop: iterates through links for the current office */}
                     {officeGroup.links.map((link, linkIndex) => (
                       <Button asChild key={linkIndex} variant="secondary" className="py-2.5 px-5 me-2 mb-2 text-lg font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">
-                        <Link href={link.url ?? ''} target="_blank" rel="noopener noreferrer">
+                        <Link href={link.url} target="_blank" rel="noopener noreferrer">
                           {link.title}
                         </Link>
                       </Button>

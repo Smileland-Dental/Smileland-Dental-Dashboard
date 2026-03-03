@@ -1,0 +1,579 @@
+
+'use client';
+
+import { db } from '@/lib/firebase.config'; // Adjust path if necessary
+import { collection, query, where, getDocs, doc, updateDoc, serverTimestamp } from "firebase/firestore";
+import React, { useState, useEffect, useMemo } from 'react';
+
+/**
+ * Fetches absence requests from Firestore that match a list of office names.
+ * @param {string[]} offices - An array of office names (e.g., ['North', 'Downtown'])
+ * @returns {Promise<object[]>} - A promise that resolves to an array of absence documents.
+ */
+const getAbsenceRequestsByOffices = async (offices) => {
+  if (!offices || offices.length === 0) {
+    return []; // Return empty if the manager has no offices assigned
+  }
+
+  // NOTE: Firestore 'in' queries are limited to 30 values. If a manager has more
+  // offices, you'll need to run multiple queries. For most cases, this is fine.
+  const absencesRef = collection(db, "absences");
+  const q = query(absencesRef, where("office", "in", offices));
+
+  const querySnapshot = await getDocs(q);
+  const requests = [];
+
+  querySnapshot.forEach((doc) => {
+    const data = doc.data();
+    // Convert Firestore Timestamps to JS Date objects for easier handling on the client
+    const request = {
+      id: doc.id,
+      ...data,
+      date_submitted: data.date_submitted?.toDate(),
+      incident_start: data.incident_start?.toDate(),
+      incident_end: data.incident_end?.toDate(),
+    };
+    requests.push(request);
+  });
+  
+  // Sort by submission date, newest first
+  requests.sort((a, b) => b.date_submitted - a.date_submitted);
+
+  return requests;
+};
+
+
+/**
+ * Updates a specific absence request document in Firestore.
+ * @param {string} requestId - The ID of the absence document to update.
+ * @param {object} updateData - An object containing the fields to update.
+ * @returns {Promise<void>}
+ */
+const updateAbsenceRequest = async (requestId, updateData) => {
+  const requestRef = doc(db, "absences", requestId);
+  
+  // You might want to add a timestamp for when the approval happened
+  await updateDoc(requestRef, {
+    ...updateData,
+    manager_approval_timestamp: serverTimestamp() // Optional: records the time of action
+  });
+};
+
+const useAuth = () => {
+  return {
+    user: {
+      name: 'Jane Doe', // This would come from your auth state
+      // This is the key: the manager's assigned offices
+      // The Firestore query will use this array.
+      offices: ['North', 'Downtown'], 
+    },
+    isLoading: false,
+  };
+};
+
+
+
+export default function Page() {
+  const [activeTab, setActiveTab] = useState('incoming');
+  const [allRequests, setAllRequests] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [selectedRequest, setSelectedRequest] = useState(null);
+  const [managerNotes, setManagerNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const { user: manager, isLoading: isAuthLoading } = useAuth();
+
+  useEffect(() => {
+    if (isAuthLoading || !manager) return;
+
+    const fetchData = async () => {
+      try {
+        setIsLoading(true);
+        const requests = await getAbsenceRequestsByOffices(manager.offices);
+        setAllRequests(requests);
+      } catch (err) {
+        setError('Failed to fetch absence requests. Please try again later.');
+        console.error(err);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    fetchData();
+  }, [manager, isAuthLoading]);
+
+  const { incomingRequests, historicalRequests } = useMemo(() => {
+    const incoming = allRequests.filter(
+      (req) => req.manager_approval === 'pending' || req.manager_approval === null
+    );
+    const history = allRequests.filter(
+      (req) => req.manager_approval === 'approved' || req.manager_approval === 'denied'
+    );
+    return { incomingRequests: incoming, historicalRequests: history };
+  }, [allRequests]);
+
+  const handleViewDetails = (request) => {
+    setSelectedRequest(request);
+    setManagerNotes(request.notes || '');
+  };
+
+  const handleCloseModal = () => {
+    if (isSubmitting) return;
+    setSelectedRequest(null);
+    setManagerNotes('');
+  };
+
+  const handleUpdateRequest = async (decision) => {
+    if (!selectedRequest || !manager) return;
+    
+    setIsSubmitting(true);
+    const updateData = {
+      manager_approval: decision,
+      manager_approval_name: manager.name,
+      notes: managerNotes,
+    };
+
+    try {
+      await updateAbsenceRequest(selectedRequest.id, updateData);
+      setAllRequests(
+        allRequests.map((req) =>
+          req.id === selectedRequest.id ? { ...req, ...updateData } : req
+        )
+      );
+      handleCloseModal();
+    } catch (err) {
+      alert(`Failed to ${decision} request. Please try again.`);
+      console.error(err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const RequestList = ({ requests }) => {
+    if (requests.length === 0) {
+      return <p className="text-gray-500 mt-4">No requests found in this category.</p>;
+    }
+    return (
+      <div className="space-y-4">
+        {requests.map((req) => {
+          const statusConfig = {
+            approved: { color: 'bg-green-500', text: 'Approved' },
+            denied: { color: 'bg-red-500', text: 'Denied' },
+            pending: { color: 'bg-yellow-400', text: 'Pending' }
+          };
+          const status = statusConfig[req.manager_approval] || statusConfig.pending;
+
+          return (
+            <div
+              key={req.id}
+              onClick={() => handleViewDetails(req)}
+              className="bg-white shadow-md rounded-lg p-4 cursor-pointer transition hover:shadow-lg hover:bg-gray-50 flex items-center"
+            >
+              <div className={`w-2 h-16 rounded-full ${status.color} mr-4`}></div>
+              <div className="flex-grow grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                <div>
+                  <p className="text-sm text-gray-500">Employee ID</p>
+                  <p className="font-semibold text-gray-800">{req.employee_id}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Type</p>
+                  <p className="font-semibold text-gray-800">{req.type_of_request}</p>
+                </div>
+                <div>
+                  <p className="text-sm text-gray-500">Submitted</p>
+                  <p className="font-semibold text-gray-800">{req.date_submitted ? new Date(req.date_submitted).toLocaleDateString() : 'N/A'}</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  if (isLoading || isAuthLoading) {
+    return <div className="p-8">Loading...</div>;
+  }
+
+  if (error) {
+    return <div className="p-8 text-red-500 bg-red-100 border border-red-400 rounded-md">{error}</div>;
+  }
+
+  return (
+    <div className="p-4 md:p-8 bg-gray-50 min-h-screen">
+      <h1 className="text-3xl font-bold text-gray-800 mb-6">Approval Dashboard</h1>
+
+      {/* Tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab('incoming')}
+            className={`${activeTab === 'incoming' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}
+              whitespace-nowrap flex py-4 px-1 border-b-2 font-medium text-sm items-center`}
+          >
+            Incoming Requests
+            <span className={`${activeTab === 'incoming' ? 'bg-indigo-100 text-indigo-600' : 'bg-gray-100 text-gray-900'} ml-3 py-0.5 px-2.5 rounded-full text-xs font-medium`}>
+              {incomingRequests.length}
+            </span>
+          </button>
+          <button
+              onClick={() => setActiveTab('history')}
+              className={`${activeTab === 'history' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}
+                whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            History
+          </button>
+        </nav>
+      </div>
+      
+      {/* Tab Content */}
+      <div className="mt-8">
+        {activeTab === 'incoming' && <RequestList requests={incomingRequests} />}
+        {activeTab === 'history' && <RequestList requests={historicalRequests} />}
+      </div>
+
+      {/* Details Modal */}
+      {selectedRequest && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex justify-center items-center z-50 p-4" onClick={handleCloseModal}>
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-full overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6">
+              <h2 className="text-2xl font-bold text-gray-900 mb-4">Absence Request Details</h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 text-sm">
+                <div><strong className="text-gray-500 block">Employee ID:</strong> {selectedRequest.employee_id}</div>
+                <div><strong className="text-gray-500 block">Office:</strong> {selectedRequest.office}</div>
+                <div><strong className="text-gray-500 block">Type of Request:</strong> {selectedRequest.type_of_request}</div>
+                <div><strong className="text-gray-500 block">Date Submitted:</strong> {selectedRequest.date_submitted ? new Date(selectedRequest.date_submitted).toLocaleString() : 'N/A'}</div>
+                <div><strong className="text-gray-500 block">Incident Start:</strong> {selectedRequest.incident_start ? new Date(selectedRequest.incident_start).toLocaleString() : 'N/A'}</div>
+                <div><strong className="text-gray-500 block">Incident End:</strong> {selectedRequest.incident_end ? new Date(selectedRequest.incident_end).toLocaleString() : 'N/A'}</div>
+                <div className="md:col-span-2"><strong className="text-gray-500 block">Employee Comments:</strong> {selectedRequest.comments || 'N/A'}</div>
+              </div>
+            </div>
+            {selectedRequest.manager_approval === 'pending' && (
+                <div className="bg-gray-50 p-6 border-t">
+                  <label htmlFor="managerNotes" className="block text-sm font-medium text-gray-700">Manager Notes</label>
+                  <textarea
+                    id="managerNotes"
+                    value={managerNotes}
+                    onChange={(e) => setManagerNotes(e.target.value)}
+                    placeholder="Add optional notes..."
+                    rows="3"
+                    className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500"
+                  />
+                  <div className="mt-4 flex justify-end space-x-3">
+                    <button onClick={handleCloseModal} disabled={isSubmitting} className="bg-white py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:opacity-50">
+                      Cancel
+                    </button>
+                    <button onClick={() => handleUpdateRequest('denied')} disabled={isSubmitting} className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50">
+                      {isSubmitting ? 'Submitting...' : 'Deny'}
+                    </button>
+                    <button onClick={() => handleUpdateRequest('approved')} disabled={isSubmitting} className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:opacity-50">
+                      {isSubmitting ? 'Submitting...' : 'Approve'}
+                    </button>
+                  </div>
+                </div>
+            )}
+            {selectedRequest.manager_approval !== 'pending' && (
+                <div className="bg-gray-50 p-6 border-t">
+                    <p className="text-sm"><strong className="text-gray-600">Action Taken:</strong> <span className={`font-semibold ${selectedRequest.manager_approval === 'approved' ? 'text-green-700' : 'text-red-700'}`}>{selectedRequest.manager_approval}</span> by {selectedRequest.manager_approval_name}</p>
+                    <p className="mt-2 text-sm"><strong className="text-gray-600">Manager Notes:</strong> {selectedRequest.notes || 'No notes were added.'}</p>
+                </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+'use client';
+
+import { db } from '@/lib/firebase.config'; // Adjust path if necessary
+import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import React, { useState, useEffect, useMemo } from 'react';
+import { onAuthStateChanged, User } from "firebase/auth";
+import { auth } from '@/lib/firebase.config';
+import { getAbsenceRequestsByOffices } from '@/components/api/approval';
+
+// --- Type Definition ---
+// I've updated dates to be Date objects, as your API function converts them.
+// I also added employee_name, which is highly recommended to have on the absence document.
+type AbsenceRequest = {
+  id: string;
+  employee_id: string;
+  employee_name: string; // Recommended: Denormalize name for easy display
+  employee_title: string;
+  date_submitted: Date;
+  type_of_request: string;
+  office: string;
+  incident_start: Date;
+  incident_end: Date;
+  employee_comments: string;
+  manager_notes: string;
+  manager_approval: 'pending' | 'approved' | 'denied';
+  manager_name: string;
+  final_approval: 'pending' | 'approved' | 'denied';
+  final_name: string;
+};
+
+// --- Main Component ---
+export default function Page() {
+  const [user, setUser] = useState<User | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [userOffices, setUserOffices] = useState<string[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const [allRequests, setAllRequests] = useState<AbsenceRequest[]>([]);
+  const [activeTab, setActiveTab] = useState('incoming');
+
+  // State for the approval modal
+  const [selectedRequest, setSelectedRequest] = useState<AbsenceRequest | null>(null);
+  const [managerNotes, setManagerNotes] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // --- Data Fetching Effect ---
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setLoading(true);
+      setError(null);
+      if (currentUser) {
+        setUser(currentUser);
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        try {
+          const userDocSnap = await getDoc(userDocRef);
+          if (userDocSnap.exists()) {
+            const userData = userDocSnap.data();
+            const role = userData.role || 'No Role';
+            const offices = userData.offices || [];
+            setUserRole(role);
+            setUserOffices(offices);
+
+            if (offices.length > 0) {
+              const requests = await getAbsenceRequestsByOffices(offices, role);
+              setAllRequests(requests as AbsenceRequest[]);
+            } else {
+              setAllRequests([]);
+            }
+          } else {
+            setUserRole("No Role");
+          }
+        } catch (err: any) {
+          console.error("Error fetching user data or requests:", err);
+          setError("Failed to load data. Please try again later.");
+        }
+      } else {
+        setUser(null);
+        setUserRole(null);
+        setAllRequests([]);
+      }
+      setLoading(false);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- Filtered Lists using useMemo for Efficiency ---
+  const isManagerView = userRole === 'supervisors';
+
+  const incomingRequests = useMemo(() => {
+    if (isManagerView) {
+      // Managers see requests needing their approval
+      return allRequests.filter(r => r.manager_approval === 'pending');
+    } else {
+      // HR/Directors see requests approved by managers, needing final approval
+      return allRequests.filter(r => r.manager_approval === 'approved' && r.final_approval === 'pending');
+    }
+  }, [allRequests, isManagerView]);
+
+  const processedRequests = useMemo(() => {
+    if (isManagerView) {
+      // Managers see requests they have already actioned
+      return allRequests.filter(r => r.manager_approval === 'approved' || r.manager_approval === 'denied');
+    } else {
+      // HR/Directors see requests they have already actioned
+      return allRequests.filter(r => r.final_approval === 'approved' || r.final_approval === 'denied');
+    }
+  }, [allRequests, isManagerView]);
+
+  // --- Event Handlers ---
+  const handleOpenModal = (request: AbsenceRequest) => {
+    setSelectedRequest(request);
+    // Pre-fill notes if they already exist from a previous edit
+    setManagerNotes(request.manager_notes || '');
+  };
+
+  const handleCloseModal = () => {
+    setSelectedRequest(null);
+    setManagerNotes('');
+  };
+
+  const handleApproval = async (decision: 'approved' | 'denied') => {
+    if (!selectedRequest || !user) return;
+
+    setIsSubmitting(true);
+    const docRef = doc(db, 'absences', selectedRequest.id);
+
+    try {
+      let updateData: any = {};
+      if (isManagerView) {
+        updateData = {
+          manager_approval: decision,
+          manager_notes: managerNotes,
+          manager_name: user.displayName,
+          // You might want a timestamp for the action
+          // manager_action_date: serverTimestamp() 
+        };
+      } else { // HR or Director View
+        updateData = {
+          final_approval: decision,
+          final_name: user.displayName,
+          // HR can add to the notes, or you could have a separate `final_notes` field
+          manager_notes: managerNotes,
+          // final_action_date: serverTimestamp()
+        };
+      }
+
+      await updateDoc(docRef, updateData);
+
+      // Update local state for immediate UI feedback
+      setAllRequests(prevRequests =>
+        prevRequests.map(req =>
+          req.id === selectedRequest.id ? { ...req, ...updateData } : req
+        )
+      );
+
+      handleCloseModal();
+    } catch (err) {
+      console.error("Failed to update document: ", err);
+      alert("An error occurred. Could not process the request.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  // --- Render Logic ---
+  if (loading) {
+    return <div className="p-4">Loading...</div>;
+  }
+  if (error) {
+    return <div className="p-4 text-red-500">{error}</div>;
+  }
+
+  const requestsToDisplay = activeTab === 'incoming' ? incomingRequests : processedRequests;
+
+  return (
+    <div className="p-4 md:p-6">
+      <h1 className="text-2xl font-bold mb-4">Approval Dashboard</h1>
+      <p className="mb-4 text-gray-600">Role: <span className="font-semibold">{userRole}</span></p>
+
+      {/* Tabs */}
+      <div className="border-b border-gray-200">
+        <nav className="-mb-px flex space-x-8" aria-label="Tabs">
+          <button
+            onClick={() => setActiveTab('incoming')}
+            className={`${activeTab === 'incoming' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            Incoming ({incomingRequests.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('processed')}
+            className={`${activeTab === 'processed' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+          >
+            Processed ({processedRequests.length})
+          </button>
+        </nav>
+      </div>
+
+      {/* Requests List */}
+      <div className="mt-6">
+        {requestsToDisplay.length === 0 ? (
+          <p className="text-gray-500">No requests found.</p>
+        ) : (
+          <ul className="space-y-4">
+            {requestsToDisplay.map((req) => (
+              <li key={req.id} onClick={() => handleOpenModal(req)} className="p-4 border rounded-lg shadow-sm hover:shadow-md cursor-pointer transition">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="font-bold text-lg">{req.employee_name}</p>
+                    <p className="text-sm text-gray-600">{req.type_of_request} - {req.office}</p>
+                    <p className="text-xs text-gray-500">Submitted: {req.date_submitted}</p>
+                  </div>
+                  {/* Status pills can be useful */}
+                  <div className="text-right">
+                    {!isManagerView && <p className={`text-xs px-2 py-1 rounded-full ${req.manager_approval === 'approved' ? 'bg-blue-100 text-blue-800' : 'bg-gray-100 text-gray-800'}`}>Manager: {req.manager_approval}</p>}
+                    <p className={`mt-1 text-xs px-2 py-1 rounded-full ${isManagerView ? 
+                        (req.manager_approval === 'approved' ? 'bg-green-100 text-green-800' : (req.manager_approval === 'denied' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800')) : 
+                        (req.final_approval === 'approved' ? 'bg-green-100 text-green-800' : (req.final_approval === 'denied' ? 'bg-red-100 text-red-800' : 'bg-yellow-100 text-yellow-800'))
+                    }`}>
+                        {isManagerView ? req.manager_approval : `Final: ${req.final_approval}`}
+                    </p>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Approval Modal */}
+      {selectedRequest && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto">
+            <h2 className="text-xl font-bold mb-4">Request Details</h2>
+            <div className="space-y-3 text-sm">
+              <p><strong>Employee:</strong> {selectedRequest.employee_name} ({selectedRequest.employee_title})</p>
+              <p><strong>Office:</strong> {selectedRequest.office}</p>
+              <p><strong>Request Type:</strong> {selectedRequest.type_of_request}</p>
+              <p><strong>Incident Dates:</strong> {selectedRequest.incident_start} to {selectedRequest.incident_end}</p>
+              <p><strong>Employee Comments:</strong> <span className="text-gray-700 block border p-2 mt-1 rounded">{selectedRequest.employee_comments || 'N/A'}</span></p>
+              <hr />
+              {/* Only show manager section if they've acted or it's HR view */}
+              {(selectedRequest.manager_approval !== 'pending' || !isManagerView) && (
+                  <div>
+                      <p><strong>Manager:</strong> {selectedRequest.manager_name || 'N/A'}</p>
+                      <p><strong>Manager Approval:</strong> {selectedRequest.manager_approval}</p>
+                      <p><strong>Manager Notes:</strong> <span className="text-gray-700 block border p-2 mt-1 rounded">{selectedRequest.manager_notes || 'N/A'}</span></p>
+                  </div>
+              )}
+            </div>
+
+            {/* Action Area for Incoming Requests */}
+            {activeTab === 'incoming' && (
+              <div className="mt-6">
+                <label htmlFor="manager_notes" className="block text-sm font-medium text-gray-700">
+                  {isManagerView ? 'Manager Notes' : 'Final Notes'}
+                </label>
+                <textarea
+                  id="manager_notes"
+                  rows={3}
+                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
+                  value={managerNotes}
+                  onChange={(e) => setManagerNotes(e.target.value)}
+                  placeholder="Add optional notes..."
+                />
+              </div>
+            )}
+            
+            {/* Buttons */}
+            <div className="mt-6 flex justify-end space-x-3">
+              <button onClick={handleCloseModal} type="button" className="bg-white py-2 px-4 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+                Close
+              </button>
+              {activeTab === 'incoming' && (
+                  <>
+                    <button onClick={() => handleApproval('denied')} disabled={isSubmitting} type="button" className="inline-flex justify-center rounded-md border border-transparent bg-red-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:opacity-50">
+                      {isSubmitting ? 'Submitting...' : 'Deny'}
+                    </button>
+                    <button onClick={() => handleApproval('approved')} disabled={isSubmitting} type="button" className="inline-flex justify-center rounded-md border border-transparent bg-green-600 py-2 px-4 text-sm font-medium text-white shadow-sm hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 focus:ring-offset-2 disabled:opacity-50">
+                      {isSubmitting ? 'Submitting...' : 'Approve'}
+                    </button>
+                  </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

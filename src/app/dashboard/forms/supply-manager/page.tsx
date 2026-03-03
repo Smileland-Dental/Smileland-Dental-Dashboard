@@ -1554,6 +1554,3 @@ export default function SupplyManagerSystem() {
     </>
   );
 }
-
-
-

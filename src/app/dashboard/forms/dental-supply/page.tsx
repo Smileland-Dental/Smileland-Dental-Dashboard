@@ -1481,6 +1481,3 @@ export default function SupplyViewPage() {
     </>
   );
 }
-
-
-

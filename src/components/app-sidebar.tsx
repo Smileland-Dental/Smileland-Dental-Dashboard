@@ -36,17 +36,27 @@ const items = [
     url: "/dashboard/forms",
     icon: File,
   },
-  /*{
-    title: "Excuse Note Form",
-    url: "/dashboard/test",
-    icon: File,
-  },
-    {
-    title: "HR Table",
-    url: "/dashboard/test2",
+  {
+    title: "Absence Form",
+    url: "/dashboard/forms/absence-request",
     icon: File,
   },
   {
+    title: "Approval",
+    url: "/dashboard/tools/approval",
+    icon: File,
+  },
+  {
+    title: "HR Table",
+    url: "/dashboard/hr-table",
+    icon: File,
+  },
+  {
+    title: "Company Directory",
+    url: "/dashboard/company-directory",
+    icon: File,
+  },
+  /*{
     title: "Settings",
     url: "#",
     icon: Settings,
@@ -88,7 +98,7 @@ export function AppSidebar() {
   return (
     <div>
       {user ? (
-      <Sidebar>
+      <Sidebar variant="floating">
         <SidebarContent>
           <SidebarGroup>
             <SidebarGroupLabel>Smileland Dental</SidebarGroupLabel>
