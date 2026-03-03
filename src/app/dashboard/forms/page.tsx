@@ -30,7 +30,7 @@ function getColor(){
 export default function Page() {
   // State to hold the current user and their role
   const [user, setUser] = useState<User | null>(null);
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>('User');
   // State to hold the links per office
   const [groupedOfficeLinks, setGroupedOfficeLinks] = useState<OfficeLinkGroup[]>([]);
   // State to keep track of loading status of the page
@@ -121,7 +121,7 @@ export default function Page() {
           {/*<p className="capitalize mb-5">Role: {userRole}</p>*/}
 
           {/* Rendering logic for grouped links for managers */}
-          {userRole === 'Manager' || userRole === 'HR' && groupedOfficeLinks.length > 0 && (
+          {userRole && ['Manager', 'HR', 'Director'].includes(userRole) && groupedOfficeLinks.length > 0 && (
             <div className="flex flex-wrap gap-8 w-screen sm:w-[100vw] md:w-[70vw]">
               {/* Outer loop: iterates through each office group */}
               {groupedOfficeLinks.map((officeGroup, groupIndex) => (
@@ -146,10 +146,11 @@ export default function Page() {
             </div>
           )} 
 
-          {/* Other role-based components (discontinuted for now)*/}
-          {userRole === 'Employee' && groupedOfficeLinks.length > 0 && (
+          {/*}
+          {/* Other role-based components (discontinuted for now)
+          {userRole && (userRole === 'Employee' || userRole === 'Director' || userRole === 'Manager' || userRole === 'HR') && groupedOfficeLinks.length > 0 && (
             <div className="flex flex-wrap gap-8 w-screen">
-              {/* Outer loop: iterates through each office group */}
+              {/* Outer loop: iterates through each office group
               {groupedOfficeLinks.map((officeGroup, groupIndex) => (
                 <div 
                   key={groupIndex} 
@@ -158,7 +159,7 @@ export default function Page() {
                 >
                   <h3 className="text-xl font-semibold mb-4">Employee Forms</h3>
                   <div className="flex flex-col space-y-4">
-                    {/* Inner loop: iterates through links for the current office */}
+                    {/* Inner loop: iterates through links for the current office
                     {officeGroup.links.map((link, linkIndex) => (
                       <Button asChild key={linkIndex} variant="secondary" className="py-2.5 px-5 me-2 mb-2 text-lg font-medium text-gray-900 focus:outline-none bg-white rounded-lg border border-gray-200 hover:bg-gray-100 hover:text-blue-700 focus:z-10 focus:ring-4 focus:ring-gray-100 dark:focus:ring-gray-700 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-600 dark:hover:text-white dark:hover:bg-gray-700">
                         <Link href={link.url} target="_blank" rel="noopener noreferrer">
@@ -170,7 +171,7 @@ export default function Page() {
                 </div>
               ))}
             </div>
-          )}
+          )}*/}
 
           {/* If there are no links available.*/}
           {groupedOfficeLinks.length === 0 && (

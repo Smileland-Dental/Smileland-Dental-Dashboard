@@ -92,9 +92,9 @@ export default function DirectoryPage() {
     <div className="container mx-auto px-4 py-8">
       <div className="flex justify-between items-center mb-8">
          <h1 className="text-4xl font-bold">Company Directory</h1>
-         {user?.role}
+         {/*user?.role*/}
          {/* Show Add Button ONLY if user is HR */}
-         {user?.role === 'Manager' && (
+         {user?.role === 'HR' || user?.role === 'Director' && (
            <button 
              onClick={() => setIsAddModalOpen(true)}
              className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition"
