@@ -2,13 +2,18 @@
 
 import React, { useState, useEffect, useCallback } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot, collection, getDocs } from "firebase/firestore";
-import { db } from "@/lib/firebase.config";
+import { db, auth } from "@/lib/firebase.config";
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 export default function RestroomInspection() {
   const [loading, setLoading] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [userOfficesOptions, setUserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
   
   // 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
@@ -16,15 +21,27 @@ export default function RestroomInspection() {
   // 마지막 저장된 데이터 추적
   const [lastSavedData, setLastSavedData] = useState({});
   
-  // 날짜 상태
-  const [inspectionDate, setInspectionDate] = useState(() => {
+  // 현재 캘리포니아 시간 가져오기
+  const getCurrentCaliforniaTime = () => {
     const now = new Date();
-    const californiaTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-    return californiaTime.toISOString().split('T')[0];
-  });
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Los_Angeles',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    const parts = formatter.formatToParts(now);
+    const year = parts.find(p => p.type === 'year')?.value || '';
+    const month = parts.find(p => p.type === 'month')?.value || '';
+    const day = parts.find(p => p.type === 'day')?.value || '';
+    return `${year}-${month}-${day}`;
+  };
+  
+  // 날짜 상태
+  const [inspectionDate, setInspectionDate] = useState('');
 
   // 오피스 및 화장실 선택 상태
-  const [selectedOffice, setSelectedOffice] = useState('Bernard');
+  const [selectedOffice, setSelectedOffice] = useState('');
   const [selectedRestroom, setSelectedRestroom] = useState('');
   
   // 오피스 옵션 (알파벳 순)
@@ -37,11 +54,12 @@ export default function RestroomInspection() {
     "California": ["Kindal"],
     "Delano": ["Helen", "Stephanie"],
     "Fresno": ["Cynthia"],
-    "Ming": ["Kindal"],
+    "Ming": ["Kindal", "Hopie", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Dianne"],
     "Visalia": ["Dianne"]
   };
+
 
   // 컬럼 순서: Time, Check, Pick up Paper, Wipe Sinks and Mirrors, Wipe Toilets, Wipe Baby Table, Empty Trash, Toilet Paper, Soap, Toilet Seat Covers, Refresh Spray, Checked Time
   const COLUMN_NAMES = [
@@ -60,6 +78,118 @@ export default function RestroomInspection() {
     '4 pm', '5 pm', '6 pm', 'Sweep/Mop', '7 pm',
     'Deep Clean Manager Inspection'
   ];
+
+  // --- PDF 생성 관련 상수/스타일 ---
+  const PDF_COLUMN_NAMES = [
+    'Time', 'Check', 'Pick up Paper', 'Wipe Sinks and Mirrors', 'Wipe Toilets',
+    'Wipe Baby Table', 'Empty Trash', 'Toilet Paper', 'Soap',
+    'Toilet Seat Covers', 'Refresh Spray', 'Checked Time',
+  ];
+
+  const PDF_ROW_HEADERS = [
+    'Manager Inspection',
+    '8 am', '9 am', '10 am', '11 am',
+    'Manager Inspection',
+    '12 pm', '1 pm', 'Sweep/Mop', '2 pm', '3 pm',
+    'Manager Inspection',
+    '4 pm', '5 pm', '6 pm', 'Sweep/Mop', '7 pm',
+    'Deep Clean Manager Inspection',
+  ];
+
+  const pdfStyles = StyleSheet.create({
+    page: { padding: 22, fontFamily: 'Helvetica', fontSize: 8 },
+    header: { marginBottom: 10, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 6, alignItems: 'center' },
+    headerTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
+    headerSub: { fontSize: 10 },
+    row: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
+    cell: { padding: 3, fontSize: 6, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    cellFlex2: { flex: 2 },
+    cellFlex4: { flex: 4 },
+    cellFlex5: { flex: 5 },
+    cellFlex1: { flex: 1 },
+    cellBold: { fontWeight: 'bold' },
+    cellGray: { backgroundColor: '#f0f0f0' },
+    footer: { marginTop: 15, paddingTop: 8, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 7, color: '#666' },
+  });
+
+  // PDF 생성 유틸 함수
+  function safeStr(v: unknown, max: number): string {
+    if (v == null) return '';
+    return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+  }
+
+  function isChecked(v: unknown): boolean {
+    return v === true || v === 1 || (typeof v === 'string' && (v === 'true' || v === '1'));
+  }
+
+  function createRestroomPDFDocument(props: {
+    safeInspectionDate: string;
+    safeSelectedOffice: string;
+    safeSelectedRestroom: string;
+    restroomData: Record<string, unknown>;
+    generatedDate: string;
+  }) {
+    const { safeInspectionDate, safeSelectedOffice, safeSelectedRestroom, restroomData, generatedDate } = props;
+    const s = pdfStyles;
+
+    // Row 1: SPOTLESS / STOCKED
+    const row1 = React.createElement(View, { key: 'r1', style: [s.row, s.cellGray] },
+      React.createElement(View, { style: [s.cell, s.cellFlex2] }, React.createElement(Text, null, '')),
+      React.createElement(View, { style: [s.cell, s.cellFlex4, s.cellBold] }, React.createElement(Text, null, 'SPOTLESS')),
+      React.createElement(View, { style: [s.cell, s.cellFlex5, s.cellBold] }, React.createElement(Text, null, 'STOCKED')),
+      React.createElement(View, { style: [s.cell, s.cellFlex1] }, React.createElement(Text, null, '')),
+    );
+
+    // Row 2: Column names
+    const row2 = React.createElement(View, { key: 'r2', style: [s.row, s.cellGray] },
+      ...PDF_COLUMN_NAMES.map((name, i) =>
+        React.createElement(View, { key: i, style: s.cell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, name))
+      ),
+    );
+
+    // Row 3: Perform each hour / Replenish as needed
+    const row3 = React.createElement(View, { key: 'r3', style: [s.row, s.cellGray] },
+      React.createElement(View, { style: [s.cell, s.cellFlex2] }, React.createElement(Text, null, '')),
+      React.createElement(View, { style: [s.cell, s.cellFlex4] }, React.createElement(Text, null, 'Perform each hour')),
+      React.createElement(View, { style: [s.cell, s.cellFlex5] }, React.createElement(Text, null, 'Replenish as needed')),
+      React.createElement(View, { style: [s.cell, s.cellFlex1] }, React.createElement(Text, null, '')),
+    );
+
+    // Data rows
+    const dataRows = PDF_ROW_HEADERS.map((header, rowIndex) => {
+      const isMopRow = header.toLowerCase().includes('sweep/mop');
+      const checkValue = safeStr(restroomData[`Row${rowIndex + 1}_Check`], 50);
+      const checkedTime = safeStr(restroomData[`Row${rowIndex + 1}_CheckedTime`], 50);
+      const taskCells = PDF_COLUMN_NAMES.slice(2, -1).map((_, colIndex) => {
+        if (isMopRow) return React.createElement(View, { key: colIndex, style: s.cell }, React.createElement(Text, null, ''));
+        const v = restroomData[`Row${rowIndex + 1}_Col${colIndex + 3}`];
+        return React.createElement(View, { key: colIndex, style: s.cell }, React.createElement(Text, null, isChecked(v) ? 'O' : ''));
+      });
+      return React.createElement(View, { key: rowIndex, style: s.row },
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, header)),
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, checkValue)),
+        ...taskCells,
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, checkedTime)),
+      );
+    });
+
+    const table = React.createElement(View, null, row1, row2, row3, ...dataRows);
+
+    const header = React.createElement(View, { style: s.header },
+      React.createElement(Text, { style: s.headerTitle }, 'Restroom Inspection Log'),
+      React.createElement(Text, { style: s.headerSub }, `${safeSelectedOffice} - Restroom ${safeSelectedRestroom} (${safeInspectionDate})`),
+    );
+
+    const footer = React.createElement(View, { style: s.footer }, React.createElement(Text, null, `Generated: ${generatedDate}`));
+
+    return React.createElement(Document, null,
+      React.createElement(Page, { size: 'A4', orientation: 'landscape', style: s.page }, header, table, footer),
+    );
+  }
+
+  function sanitizeFilename(filename: string): string {
+    return filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 255);
+  }
 
   // 모든 화장실 검사 데이터 상태
   const [restroomData, setRestroomData] = useState<{ [key: string]: any }>({});
@@ -122,7 +252,7 @@ export default function RestroomInspection() {
       setLastSavedData({ ...restroomData });
       
     } catch (error) {
-      console.error("Auto-save error:", error);
+      // Auto-save error silently handled
     }
   }, [inspectionDate, selectedOffice, selectedRestroom, restroomData, lastSavedData, isUpdatingFromFirebase]);
 
@@ -139,9 +269,6 @@ export default function RestroomInspection() {
     if (!inspectionDate || !selectedOffice || !selectedRestroom) return;
 
     try {
-      console.log("Loading data for date:", inspectionDate, "office:", selectedOffice, "restroom:", selectedRestroom);
-      setSubmitStatus('Loading data...');
-      
       const docId = `${inspectionDate}_${selectedOffice}_${selectedRestroom}`;
       const docSnap = await getDocs(collection(db, "restroom-inspections")).then((snapshot: any) => {
         const foundDoc = snapshot.docs.find((d: any) => d.id === docId);
@@ -150,7 +277,6 @@ export default function RestroomInspection() {
       
       if (docSnap.exists() && docSnap.data) {
         const data = docSnap.data();
-        console.log("Data loaded from Firebase:", data);
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
@@ -167,24 +293,39 @@ export default function RestroomInspection() {
         setTimeout(() => {
           setIsUpdatingFromFirebase(false);
         }, 100);
-        
-        setSubmitStatus('Data loaded successfully');
-        setTimeout(() => setSubmitStatus(''), 2000);
       } else {
-        console.log("No data found for date:", inspectionDate);
         // 데이터가 없으면 초기화
         const initialData = {};
         setRestroomData(initialData);
         setLastSavedData(initialData);
-        setSubmitStatus('No data found - initialized empty form');
-        setTimeout(() => setSubmitStatus(''), 2000);
+
+                
+        // 플래그 해제
+        setTimeout(() => {
+          setIsUpdatingFromFirebase(false);
+        }, 100);
       }
       
     } catch (error: any) {
-      console.error("Error loading data:", error);
+      // 에러 발생 시에도 플래그 해제
+      setTimeout(() => {
+        setIsUpdatingFromFirebase(false);
+      }, 100);
+      
       setSubmitStatus('Error loading data: ' + error.message);
       setTimeout(() => setSubmitStatus(''), 3000);
     }
+  };
+
+  // Restroom 변경 처리 - 데이터 초기화 후 변경
+  const handleRestroomChange = (newRestroom: string) => {
+    // 초기화 중 자동 저장 방지
+    setIsUpdatingFromFirebase(true);
+    // 이전 데이터 초기화
+    setRestroomData({});
+    setLastSavedData({});
+    // 새 restroom 설정
+    setSelectedRestroom(newRestroom);
   };
 
   // 날짜, 오피스, 화장실 변경 시 데이터 로드
@@ -198,20 +339,17 @@ export default function RestroomInspection() {
   useEffect(() => {
     if (!inspectionDate || !selectedOffice || !selectedRestroom) return;
 
-    console.log("Setting up real-time listener for date:", inspectionDate, "office:", selectedOffice, "restroom:", selectedRestroom);
     const docId = `${inspectionDate}_${selectedOffice}_${selectedRestroom}`;
     const docRef = doc(db, "restroom-inspections", docId);
     
     const unsubscribe = onSnapshot(docRef, (docSnap: any) => {
       if (docSnap.exists() && docSnap.data) {
         const data = docSnap.data();
-        console.log("Real-time data received:", data);
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
         
         setRestroomData((prevData: any) => {
-          console.log("Updating restroomData from:", prevData, "to:", { ...prevData, ...data });
           return {
             ...prevData,
             ...data
@@ -227,15 +365,12 @@ export default function RestroomInspection() {
         }, 100);
         
         // 다른 사용자의 업데이트는 조용히 처리 (알림 없음)
-      } else {
-        console.log("Real-time listener: No document exists for date:", inspectionDate);
       }
     }, (error: any) => {
-      console.error("Real-time listener error:", error);
+      // Real-time listener error silently handled
     });
 
     return () => {
-      console.log("Cleaning up real-time listener for date:", inspectionDate, "office:", selectedOffice, "restroom:", selectedRestroom);
       unsubscribe();
     };
   }, [inspectionDate, selectedOffice, selectedRestroom]);
@@ -290,15 +425,14 @@ export default function RestroomInspection() {
 
   // 제출 처리
   const handleSubmit = async () => {
-    if (!selectedOffice) {
-      alert('Please select an office first.');
+    if (!selectedOffice || !selectedRestroom) {
+      alert('Please select an office and restroom first.');
       return;
     }
 
-    const password = prompt(`Are you sure you want to submit? Submitting will reset today's data. Enter password to proceed:`);
-    if (password === null) return;
-    if (password !== 'Halloween') {
-      alert("Incorrect password. Submission cancelled.");
+    // 확인 다이얼로그
+    const confirmed = confirm('Would you like to submit?');
+    if (!confirmed) {
       return;
     }
 
@@ -307,89 +441,128 @@ export default function RestroomInspection() {
       setSubmitStatus('Saving...');
       setProgress(10);
 
-      // 1. PDF 생성
-      setSubmitStatus('Generating PDF...');
-      setProgress(30);
-      
-      const response = await fetch('/api/generate-restroom-pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          inspectionDate,
-          selectedOffice,
-          selectedRestroom,
-          restroomData
-        }),
-      });
-
-      if (response.ok) {
-        // PDF blob 받기
-        setSubmitStatus('Processing PDF...');
-        setProgress(60);
-        const blob = await response.blob();
-        
-        // PDF를 Firebase Storage에 저장
-        setSubmitStatus('Saving PDF...');
-        setProgress(70);
-        try {
-          const storage = getStorage();
-          const filename = `6) ${inspectionDate}_${selectedOffice}_Restroom_${selectedRestroom}_Inspection_Log.pdf`;
-          const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`);
-          
-          // PDF 업로드
-          await uploadBytes(storageRef, blob);
-          
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // Firestore에 메타데이터 저장
-          await setDoc(doc(db, 'pdf-documents', `${inspectionDate}_${selectedOffice}_restroom_${selectedRestroom}_${Date.now()}`), {
-            filename,
-            office: selectedOffice,
-            date: inspectionDate,
-            type: `Restroom ${selectedRestroom} Inspection Log`,
-            url: downloadUrl,
-            storagePath: `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`,
-            createdAt: new Date(),
-          });
-          
-          console.log('PDF saved successfully to Firebase Storage');
-        } catch (storageError: any) {
-          console.error('Storage error:', storageError);
-          // 저장 실패 시 사용자에게 알림
-          const errorMsg = storageError?.message || '알 수 없는 오류';
-          alert(`PDF 저장 중 오류가 발생했습니다: ${errorMsg}`);
-        }
-        
-        // 2. 데이터 삭제
-        setSubmitStatus('Cleaning up...');
-        setProgress(80);
-        const docId = `${inspectionDate}_${selectedOffice}_${selectedRestroom}`;
-        await deleteDoc(doc(db, "restroom-inspections", docId));
-        
-        // 3. 폼 초기화
-        setRestroomData({});
-        setLastSavedData({});
-
-        setSubmitStatus('Complete!');
-        setProgress(100);
-        
-        // 2초 후 모달 닫기
-        setTimeout(() => {
-          setLoading(false);
-          setSubmitStatus('');
-          setProgress(0);
-          alert('✅ Submitted successfully!');
-        }, 2000);
-      } else {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'PDF generation failed');
+      // 입력 검증
+      if (!inspectionDate || !selectedOffice || !selectedRestroom || !restroomData) {
+        throw new Error('Please fill out all required fields.');
       }
 
+      if (
+        typeof inspectionDate !== 'string' ||
+        typeof selectedOffice !== 'string' ||
+        typeof selectedRestroom !== 'string' ||
+        typeof restroomData !== 'object' ||
+        restroomData === null ||
+        Array.isArray(restroomData)
+      ) {
+        throw new Error('Invalid input format');
+      }
+
+      // 날짜 형식 검증 (YYYY-MM-DD)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(inspectionDate)) {
+        throw new Error('Invalid date format');
+      }
+
+      // 날짜 유효성 검증
+      const dateObj = new Date(inspectionDate + 'T00:00:00');
+      if (isNaN(dateObj.getTime())) {
+        throw new Error('Invalid date format');
+      }
+
+      const [dateYear, dateMonth, dateDay] = inspectionDate.split('-').map(Number);
+      if (dateYear < 1900 || dateYear > 2100 || dateMonth < 1 || dateMonth > 12 || dateDay < 1 || dateDay > 31) {
+        throw new Error('Invalid date format');
+      }
+
+      const reconstructedDate = `${dateYear}-${String(dateMonth).padStart(2, '0')}-${String(dateDay).padStart(2, '0')}`;
+      if (reconstructedDate !== inspectionDate) {
+        throw new Error('Invalid date format');
+      }
+
+      // 오피스 선택 검증
+      if (!['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'].includes(selectedOffice)) {
+        throw new Error('Invalid office selection');
+      }
+
+      // 화장실 선택 검증
+      if (!['1', '2', '3'].includes(selectedRestroom)) {
+        throw new Error('Invalid restroom selection');
+      }
+
+      // 1. PDF 생성
+      setSubmitStatus('Processing...');
+      setProgress(30);
+
+      const safeInspectionDate = inspectionDate.trim().slice(0, 20).replace(/[<>]/g, '');
+      const safeSelectedOffice = selectedOffice.trim().slice(0, 100).replace(/[<>]/g, '');
+      const safeSelectedRestroom = selectedRestroom.trim().slice(0, 50).replace(/[<>]/g, '');
+
+      const generatedDate = new Date().toLocaleDateString('en-US', {
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+
+      // PDF 생성 (클라이언트 사이드)
+      setSubmitStatus('Processing...');
+      setProgress(60);
+      
+      const pdfDoc = createRestroomPDFDocument({
+        safeInspectionDate,
+        safeSelectedOffice,
+        safeSelectedRestroom,
+        restroomData: restroomData as Record<string, unknown>,
+        generatedDate,
+      });
+
+      const blob = await pdf(pdfDoc).toBlob();
+        
+      // PDF를 Firebase Storage에 저장 (endofday-pdfs에만 저장)
+      setSubmitStatus('Saving...');
+      setProgress(70);
+      try {
+        const storage = getStorage();
+        // 캘리포니아 시간으로 짧은 타임스탬프 생성 (예: 230pm)
+        const now = new Date();
+        const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+        let hours = laTime.getHours();
+        const minutes = laTime.getMinutes();
+        const ampm = hours >= 12 ? 'pm' : 'am';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const timeStamp = `${hours}${minutes.toString().padStart(2, '0')}${ampm}`;
+        
+        const filename = `6) ${inspectionDate}_${selectedOffice}_Restroom_${selectedRestroom}_Inspection_Log_${timeStamp}.pdf`;
+        const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`);
+        
+        // PDF 업로드
+        await uploadBytes(storageRef, blob);
+        
+      } catch (storageError: any) {
+        const errorMsg = storageError?.message || 'Error';
+        alert(`An error occurred while submitting. Please try again.: ${errorMsg}`);
+        throw storageError;
+      }
+      
+      // 2. 데이터 삭제
+      setSubmitStatus('Cleaning up...');
+      setProgress(80);
+      const docId = `${inspectionDate}_${selectedOffice}_${selectedRestroom}`;
+      await deleteDoc(doc(db, "restroom-inspections", docId));
+      
+      // 3. 폼 초기화
+      setRestroomData({});
+      setLastSavedData({});
+
+      setSubmitStatus('Complete!');
+      setProgress(100);
+      
+      // 2초 후 모달 닫기
+      setTimeout(() => {
+        setLoading(false);
+        setSubmitStatus('');
+        setProgress(0);
+        alert('Submitted successfully!');
+      }, 2000);
+
     } catch (error: any) {
-      console.error('Submit error:', error);
       setSubmitStatus('❌ Submission failed: ' + error.message);
       setProgress(0);
       setTimeout(() => {
@@ -541,8 +714,63 @@ export default function RestroomInspection() {
     },
   };
 
-  // 컴포넌트 마운트 시 HTTPS 체크
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          // 다른 페이지로 리다이렉트하거나 홈으로 이동
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+        setInspectionDate(getCurrentCaliforniaTime());
+
+        // offices 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.offices) {
+          const officesArray = Array.isArray(userData.offices) 
+            ? userData.offices 
+            : [userData.offices];
+          
+          // officeOptions에 포함된 값들만 필터링
+          const validOptions = officesArray.filter((g: string) => officeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setUserOfficesOptions(validOptions);
+            // 단일 값이면 자동 선택
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+            }
+          }
+        }
+      } catch (error: any) {
+        alert('An error occurred while verifying authentication.');
+        setIsAuthorized(false);
+      }
+    });
+
     // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
     if (process.env.NODE_ENV === 'production' && 
         typeof window !== 'undefined' && 
@@ -550,6 +778,11 @@ export default function RestroomInspection() {
       // HTTP로 접속한 경우 HTTPS로 리다이렉트
       window.location.href = window.location.href.replace('http:', 'https:');
     }
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // 제출 중 브라우저 네비게이션 방지
@@ -579,6 +812,44 @@ export default function RestroomInspection() {
       window.removeEventListener('popstate', handlePopState);
     };
   }, [loading]);
+
+  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
+  if (isAuthorized === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        backgroundColor: '#C2E6E6',
+        fontFamily: 'Arial, sans-serif'
+      } as React.CSSProperties}>
+        <div style={{ textAlign: 'center' } as React.CSSProperties}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' } as React.CSSProperties}>🔐</div>
+          <div style={{ fontSize: '18px', color: '#333' } as React.CSSProperties}>Verifying authentication...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        backgroundColor: '#C2E6E6',
+        fontFamily: 'Arial, sans-serif'
+      } as React.CSSProperties}>
+        <div style={{ textAlign: 'center' } as React.CSSProperties}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' } as React.CSSProperties}>🚫</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' } as React.CSSProperties}>You do not have access to this page.</div>
+          <div style={{ fontSize: '14px', color: '#666' } as React.CSSProperties}>You do not have access to this page.</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -670,23 +941,41 @@ export default function RestroomInspection() {
               onChange={(e: any) => setInspectionDate(e.target.value)}
               style={styles.input}
             />
-            <label style={styles.label} htmlFor="office">🏢 Office:</label>
-            <select
-              id="office"
-              value={selectedOffice}
-              onChange={(e: any) => handleOfficeChange(e.target.value)}
-              style={styles.select}
-            >
-              <option value="">--Select Office--</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
+            {/* offices 옵션이 있는 경우에만 Office 표시 */}
+            {userOfficesOptions.length > 0 && (
+              <>
+                <label style={styles.label} htmlFor="office">🏢 Office:</label>
+                {userOfficesOptions.length === 1 ? (
+                  <span style={{
+                    ...styles.select,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    backgroundColor: '#e9ecef',
+                    fontWeight: '600',
+                    color: '#4a6fa1'
+                  } as React.CSSProperties}>
+                    {selectedOffice}
+                  </span>
+                ) : (
+                  <select
+                    id="office"
+                    value={selectedOffice}
+                    onChange={(e: any) => setSelectedOffice(e.target.value)}
+                    style={styles.select}
+                  >
+                    <option value="">--Select Office--</option>
+                    {userOfficesOptions.map(office => (
+                      <option key={office} value={office}>{office}</option>
+                    ))}
+                  </select>
+                )}
+              </>
+            )}
             <label style={styles.label} htmlFor="restroom">🚻 Restroom:</label>
             <select
               id="restroom"
               value={selectedRestroom}
-              onChange={(e: any) => setSelectedRestroom(e.target.value)}
+              onChange={(e: any) => handleRestroomChange(e.target.value)}
               style={styles.select}
             >
               <option value="" disabled hidden>Select Restroom</option>
@@ -697,7 +986,7 @@ export default function RestroomInspection() {
           </div>
 
           {/* 검사 테이블 */}
-          {selectedRestroom && (
+          {selectedOffice && selectedRestroom && (
             <div style={styles.tableContainer}>
               <table style={styles.table}>
                 <thead>
@@ -802,7 +1091,7 @@ export default function RestroomInspection() {
           )}
 
           {/* 제출 버튼 */}
-          {selectedRestroom && (
+          {selectedOffice && selectedRestroom && (
             <div style={{textAlign:'center',marginTop:'30px'} as React.CSSProperties}>
               <button
                 type="button"
@@ -842,3 +1131,8 @@ export default function RestroomInspection() {
     </>
   );
 }
+
+
+
+
+

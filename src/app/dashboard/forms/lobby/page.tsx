@@ -1,9 +1,11 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { db } from '@/lib/firebase.config';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { db, auth } from '@/lib/firebase.config';
 import { doc, setDoc, getDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, uploadBytes } from 'firebase/storage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 export default function LobbyInspectionPage() {
   // 상태 관리
@@ -16,6 +18,13 @@ export default function LobbyInspectionPage() {
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
   const [lastSavedData, setLastSavedData] = useState<any>({});
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [userOfficesOptions, setUserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
+
+  // Rate limiting을 위한 ref
+  const lastUpdateLobbyDataCall = useRef<number>(0);
+  const lastLoadDataCall = useRef<number>(0);
+  const lastSubmitCall = useRef<number>(0);
 
   // 오피스 옵션 (알파벳 순)
   const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
@@ -26,11 +35,113 @@ export default function LobbyInspectionPage() {
     "California": ["Kindal"],
     "Delano": ["Helen", "Stephanie"],
     "Fresno": ["Cynthia"],
-    "Ming": ["Kindal"],
+    "Ming": ["Kindal", "Hopie", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Dianne"],
     "Visalia": ["Dianne"]
   };
+
+  // --- PDF 생성 관련 상수/스타일 ---
+  const PDF_COLUMN_NAMES = [
+    'Time', 'Check', 'Ipads/Games Working', 'Wipe Ipads/Games', 'Pick Up Litter/Sweep',
+    'Entrance Area', 'Pass Out Water', 'Sweep/Vacuum', 'Wipe Ipads/Games',
+    'Take Out Trash', 'Wipe Desk Tops', 'Wipe Seats', 'Wipe Windows/Door Handles', 'Checked Time',
+  ];
+
+  const PDF_ROW_HEADERS = [
+    'Manager Inspection',
+    '8 am', '9 am', '10 am', '11 am',
+    'Manager Inspection',
+    '12 pm', '1 pm', 'Sweep/Mop', '2 pm', '3 pm',
+    'Manager Inspection',
+    '4 pm', '5 pm', '6 pm', 'Sweep/Mop', '7 pm',
+    'Deep Clean Manager Inspection',
+  ];
+
+  const pdfStyles = StyleSheet.create({
+    page: { padding: 22, fontFamily: 'Helvetica', fontSize: 8 },
+    header: { marginBottom: 10, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 6, alignItems: 'center' },
+    headerTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
+    headerSub: { fontSize: 10 },
+    row: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
+    cell: { padding: 3, fontSize: 5, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
+    cellFlex5: { flex: 5 },
+    cellFlex6: { flex: 6 },
+    cellBold: { fontWeight: 'bold' },
+    cellGray: { backgroundColor: '#f0f0f0' },
+    footer: { marginTop: 15, paddingTop: 8, borderTopWidth: 1, borderColor: '#ddd', alignItems: 'center', fontSize: 7, color: '#666' },
+  });
+
+  // PDF 생성 유틸 함수
+  function safeStr(v: unknown, max: number): string {
+    if (v == null) return '';
+    return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+  }
+
+  function isChecked(v: unknown): boolean {
+    return v === true || v === 1 || (typeof v === 'string' && (v === 'true' || v === '1'));
+  }
+
+  function createLobbyPDFDocument(props: {
+    safeSelectedOffice: string;
+    formattedDate: string;
+    lobbyData: Record<string, unknown>;
+    generatedDate: string;
+  }) {
+    const { safeSelectedOffice, formattedDate, lobbyData, generatedDate } = props;
+    const s = pdfStyles;
+
+    // Row 1: Hourly Cleaning / End of Day Cleaning
+    const row1 = React.createElement(View, { key: 'r1', style: [s.row, s.cellGray] },
+      React.createElement(View, { style: [s.cell] }, React.createElement(Text, null, '')),
+      React.createElement(View, { style: [s.cell] }, React.createElement(Text, null, '')),
+      React.createElement(View, { style: [s.cell, s.cellFlex5, s.cellBold] }, React.createElement(Text, null, 'Hourly Cleaning')),
+      React.createElement(View, { style: [s.cell, s.cellFlex6, s.cellBold] }, React.createElement(Text, null, 'End of Day Cleaning')),
+      React.createElement(View, { style: s.cell }, React.createElement(Text, null, '')),
+    );
+
+    // Row 2: Column names (14 columns)
+    const row2 = React.createElement(View, { key: 'r2', style: [s.row, s.cellGray] },
+      ...PDF_COLUMN_NAMES.map((name, i) =>
+        React.createElement(View, { key: i, style: s.cell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, name))
+      ),
+    );
+
+    // Data rows
+    const dataRows = PDF_ROW_HEADERS.map((header, rowIndex) => {
+      const isSweepMop = header.includes('Sweep/Mop');
+      const checkValue = safeStr(lobbyData[`Row${rowIndex + 1}_Check`], 50);
+      const checkedTime = safeStr(lobbyData[`Row${rowIndex + 1}_CheckedTime`], 50);
+      const taskCells = PDF_COLUMN_NAMES.slice(2, -1).map((_, colIndex) => {
+        if (isSweepMop) return React.createElement(View, { key: colIndex, style: s.cell }, React.createElement(Text, null, ''));
+        const v = lobbyData[`Row${rowIndex + 1}_Col${colIndex + 3}`];
+        return React.createElement(View, { key: colIndex, style: s.cell }, React.createElement(Text, null, isChecked(v) ? 'O' : ''));
+      });
+      return React.createElement(View, { key: rowIndex, style: s.row },
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, header)),
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, checkValue)),
+        ...taskCells,
+        React.createElement(View, { style: s.cell }, React.createElement(Text, null, checkedTime)),
+      );
+    });
+
+    const table = React.createElement(View, null, row1, row2, ...dataRows);
+
+    const header = React.createElement(View, { style: s.header },
+      React.createElement(Text, { style: s.headerTitle }, 'Lobby Inspection Log'),
+      React.createElement(Text, { style: s.headerSub }, `${safeSelectedOffice} (${formattedDate})`),
+    );
+
+    const footer = React.createElement(View, { style: s.footer }, React.createElement(Text, null, `Generated: ${generatedDate}`));
+
+    return React.createElement(Document, null,
+      React.createElement(Page, { size: 'A4', orientation: 'landscape', style: s.page }, header, table, footer),
+    );
+  }
+
+  function sanitizeFilename(filename: string): string {
+    return filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 255);
+  }
 
   // 현재 캘리포니아 시간 가져오기
   const getCurrentCaliforniaTime = () => {
@@ -86,7 +197,7 @@ export default function LobbyInspectionPage() {
       setLastSavedData({ ...lobbyData });
       
     } catch (error) {
-      console.error("Auto-save error:", error);
+      // Auto-save error silently handled
     }
   }, [inspectionDate, selectedOffice, lobbyData, lastSavedData, isUpdatingFromFirebase]);
 
@@ -98,12 +209,19 @@ export default function LobbyInspectionPage() {
     }
   }, [lobbyData]);
 
-  // 데이터 로드 함수
+  // 데이터 로드 함수 (Rate limiting 적용)
   const loadData = async () => {
     if (!inspectionDate || !selectedOffice) return;
 
     try {
-      console.log("Loading data for date:", inspectionDate, "office:", selectedOffice);
+      // Rate limiting: 최근 1.5초 내 호출 방지
+      // (필터 변경 후 빠르게 새로고침할 수 있도록 허용하되, 과도한 호출 방지)
+      const now = Date.now();
+      if (now - lastLoadDataCall.current < 1500) {
+        return;
+      }
+      lastLoadDataCall.current = now;
+
       setSubmitStatus('Loading data...');
       
       const docId = `${inspectionDate}_${selectedOffice}_lobby`;
@@ -111,7 +229,6 @@ export default function LobbyInspectionPage() {
       
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Data loaded from Firebase:", data);
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
@@ -132,7 +249,6 @@ export default function LobbyInspectionPage() {
         setSubmitStatus('Data loaded successfully');
         setTimeout(() => setSubmitStatus(''), 2000);
       } else {
-        console.log("No data found for date:", inspectionDate);
         // 초기 데이터 설정
         const initialData: any = {};
         setLobbyData(initialData);
@@ -142,7 +258,6 @@ export default function LobbyInspectionPage() {
       }
       
     } catch (error: any) {
-      console.error("Error loading data:", error);
       setSubmitStatus('Error loading data: ' + error.message);
       setTimeout(() => setSubmitStatus(''), 3000);
     }
@@ -159,19 +274,16 @@ export default function LobbyInspectionPage() {
   useEffect(() => {
     if (!inspectionDate || !selectedOffice) return;
 
-    console.log("Setting up real-time listener for date:", inspectionDate, "office:", selectedOffice);
     const docId = `${inspectionDate}_${selectedOffice}_lobby`;
     const docRef = doc(db, "lobby-inspections", docId);
     
     const unsubscribe = onSnapshot(docRef, (docSnap: any) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log("Real-time data received:", data);
         
         // 데이터가 실제로 변경되었는지 확인
         const hasChanges = JSON.stringify(data) !== JSON.stringify(lobbyData);
         if (!hasChanges) {
-          console.log("No changes detected, skipping update");
           return;
         }
         
@@ -179,7 +291,6 @@ export default function LobbyInspectionPage() {
         setIsUpdatingFromFirebase(true);
         
         setLobbyData((prevData: any) => {
-          console.log("Updating lobbyData from:", prevData, "to:", { ...prevData, ...data });
           return {
             ...prevData,
             ...data
@@ -195,21 +306,36 @@ export default function LobbyInspectionPage() {
         }, 100);
         
         // 다른 사용자의 업데이트는 조용히 처리 (알림 없음)
-      } else {
-        console.log("Real-time listener: No document exists for date:", inspectionDate);
       }
     }, (error: any) => {
-      console.error("Real-time listener error:", error);
+      // Real-time listener error silently handled
     });
 
     return () => {
-      console.log("Cleaning up real-time listener for date:", inspectionDate, "office:", selectedOffice);
       unsubscribe();
     };
   }, [inspectionDate, selectedOffice]);
 
-  // 데이터 업데이트 함수
+  // 데이터 업데이트 함수 (Rate limiting 적용)
   const updateLobbyData = (field: string, value: any) => {
+    // Rate limiting: 최근 300ms 내 동일한 필드에 대한 호출 방지
+    // (여러 필드를 빠르게 업데이트할 수 있도록 허용하되, 과도한 호출 방지)
+    const now = Date.now();
+    const fieldKey = `lastUpdate_${field}`;
+    const lastCall = (window as any)[fieldKey] || 0;
+    
+    // 전역 rate limiting: 모든 업데이트에 대해 300ms 제한
+    if (now - lastUpdateLobbyDataCall.current < 300) {
+      return;
+    }
+    lastUpdateLobbyDataCall.current = now;
+
+    // 개별 필드 rate limiting: 동일 필드에 대해 800ms 제한
+    if (now - lastCall < 800) {
+      return;
+    }
+    (window as any)[fieldKey] = now;
+
     setLobbyData((prev: any) => {
       const newData = { ...prev, [field]: value };
       
@@ -237,43 +363,30 @@ export default function LobbyInspectionPage() {
     });
   };
 
-  // Office 변경 처리
-  const handleOfficeChange = (newOffice: string) => {
-    // 빈 값으로 선택하면 비밀번호 없이 변경 허용 (초기화)
-    if (newOffice === '') {
-      setSelectedOffice('');
-      return;
-    }
-    
-    // 주의: 약한 비밀번호 검증 (보안 취약점)
-    // 선택된 office의 첫 알파벳 대문자를 비밀번호로 사용
-    // TODO: 강력한 비밀번호 정책 적용 또는 서버 사이드 인증으로 이동
-    const officePassword = newOffice.charAt(0).toUpperCase();
-    const password = prompt(`Enter password to change office: `);
-    if (password === null) return;
-    if (password !== officePassword) {
-      alert("Incorrect password. Office change cancelled.");
-      return;
-    }
-    setSelectedOffice(newOffice);
-  };
-
-  // 제출 함수
+  // 제출 함수 (Rate limiting 적용)
   const handleSubmit = async () => {
+    // Rate limiting: 최근 3초 내 호출 방지 (PDF 생성은 무거운 작업)
+    // (실수로 두 번 클릭하는 것을 방지하되, 사용자 경험을 해치지 않도록)
+    const now = Date.now();
+    if (now - lastSubmitCall.current < 3000) {
+      alert('⚠️ An error occurred while submitting. Please try again.');
+      return;
+    }
+    lastSubmitCall.current = now;
+
+    // 이미 제출 중이면 중복 호출 방지
+    if (loading) {
+      return;
+    }
+
     if (!inspectionDate || !selectedOffice) {
       alert('Please select a date and office first.');
       return;
     }
 
-    // 비밀번호는 서버 사이드에서 검증해야 함 (현재는 클라이언트 사이드 검증만)
-    // TODO: 서버 사이드 인증으로 이동 필요
-    const password = prompt(`Are you sure you want to submit? Submitting will reset today's data. Enter password to proceed:`);
-    if (password === null) return;
-    
-    // 주의: 비밀번호가 클라이언트 코드에 노출됨 (보안 취약점)
-    // 프로덕션에서는 서버 사이드 인증 API를 통해 검증해야 함
-    if (password !== 'Halloween') {
-      alert("Incorrect password. Submission cancelled.");
+    // 확인 다이얼로그
+    const confirmed = confirm('Would you like to submit?');
+    if (!confirmed) {
       return;
     }
 
@@ -283,93 +396,149 @@ export default function LobbyInspectionPage() {
 
     try {
       // 1. PDF 생성
-      setSubmitStatus('Generating PDF...');
+      setSubmitStatus('Submitting...');
       setProgress(30);
       
-      // PDF 생성 API 호출
-      const response = await fetch('/api/generate-lobby-pdf', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          inspectionDate,
-          selectedOffice,
-          lobbyData
-        }),
-      });
-
-      if (response.ok) {
-        // PDF blob 받기
-        setSubmitStatus('Processing PDF...');
-        setProgress(60);
-        const blob = await response.blob();
-        
-        // PDF를 Firebase Storage에 저장
-        setSubmitStatus('Saving PDF...');
-        setProgress(70);
-        try {
-          const storage = getStorage();
-          const filename = `5) ${inspectionDate}_${selectedOffice}_Lobby Inspection Log.pdf`;
-          const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`);
-          
-          // PDF 업로드
-          await uploadBytes(storageRef, blob);
-          
-          // 다운로드 URL 가져오기
-          const downloadUrl = await getDownloadURL(storageRef);
-          
-          // Firestore에 메타데이터 저장
-          await setDoc(doc(db, 'pdf-documents', `${inspectionDate}_${selectedOffice}_lobby_${Date.now()}`), {
-            filename,
-            office: selectedOffice,
-            date: inspectionDate,
-            type: 'Lobby Inspection Log',
-            url: downloadUrl,
-            storagePath: `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`,
-            createdAt: new Date(),
-          });
-          
-          console.log('PDF saved successfully');
-        } catch (storageError: any) {
-          console.error('Storage error:', storageError);
-          // 저장 실패 시 사용자에게 알림
-          const errorMsg = storageError?.message || '알 수 없는 오류';
-          alert(`PDF 저장 중 오류가 발생했습니다: ${errorMsg}`);
-        }
-        
-        // 2. 데이터 삭제
-        setSubmitStatus('Cleaning up...');
-        setProgress(80);
-        const docId = `${inspectionDate}_${selectedOffice}_lobby`;
-        await deleteDoc(doc(db, "lobby-inspections", docId));
-        
-        // 3. 폼 초기화
-        setLobbyData({});
-        setLastSavedData({});
-
-        setSubmitStatus('Complete!');
-        setProgress(100);
-        
-        setTimeout(() => {
-          setLoading(false);
-          setSubmitStatus('');
-          setProgress(0);
-          alert('✅ Submitted successfully!');
-        }, 2000);
-      } else {
-        let errorMessage = 'PDF generation failed';
-        try {
-          const errorData = await response.json();
-          errorMessage = errorData.error || errorMessage;
-        } catch (e) {
-          errorMessage = `HTTP ${response.status}: ${response.statusText}`;
-        }
-        throw new Error(errorMessage);
+      // Firebase Auth에서 현재 사용자 확인
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        alert('Please log in.');
+        setLoading(false);
+        setSubmitStatus('');
+        return;
       }
 
+      // Firestore에서 사용자 role 확인 (Firebase Rules로 보호됨)
+      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+      if (!userDoc.exists()) {
+        alert('User information could not be found.');
+        setLoading(false);
+        setSubmitStatus('');
+        return;
+      }
+
+      const userData = userDoc.data();
+      if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
+        alert('You do not have access to this page.');
+        setLoading(false);
+        setSubmitStatus('');
+        return;
+      }
+
+      // 입력 검증
+      if (!inspectionDate || !selectedOffice || !lobbyData) {
+        throw new Error('Please fill out all required fields.');
+      }
+
+      if (
+        typeof inspectionDate !== 'string' ||
+        typeof selectedOffice !== 'string' ||
+        typeof lobbyData !== 'object' ||
+        lobbyData === null ||
+        Array.isArray(lobbyData)
+      ) {
+        throw new Error('Invalid input format');
+      }
+
+      // 날짜 형식 검증 (YYYY-MM-DD)
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(inspectionDate)) {
+        throw new Error('Invalid date format');
+      }
+
+      // 날짜 유효성 검증
+      const dateObj = new Date(inspectionDate + 'T00:00:00');
+      if (isNaN(dateObj.getTime())) {
+        throw new Error('Invalid date format');
+      }
+
+      const [dateYear, dateMonth, dateDay] = inspectionDate.split('-').map(Number);
+      if (dateYear < 1900 || dateYear > 2100 || dateMonth < 1 || dateMonth > 12 || dateDay < 1 || dateDay > 31) {
+        throw new Error('Invalid date format');
+      }
+
+      const reconstructedDate = `${dateYear}-${String(dateMonth).padStart(2, '0')}-${String(dateDay).padStart(2, '0')}`;
+      if (reconstructedDate !== inspectionDate) {
+        throw new Error('Invalid date format');
+      }
+
+      // 오피스 선택 검증
+      if (!['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'].includes(selectedOffice)) {
+        throw new Error('Invalid office selection');
+      }
+
+      // 날짜 포맷팅 (MM/DD/YYYY)
+      const laDate = new Date(dateObj.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+      const month = String(laDate.getMonth() + 1).padStart(2, '0');
+      const day = String(laDate.getDate()).padStart(2, '0');
+      const year = laDate.getFullYear();
+      const formattedDate = `${month}/${day}/${year}`;
+
+      const generatedDate = new Date().toLocaleDateString('en-US', {
+        year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true,
+      });
+
+      // PDF 생성 (클라이언트 사이드)
+      setSubmitStatus('Processing...');
+      setProgress(60);
+      
+      const safeSelectedOffice = selectedOffice.trim().slice(0, 100).replace(/[<>]/g, '');
+      const pdfDoc = createLobbyPDFDocument({
+        safeSelectedOffice,
+        formattedDate,
+        lobbyData: lobbyData as Record<string, unknown>,
+        generatedDate,
+      });
+
+      const blob = await pdf(pdfDoc).toBlob();
+        
+      // PDF를 Firebase Storage에 저장 (endofday-pdfs 저장)
+      setSubmitStatus('Saving...');
+      setProgress(70);
+      try {
+        const storage = getStorage();
+        const now = new Date();
+        const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+        let hours = laTime.getHours();
+        const minutes = laTime.getMinutes();
+        const ampm = hours >= 12 ? 'pm' : 'am';
+        hours = hours % 12;
+        hours = hours ? hours : 12;
+        const timeStamp = `${hours}${minutes.toString().padStart(2, '0')}${ampm}`;
+        
+        const filename = `5) ${inspectionDate}_${selectedOffice}_Lobby Inspection Log_${timeStamp}.pdf`;
+        const storageRef = ref(storage, `endofday-pdfs/${selectedOffice}/${inspectionDate}/${filename}`);
+        
+        // PDF 업로드
+        await uploadBytes(storageRef, blob);
+        
+      } catch (storageError: any) {
+        // 저장 실패 시 사용자에게 알림
+        const errorMsg = storageError?.message || 'Error';
+        alert(`An error occurred while submitting. Please try again.: ${errorMsg}`);
+        throw storageError;
+      }
+      
+      // 2. 데이터 삭제
+      setSubmitStatus('Cleaning up...');
+      setProgress(80);
+      const docId = `${inspectionDate}_${selectedOffice}_lobby`;
+      await deleteDoc(doc(db, "lobby-inspections", docId));
+      
+      // 3. 폼 초기화
+      setLobbyData({});
+      setLastSavedData({});
+
+      setSubmitStatus('Complete!');
+      setProgress(100);
+      
+      setTimeout(() => {
+        setLoading(false);
+        setSubmitStatus('');
+        setProgress(0);
+        alert('Submitted successfully!');
+      }, 2000);
+
     } catch (error: any) {
-      console.error('Submit error:', error);
       setSubmitStatus('❌ Submission failed: ' + error.message);
       setProgress(0);
       setTimeout(() => {
@@ -539,10 +708,63 @@ export default function LobbyInspectionPage() {
     };
   }, [loading]);
 
-  // 컴포넌트 마운트 시 오늘 날짜 설정 및 HTTPS 체크
+  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
-    setInspectionDate(getCurrentCaliforniaTime());
-    
+    // Firebase Auth 상태 변경 감지
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        // Firestore에서 사용자 role 확인
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          // 다른 페이지로 리다이렉트하거나 홈으로 이동
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+        setInspectionDate(getCurrentCaliforniaTime());
+
+        // offices 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.offices) {
+          const officesArray = Array.isArray(userData.offices) 
+            ? userData.offices 
+            : [userData.offices];
+          
+          // officeOptions에 포함된 값들만 필터링
+          const validOptions = officesArray.filter((g: string) => officeOptions.includes(g));
+          
+          if (validOptions.length > 0) {
+            setUserOfficesOptions(validOptions);
+            // 단일 값이면 자동 선택
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+            }
+          }
+        }
+      } catch (error: any) {
+        alert('An error occurred while verifying authentication.');
+        setIsAuthorized(false);
+      }
+    });
+
     // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
     if (process.env.NODE_ENV === 'production' && 
         typeof window !== 'undefined' && 
@@ -550,6 +772,11 @@ export default function LobbyInspectionPage() {
       // HTTP로 접속한 경우 HTTPS로 리다이렉트
       window.location.href = window.location.href.replace('http:', 'https:');
     }
+
+    // cleanup 함수
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // 컬럼 정의
@@ -570,6 +797,44 @@ export default function LobbyInspectionPage() {
     'Deep Clean Manager Inspection'
   ];
 
+
+  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
+  if (isAuthorized === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+        fontFamily: 'Arial, sans-serif'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
+          <div style={{ fontSize: '18px', color: '#333' }}>Verifying authentication...</div>
+        </div>
+      </div>
+    );
+  }
+
+  if (isAuthorized === false) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
+        fontFamily: 'Arial, sans-serif'
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
+          <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
@@ -662,18 +927,36 @@ export default function LobbyInspectionPage() {
             onChange={(e: any) => setInspectionDate(e.target.value)}
             style={styles.input}
           />
-          <label style={styles.label} htmlFor="office">🏢 Office:</label>
-          <select
-            id="office"
-            value={selectedOffice}
-            onChange={(e: any) => handleOfficeChange(e.target.value)}
-            style={styles.select}
-          >
-            <option value="">--Select Office--</option>
-            {officeOptions.map(office => (
-              <option key={office} value={office}>{office}</option>
-            ))}
-          </select>
+          {/* officees 옵션이 있는 경우에만 Office 표시 */}
+          {userOfficesOptions.length > 0 && (
+            <>
+              <label style={styles.label} htmlFor="office">🏢 Office:</label>
+              {userOfficesOptions.length === 1 ? (
+                <span style={{
+                  ...styles.select,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  backgroundColor: '#e9ecef',
+                  fontWeight: '600',
+                  color: '#4a6fa1'
+                }}>
+                  {selectedOffice}
+                </span>
+              ) : (
+                <select
+                  id="office"
+                  value={selectedOffice}
+                  onChange={(e: any) => setSelectedOffice(e.target.value)}
+                  style={styles.select}
+                >
+                  <option value="">--Select Office--</option>
+                  {userOfficesOptions.map(office => (
+                    <option key={office} value={office}>{office}</option>
+                  ))}
+                </select>
+              )}
+            </>
+          )}
         </div>
 
         {/* 테이블 - Date와 Office가 모두 선택되었을 때만 표시 */}

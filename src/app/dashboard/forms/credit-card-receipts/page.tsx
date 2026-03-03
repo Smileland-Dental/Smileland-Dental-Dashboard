@@ -88,20 +88,15 @@ const CreditCardReceipts = () => {
       }, { merge: true });
       
     } catch (error) {
-      console.error('Error saving data:', error);
     }
   };
 
   // Upload file to Firebase Storage
   const uploadFile = async (file: File, fileName: string) => {
     try {
-      console.log('Starting file upload:', { fileName, fileSize: file.size, fileType: file.type });
-      
       const storageRef = ref(storage, `receipts/${fileName}`);
       const snapshot = await uploadBytes(storageRef, file);
       const downloadURL = await getDownloadURL(snapshot.ref);
-      
-      console.log('File uploaded successfully:', downloadURL);
       
       return {
         success: true,
@@ -109,7 +104,6 @@ const CreditCardReceipts = () => {
         downloadURL: downloadURL
       };
     } catch (error) {
-      console.error('Error uploading file:', error);
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   };
@@ -126,7 +120,6 @@ const CreditCardReceipts = () => {
       if (!currentSubmissionId) {
         currentSubmissionId = generateSubmissionId();
         setSubmissionId(currentSubmissionId);
-        console.log('🆔 Generated submission ID during submit:', currentSubmissionId);
       }
 
       // Save data to Firestore (final save)
@@ -142,7 +135,6 @@ const CreditCardReceipts = () => {
       setTimeout(() => setSubmitStatus(''), 7000);
 
     } catch (error) {
-      console.error('Submit error:', error);
       setSubmitStatus('❌ Submission failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
       setTimeout(() => setSubmitStatus(''), 7000);
     } finally {
@@ -197,10 +189,23 @@ const CreditCardReceipts = () => {
 
   // Handle file upload
   const handleFileUpload = async (index: number, files: FileList) => {
-    console.log('handleFileUpload called:', { index, fileCount: files.length });
     
     if (!files || files.length === 0) {
       console.log('No files to upload');
+      return;
+    }
+
+    // Filter out PDF files - only allow image files
+    const imageFiles = Array.from(files).filter(file => {
+      const isImage = file.type.startsWith('image/');
+      if (!isImage) {
+        alert(`❌ PDF files are not allowed. Please upload image files only. File "${file.name}" was rejected.`);
+      }
+      return isImage;
+    });
+
+    if (imageFiles.length === 0) {
+      alert('❌ No valid image files selected. Please upload image files only (PDF files are not allowed).');
       return;
     }
 
@@ -209,48 +214,31 @@ const CreditCardReceipts = () => {
     if (!currentSubmissionId) {
       currentSubmissionId = generateSubmissionId();
       setSubmissionId(currentSubmissionId);
-      console.log('🆔 Generated new submission ID:', currentSubmissionId);
     } else {
-      console.log('🆔 Using existing submission ID:', currentSubmissionId);
     }
 
-    console.log('Starting file upload process...');
-    const uploadPromises = Array.from(files).map(async (file: File, fileIndex: number) => {
-      console.log(`Processing file ${fileIndex + 1}:`, { name: file.name, size: file.size, type: file.type });
+    const uploadPromises = imageFiles.map(async (file: File, fileIndex: number) => {
       
       // Use the current submission ID for all files in this upload
       const sequenceNumber = String(Date.now() + fileIndex).padStart(15, '0');
       const fileName = `${formData.name}_${formData.cardLastFour}_${currentSubmissionId}_purchase${index + 1}_${sequenceNumber}_${file.name}`;
-      console.log('📁 Generated fileName:', fileName);
-      console.log('📁 Submission ID:', currentSubmissionId);
-      console.log('📁 Purchase index:', index + 1);
-      console.log('📁 File parts:', fileName.split('_'));
-      
+    
       const uploadResult = await uploadFile(file, fileName);
-      console.log('Upload result:', uploadResult);
-      
+  
       if (uploadResult?.success) {
-        console.log('File uploaded successfully:', fileName);
         return { name: fileName, url: uploadResult.downloadURL };
       } else {
-        console.error('File upload failed:', uploadResult?.error);
         return null;
       }
     });
 
-    console.log('Waiting for all uploads to complete...');
     const uploadedFiles = (await Promise.all(uploadPromises)).filter((file): file is ReceiptFile => file !== null);
-    console.log('Uploaded files:', uploadedFiles);
     
     if (uploadedFiles.length > 0) {
       const currentFiles = purchases[index].receiptFiles || [];
-      console.log('Current files:', currentFiles);
-      console.log('Replacing files for purchase...');
       // Replace existing files with new ones (don't append)
       updatePurchase(index, 'receiptFiles', uploadedFiles);
-      console.log('Files replaced for purchase');
     } else {
-      console.log('No files were successfully uploaded');
     }
   };
 
@@ -670,7 +658,7 @@ const CreditCardReceipts = () => {
                     <label style={styles.label}>Receipt Images</label>
                     <input
                       type="file"
-                      accept="image/*,.pdf"
+                      accept="image/*"
                       multiple
                       onChange={(e) => {
                         const files = e.target.files;

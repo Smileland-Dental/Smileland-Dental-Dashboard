@@ -1,10 +1,42 @@
 'use client'
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { doc, setDoc, collection, getDocs, getDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
-import { db } from "@/lib/firebase.config";
-import { enableAllSecurityMeasures, sanitizeFirebaseDataClient } from "@/lib/security-client";
+import { db, auth } from "@/lib/firebase.config";
+import { onAuthStateChanged } from 'firebase/auth';
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+const MAX_STRING_LENGTH = 10000;
+
+function sanitizeValue(value: unknown): unknown {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'string') {
+    return value.trim().slice(0, MAX_STRING_LENGTH);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return 0;
+    return value;
+  }
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    return value.map(sanitizeValue);
+  }
+  if (typeof value === 'object') {
+    return sanitizeData(value as Record<string, unknown>);
+  }
+  return null;
+}
+
+function sanitizeData<T extends Record<string, unknown>>(data: T): T {
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(data)) {
+    if (DANGEROUS_KEYS.has(key)) continue;
+    const sanitizedKey = String(key).trim().slice(0, 500);
+    if (!sanitizedKey) continue;
+    result[sanitizedKey] = sanitizeValue(data[key]);
+  }
+  return result as T;
+}
 
 // 개별 아이템 행 컴포넌트 (엑셀 스타일)
 interface ItemRowProps {
@@ -202,8 +234,7 @@ function SupplyManagerSystemContent() {
   const [insertAfterRow, setInsertAfterRow] = useState('');
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [editingValues, setEditingValues] = useState<{ [key: string]: any }>({});
-  
-  
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
 
   const collectionName = supplyType === 'order-request' ? 'order-requests' : (supplyType === 'dental' ? 'dental-supplies' : 'office-supplies');
   const supplyTypeLabel = supplyType === 'order-request' ? 'Order Request' : (supplyType === 'dental' ? 'Dental' : 'Office');
@@ -223,12 +254,16 @@ function SupplyManagerSystemContent() {
       
       querySnapshot.forEach((doc: any) => {
         const rawData = doc.data();
-        const sanitizedData = sanitizeFirebaseDataClient(rawData);
+        const sanitizedData = sanitizeData(rawData);
         // 임시 저장된 주문(office가 비어있거나 'temp')은 목록에서 제외
         if (supplyType === 'order-request') {
           const officeValue = (sanitizedData.office || '').toString().trim().toLowerCase();
           if (!officeValue || officeValue === 'temp') {
             return; // skip this document
+          }
+          // 이미 완료 처리된 주문은 목록에서 제외
+          if (sanitizedData.deletedByManager === true) {
+            return;
           }
         }
         
@@ -281,7 +316,6 @@ function SupplyManagerSystemContent() {
       setItems(itemsWithDisplayId);
       setFilteredItems(itemsWithDisplayId);
     } catch (error) {
-      console.error('Error loading items:', error);
       setError('Failed to load items');
     } finally {
       setLoading(false);
@@ -316,7 +350,7 @@ function SupplyManagerSystemContent() {
           [field]: value,
           lastUpdated: new Date().toISOString()
         };
-        const sanitizedUpdateData = sanitizeFirebaseDataClient(updateData);
+        const sanitizedUpdateData = sanitizeData(updateData);
         await updateDoc(itemRef, sanitizedUpdateData);
         
         // items 상태 업데이트
@@ -343,7 +377,6 @@ function SupplyManagerSystemContent() {
         // 타이머 정리
         delete updateTimersRef.current[timerKey];
       } catch (error) {
-        console.error('Error updating item:', error);
         setError('Failed to update item');
       }
     }, 1000);
@@ -438,7 +471,7 @@ function SupplyManagerSystemContent() {
       };
 
       // 데이터 검증 후 저장
-      const sanitizedItemData = sanitizeFirebaseDataClient(itemData);
+      const sanitizedItemData = sanitizeData(itemData);
       const newItemRef = doc(collection(db, collectionName));
       await setDoc(newItemRef, sanitizedItemData);
 
@@ -455,7 +488,6 @@ function SupplyManagerSystemContent() {
 
       await loadItems();
     } catch (error) {
-      console.error('Error adding item:', error);
       setError('Failed to add item');
     } finally {
       setLoading(false);
@@ -489,7 +521,6 @@ function SupplyManagerSystemContent() {
       setSelectedItems(new Set());
       await loadItems();
     } catch (error) {
-      console.error('Error deleting items:', error);
       setError('Failed to delete items');
     } finally {
       setLoading(false);
@@ -499,7 +530,6 @@ function SupplyManagerSystemContent() {
   // 개별 아이템 삭제
   const deleteItem = useCallback(async (itemId: string) => {
     if (typeof itemId !== 'string') {
-      console.error('Invalid itemId type:', typeof itemId);
       return;
     }
 
@@ -512,7 +542,6 @@ function SupplyManagerSystemContent() {
       await deleteDoc(doc(db, collectionName, itemId));
       await loadItems();
     } catch (error) {
-      console.error('Delete item error:', error);
       setError('Failed to delete item');
     } finally {
       setLoading(false);
@@ -624,7 +653,7 @@ function SupplyManagerSystemContent() {
             itemStatuses: currentItemStatuses,
             lastUpdated: new Date().toISOString()
           };
-          const sanitizedStatusData = sanitizeFirebaseDataClient(statusData);
+          const sanitizedStatusData = sanitizeData(statusData);
           await updateDoc(itemRef, sanitizedStatusData);
         }
       } else {
@@ -633,7 +662,7 @@ function SupplyManagerSystemContent() {
           status: newStatus,
           lastUpdated: new Date().toISOString()
         };
-        const sanitizedStatusData = sanitizeFirebaseDataClient(statusData);
+        const sanitizedStatusData = sanitizeData(statusData);
         await updateDoc(itemRef, sanitizedStatusData);
       }
 
@@ -647,14 +676,13 @@ function SupplyManagerSystemContent() {
       );
       
     } catch (error) {
-      console.error('Error updating order status:', error);
       alert('❌ Failed to update status. Please try again.');
     }
   }, [items]);
 
-  // 주문 그룹 전체 삭제
+  // 주문 그룹 완료 처리 (soft-delete: Firestore에서 삭제하지 않고 완료 표시)
   const deleteOrderGroup = useCallback(async (orderSessionId: string, itemCount: number) => {
-    if (!confirm(`Are you sure you want to delete this entire order (${itemCount} items)?\n\nThis action cannot be undone.`)) {
+    if (!confirm(`Are you sure you want to mark the order as completed?`)) {
       return;
     }
 
@@ -662,42 +690,42 @@ function SupplyManagerSystemContent() {
       setLoading(true);
       
       // 해당 orderSessionId의 모든 아이템 찾기
-      const itemsToDelete = items.filter(item => item.orderSessionId === orderSessionId);
+      const itemsToUpdate = items.filter(item => item.orderSessionId === orderSessionId);
       
       // 새로운 구조와 기존 구조 모두 처리
-      const documentsToDelete = new Set<string>();
+      const documentsToUpdate = new Set<string>();
       
-      itemsToDelete.forEach(item => {
-        // 새로운 구조: parentDocId가 있으면 그것을 사용, 없으면 docId-itemId에서 추출
+      itemsToUpdate.forEach(item => {
         if (item.parentDocId) {
-          documentsToDelete.add(item.parentDocId);
+          documentsToUpdate.add(item.parentDocId);
         } else if (item.id.includes('-')) {
           const parts = item.id.split('-');
           const docId = parts[0];
-          documentsToDelete.add(docId);
+          documentsToUpdate.add(docId);
         } else {
-          // 기존 구조: 직접 문서 ID 사용
-          documentsToDelete.add(item.id);
+          documentsToUpdate.add(item.id);
         }
       });
       
-      
-      // 배치 삭제
+      // 배치 업데이트 (삭제 대신 완료 표시)
       const batch = writeBatch(db);
-      documentsToDelete.forEach(docId => {
+      documentsToUpdate.forEach(docId => {
         const itemRef = doc(db, 'order-requests', docId);
-        batch.delete(itemRef);
+        batch.update(itemRef, {
+          deletedByManager: true,
+          status: 'completed',
+          lastUpdated: new Date().toISOString()
+        });
       });
       
       await batch.commit();
       
-      // 로컬 상태 업데이트
+      // 로컬 상태 업데이트 (목록에서 제거)
       setItems(prevItems => prevItems.filter(item => item.orderSessionId !== orderSessionId));
       
-      alert('✅ Order deleted successfully!');
+      alert('✅ Order marked as completed!');
     } catch (error) {
-      console.error('Error deleting order group:', error);
-      alert('❌ Failed to delete order. Please try again.');
+      alert('❌ Failed to complete order. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -757,81 +785,44 @@ function SupplyManagerSystemContent() {
     loadItems();
   }, [loadItems]);
 
-  // 보안 조치 활성화
+  // 사용자 인증 및 role 확인
   useEffect(() => {
-    enableAllSecurityMeasures({
-      disableConsole: true,        // console 비활성화
-      disableRightClick: true,     // 우클릭 방지
-      disableShortcuts: true,      // F12 등 단축키 방지
-      disableCopy: false,          // 복사 허용 (사용자 편의)
-      disableSelection: false,     // 텍스트 선택 허용 (사용자 편의)
-      monitorDevTools: true        // 개발자 도구 실시간 모니터링 활성화
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          alert('Please log in.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          alert('User information could not be found.');
+          setIsAuthorized(false);
+          return;
+        }
+
+        const userData = userDoc.data();
+
+        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
+          alert('You do not have access to this page.');
+          setIsAuthorized(false);
+          if (typeof window !== 'undefined') {
+            window.location.href = '/';
+          }
+          return;
+        }
+
+        setIsAuthorized(true);
+      } catch (error: any) {
+        alert('An error occurred while verifying authentication.');
+        setIsAuthorized(false);
+      }
     });
 
-    // 추가 보안 조치
-    if (process.env.NODE_ENV === 'production') {
-      // 1. 페이지 가시성 변경 감지 (탭 전환 등)
-      document.addEventListener('visibilitychange', () => {
-        if (document.hidden) {
-        }
-      });
-
-      // 2. 페이지 포커스 감지
-      window.addEventListener('blur', () => {
-      });
-
-      // 3. 키보드 이벤트 로깅 (의심스러운 패턴 감지)
-      let keySequence: string[] = [];
-      document.addEventListener('keydown', (e) => {
-        keySequence.push(e.key);
-        if (keySequence.length > 10) {
-          keySequence.shift();
-        }
-        
-        // 의심스러운 키 조합 감지
-        const suspiciousPatterns = [
-          ['F12'],
-          ['Control', 'Shift', 'I'],
-          ['Control', 'Shift', 'J'],
-          ['Control', 'u']
-        ];
-        
-        suspiciousPatterns.forEach(pattern => {
-          if (keySequence.slice(-pattern.length).join(',') === pattern.join(',')) {
-          }
-        });
-      });
-
-      // 4. 마우스 이벤트 모니터링
-      let mouseActivity = 0;
-      document.addEventListener('mousemove', () => {
-        mouseActivity++;
-        if (mouseActivity > 10000) {
-          mouseActivity = 0;
-        }
-      });
-
-      // 5. 페이지 새로고침 방지 (Ctrl+R, F5)
-      document.addEventListener('keydown', (e) => {
-        if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
-          e.preventDefault();
-          return false;
-        }
-      });
-
-      // 6. 브라우저 뒤로가기 방지
-      window.addEventListener('popstate', (e) => {
-        e.preventDefault();
-        window.history.pushState(null, '', window.location.href);
-      });
-
-      // 7. 페이지 언로드 시 경고
-      window.addEventListener('beforeunload', (e) => {
-        e.preventDefault();
-        e.returnValue = 'Are you sure you want to leave?';
-        return 'Are you sure you want to leave?';
-      });
-    }
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
   // 컴포넌트 언마운트 시 타이머 정리
@@ -930,15 +921,54 @@ function SupplyManagerSystemContent() {
     fontSize: '15px'
   };
 
+  // 인증 확인 중
+  if (isAuthorized === null) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: '#f8f9fa',
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
+          <div style={{ fontSize: '18px', color: '#2c3e50' }}>Verifying authentication...</div>
+        </div>
+      </div>
+    );
+  }
+
+  // 인증 실패
+  if (isAuthorized === false) {
+    return (
+      <div style={{
+        display: 'flex',
+        justifyContent: 'center',
+        alignItems: 'center',
+        height: '100vh',
+        background: '#f8f9fa',
+        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
+      }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
+          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
+          <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={bodyStyle}>
       <div style={containerStyle}>
         {/* 헤더 */}
-        <h1 style={headerStyle}>📋 Supply Manager</h1>
+        <h1 style={headerStyle}>Supply Manager</h1>
 
         {/* Supply Type 선택 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>📋 Supply Type Selection</h2>
+          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>Supply Type Selection</h2>
           <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
@@ -960,7 +990,7 @@ function SupplyManagerSystemContent() {
                 onChange={(e) => setSupplyType(e.target.value)}
                 style={{ margin: 0 }}
               />
-              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>🦷 Dental Supply</span>
+              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>Dental Supply</span>
             </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
@@ -971,7 +1001,7 @@ function SupplyManagerSystemContent() {
                 onChange={(e) => setSupplyType(e.target.value)}
                 style={{ margin: 0 }}
               />
-              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>📋 Office Supply</span>
+              <span style={{ fontSize: '16px', fontWeight: 'bold' }}>Office Supply</span>
             </label>
           </div>
         </div>
@@ -981,7 +1011,7 @@ function SupplyManagerSystemContent() {
         {supplyType !== 'order-request' && (
         <div style={sectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h2 style={{ color: '#0077B6', margin: 0 }}>➕ Add New Item</h2>
+            <h2 style={{ color: '#0077B6', margin: 0 }}>Add New Item</h2>
           </div>
           
           <div style={{ 
@@ -1123,14 +1153,10 @@ function SupplyManagerSystemContent() {
           </div>
         )}
 
-        
-
-
-
         {/* 엑셀 스타일 데이터 테이블 */}
         <div style={sectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h2 style={{ color: '#0077B6', margin: 0 }}>📊 {supplyTypeLabel} {supplyType === 'order-request' ? 'List' : 'Supply Items'}</h2>
+            <h2 style={{ color: '#0077B6', margin: 0 }}>{supplyTypeLabel} {supplyType === 'order-request' ? 'List' : 'Supply Items'}</h2>
             {supplyType !== 'order-request' && (
             <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
               <button
@@ -1166,8 +1192,6 @@ function SupplyManagerSystemContent() {
           {supplyType !== 'order-request' && (
           <>
             <div style={{ marginBottom: '20px' }}>
-              <h3 style={{ color: '#0077B6', marginBottom: '15px', fontSize: '18px' }}>🔍 Filter & Search</h3>
-              
               <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
                 {supplyType === 'dental' && (
                   <div style={{ flex: '1', minWidth: '200px' }}>
@@ -1237,7 +1261,7 @@ function SupplyManagerSystemContent() {
                 marginBottom: '15px',
                 textAlign: 'right'
               }}>
-                📊 {filteredItems.length} of {items.length} items
+                {filteredItems.length} of {items.length} items
                 {categoryFilter && ` • ${categoryFilter}`}
                 {sellerFilter && ` • ${sellerFilter}`}
                 {searchInput && ` • "${searchInput}"`}
@@ -1315,7 +1339,7 @@ function SupplyManagerSystemContent() {
                                     color: type === 'dental' ? '#0077B6' : '#495057'
                                   }}
                                 >
-                                  {type === 'dental' ? '🦷 Dental' : '📋 Office'}
+                                  {type === 'dental' ? 'Dental' : 'Office'}
                                 </span>
                               ))}
                             </div>
@@ -1333,7 +1357,7 @@ function SupplyManagerSystemContent() {
                                 deleteOrderGroup(group.orderSessionId, group.itemCount);
                               }}
                               style={{
-                                backgroundColor: '#dc3545',
+                                backgroundColor: '#28a745',
                                 color: 'white',
                                 border: 'none',
                                 padding: '7px 14px',
@@ -1343,10 +1367,10 @@ function SupplyManagerSystemContent() {
                                 cursor: 'pointer',
                                 transition: 'background-color 0.2s'
                               }}
-                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#c82333'}
-                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#dc3545'}
+                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#218838'}
+                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#28a745'}
                             >
-                              🗑️ Delete
+                              ✅ Complete
                             </button>
                           </td>
                         </tr>
@@ -1380,7 +1404,7 @@ function SupplyManagerSystemContent() {
                                           color: item.supplyType === 'dental' ? '#0077B6' : '#495057',
                                           alignSelf: 'flex-start'
                                         }}>
-                                          {item.supplyType === 'dental' ? '🦷 Dental' : '📋 Office'}
+                                          {item.supplyType === 'dental' ? 'Dental' : 'Office'}
                                         </span>
                                       </div>
                                     </td>
@@ -1431,10 +1455,10 @@ function SupplyManagerSystemContent() {
                                                       item.status === 'cancelled' ? '#dc3545' : '#6c757d'
                                         }}
                                       >
-                                        <option value="pending">⏳ Requested</option>
-                                        <option value="processing">🔄 Processing</option>
-                                        <option value="completed">✅ Completed</option>
-                                        <option value="cancelled">❌ Cancelled</option>
+                                        <option value="pending">Requested</option>
+                                        <option value="processing">Processing</option>
+                                        <option value="completed">Completed</option>
+                                        <option value="cancelled">Cancelled</option>
                                       </select>
                                     </td>
                                   </tr>
