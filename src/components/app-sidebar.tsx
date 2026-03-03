@@ -24,6 +24,8 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar"
 
+import { useAuth } from "@/contexts/AuthContext";
+
 // Menu items.
 const items = [
   {
@@ -45,16 +47,19 @@ const items = [
     title: "Approval",
     url: "/dashboard/tools/approval",
     icon: File,
+    allowedRoles: ['Manager', 'HR', 'Director'], // Only show to Managers, HR, and Directors
   },
   {
     title: "HR Table",
     url: "/dashboard/hr-table",
     icon: File,
+    allowedRoles: ['HR', 'Director'],
   },
   {
     title: "Company Directory",
     url: "/dashboard/company-directory",
     icon: File,
+    allowedRoles: ['HR', 'Director'],
   },
   /*{
     title: "Settings",
@@ -64,25 +69,10 @@ const items = [
 ]
 
 export function AppSidebar() {
+  const { user, loading } = useAuth();
+
   const router = useRouter();
-  const [user, setUser] = useState<User | null>(null);
   
-  useEffect(() => {
-    // This listener checks for changes in the user's login state.
-    const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
-      if (currentUser) {
-        // User is signed in
-        setUser(currentUser);
-      } else {
-        // User is signed out
-        setUser(null);
-      }
-    });
-
-      // Cleanup the subscription when the component unmounts
-      return () => unsubscribe();
-    }, []); 
-
   // Allow the user to log out based on a button on the sidebar
   const handleSignOut = async () => {
     try {
@@ -103,8 +93,16 @@ export function AppSidebar() {
           <SidebarGroup>
             <SidebarGroupLabel>Smileland Dental</SidebarGroupLabel>
             <SidebarGroupContent>
-              <SidebarMenu>
-                {items.map((item) => (
+            <SidebarMenu>
+              {items
+                .filter((item) => {
+                  // If the item has no role restrictions, show it
+                  if (!item.allowedRoles) return true;
+                  
+                  // Otherwise, only show if user's role is in the allowed list
+                  return user && item.allowedRoles.includes(user.role);
+                })
+                .map((item) => (
                   <SidebarMenuItem key={item.title}>
                     <SidebarMenuButton asChild>
                       <Link href={item.url}>
@@ -114,7 +112,7 @@ export function AppSidebar() {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 ))}
-              </SidebarMenu>
+            </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>

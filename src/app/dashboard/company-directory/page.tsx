@@ -9,6 +9,7 @@ import EmployeeModal from '@/components/employee-viewer/employee-modal';
 import AddEmployeeForm from '@/components/employee-viewer/AddEmployeeForm'; // Import the new form
 import Image from 'next/image';
 import { useAuth } from '@/contexts/AuthContext';
+import ProtectedRoute from '@/components/auth/ProtectedRoute';
 
 export default function DirectoryPage() {
   const { user, loading: authLoading } = useAuth();
@@ -89,12 +90,13 @@ export default function DirectoryPage() {
   if (authLoading) return <div className="text-center py-20">Loading</div>;
 
   return (
+    <ProtectedRoute allowedRoles={['HR', 'Director']}>
     <div className="container mx-auto px-4 py-8">
       <div className="flex justify-between items-center mb-8">
          <h1 className="text-4xl font-bold">Company Directory</h1>
          {/*user?.role*/}
          {/* Show Add Button ONLY if user is HR */}
-         {user?.role === 'HR' || user?.role === 'Director' && (
+         {(user?.role === 'HR' || user?.role === 'Director') && (
            <button 
              onClick={() => setIsAddModalOpen(true)}
              className="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 transition"
@@ -175,6 +177,7 @@ export default function DirectoryPage() {
         />
       )}
     </div>
+    </ProtectedRoute>
   );
 }
 
