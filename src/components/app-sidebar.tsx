@@ -61,6 +61,12 @@ const items = [
     icon: File,
     allowedRoles: ['HR', 'Director'],
   },
+  {
+    title: "User Management",
+    url: "/dashboard/tools/administrator",
+    icon: File,
+    allowedRoles: ['HR', 'Director'],
+  },
   /*{
     title: "Settings",
     url: "#",
