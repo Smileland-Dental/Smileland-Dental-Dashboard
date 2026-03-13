@@ -160,7 +160,7 @@ export default function EndOfDay() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'Manager') {
+        if (userData?.role !== 'Director' || userData?.role !== 'HR') {
           setIsAuthorized(false);
           if (typeof window !== 'undefined') {
             window.location.href = '/';
@@ -719,5 +719,4 @@ export default function EndOfDay() {
     </>
   );
 }
-
 
