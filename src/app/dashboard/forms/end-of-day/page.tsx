@@ -21,7 +21,7 @@ export default function EndOfDay() {
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
 
   // 오피스 옵션
-  const officeOptions = ['Bernard', 'Ming'];
+  const officeOptions = ['Call_Center', 'Janitor', 'Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
 
   // 보안: Office 값 검증
@@ -42,7 +42,7 @@ export default function EndOfDay() {
       alert('Invalid office selection.');
       return;
     }
-    
+  /*  
     // 선택된 office의 첫 알파벳 대문자를 비밀번호로 사용
     const officePassword = newOffice.charAt(0).toUpperCase();
     const password = prompt(`Enter password to change office: `);
@@ -51,6 +51,7 @@ export default function EndOfDay() {
       alert("Incorrect password. Office change cancelled.");
       return;
     }
+  */
     setSelectedOffice(newOffice);
   };
 
@@ -160,7 +161,7 @@ export default function EndOfDay() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'Director' || userData?.role !== 'HR') {
+        if (userData?.role !== 'Director' && userData?.role !== 'HR') {
           setIsAuthorized(false);
           if (typeof window !== 'undefined') {
             window.location.href = '/';
@@ -719,4 +720,3 @@ export default function EndOfDay() {
     </>
   );
 }
-
