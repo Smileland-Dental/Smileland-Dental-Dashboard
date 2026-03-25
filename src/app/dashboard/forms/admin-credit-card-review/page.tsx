@@ -1,10 +1,128 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
-import { collection, getDocs, deleteDoc, doc, setDoc } from 'firebase/firestore';
+import React, { useState, useEffect } from 'react';
+import { Document, Image, Page, StyleSheet, Text, View, pdf } from '@react-pdf/renderer';
+import { collection, getDocs, deleteDoc, doc, getDoc, setDoc } from 'firebase/firestore';
 import { ref, listAll, getDownloadURL, uploadBytes, deleteObject } from 'firebase/storage';
-import { db, storage } from '@/lib/firebase.config';
-import { enableAllSecurityMeasures, sanitizeCSVCell, sanitizeFirebaseDataClient } from '@/lib/security-client';
+import { onAuthStateChanged } from 'firebase/auth';
+import { db, storage, auth } from '@/lib/firebase.config';
+// Simple helper functions to replace security-client
+const sanitizeCSVCell = (value: string | number | undefined | null): string => {
+  if (value === null || value === undefined) return '';
+  const str = String(value);
+  // Basic CSV injection protection: remove leading =, +, -, @
+  if (str.startsWith('=') || str.startsWith('+') || str.startsWith('-') || str.startsWith('@')) {
+    return "'" + str;
+  }
+  // Escape quotes and wrap in quotes if contains comma, newline, or quote
+  if (str.includes(',') || str.includes('\n') || str.includes('"')) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+};
+
+const sanitizeFirebaseDataClient = (data: any): any => {
+  // 🔒 보안: Firebase에 저장되는 데이터 sanitization
+  if (!data || typeof data !== 'object') {
+    return data;
+  }
+  
+  const sanitized: any = {};
+  for (const [key, value] of Object.entries(data)) {
+    // 키 이름 검증 (알파벳, 숫자, 언더스코어만 허용)
+    if (!/^[a-zA-Z0-9_]+$/.test(key)) {
+      continue; // Skip invalid keys
+    }
+    
+    // 값 타입별 sanitization
+    if (value === null || value === undefined) {
+      sanitized[key] = value;
+    } else if (typeof value === 'string') {
+      // 문자열: 길이 제한 및 특수문자 제거
+      sanitized[key] = value.substring(0, 10000).replace(/[<>]/g, '');
+    } else if (typeof value === 'number') {
+      // 숫자: NaN 및 Infinity 체크
+      sanitized[key] = isFinite(value) ? value : 0;
+    } else if (value instanceof Date) {
+      sanitized[key] = value;
+    } else if (typeof value === 'boolean') {
+      sanitized[key] = value;
+    } else if (Array.isArray(value)) {
+      // 배열: 최대 1000개 항목만 허용
+      sanitized[key] = value.slice(0, 1000);
+    } else if (typeof value === 'object') {
+      // 객체: 재귀적으로 sanitize (최대 깊이 3)
+      sanitized[key] = sanitizeFirebaseDataClient(value);
+    }
+  }
+  
+  return sanitized;
+};
+
+/** CSV "Submission Date" column: prefer createdAt, then date string, then pdfGeneratedAt */
+const getSubmissionDateDisplayForCsv = (data: any): string => {
+  if (data.createdAt?.toDate && typeof data.createdAt.toDate === 'function') {
+    return data.createdAt.toDate().toLocaleDateString();
+  }
+  if (data.createdAt instanceof Date) {
+    return data.createdAt.toLocaleDateString();
+  }
+  if (data.date && String(data.date).trim()) {
+    return String(data.date).trim();
+  }
+  if (data.pdfGeneratedAt?.toDate && typeof data.pdfGeneratedAt.toDate === 'function') {
+    return data.pdfGeneratedAt.toDate().toLocaleDateString();
+  }
+  return new Date().toLocaleDateString();
+};
+
+const ISO_CALENDAR_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** YYYY-MM-DD in America/Los_Angeles */
+function formatDatePacificLosAngeles(date: Date): string {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  });
+  const parts = formatter.formatToParts(date);
+  const year = parts.find(p => p.type === 'year')?.value || '';
+  const month = parts.find(p => p.type === 'month')?.value || '';
+  const day = parts.find(p => p.type === 'day')?.value || '';
+  return `${year}-${month}-${day}`;
+}
+
+/** Date range filter: ISO `date` when valid, else LA calendar date from `submittedAt`. */
+function getSubmissionDateStringForFilter(submission: { date: string; submittedAt: Date }): string {
+  if (submission.date && ISO_CALENDAR_DATE_RE.test(submission.date)) {
+    return submission.date;
+  }
+  const at = submission.submittedAt instanceof Date ? submission.submittedAt : new Date(submission.submittedAt);
+  return formatDatePacificLosAngeles(at);
+}
+
+/** List / modal: show stored `date` when non-empty, else LA YYYY-MM-DD from `submittedAt`. */
+function getSubmissionDateDisplayLabel(submission: { date: string; submittedAt: Date }): string {
+  if (submission.date?.trim()) {
+    return submission.date.trim();
+  }
+  const at = submission.submittedAt instanceof Date ? submission.submittedAt : new Date(submission.submittedAt);
+  return formatDatePacificLosAngeles(at);
+}
+
+/**
+ * Firestore 문서가 워크플로우상 "완료"인지: PDF URL이 있고 Added on Numbers가 체크됨.
+ * (CSV 다운로드 대상, Reset 시 삭제 대상 등)
+ */
+function isFirestoreDocPdfWorkflowComplete(data: {
+  pdfURL?: unknown;
+  addedOnNumbersChecked?: unknown;
+}): boolean {
+  const hasPDF = typeof data.pdfURL === 'string' && data.pdfURL.trim() !== '';
+  const numbersChecked = data.addedOnNumbersChecked === true;
+  return hasPDF && numbersChecked;
+}
 
 // Interfaces for type safety
 interface Purchase {
@@ -13,7 +131,7 @@ interface Purchase {
   reason: string;
   amount: string;
   description: string;
-  receiptFiles: string[];
+  receiptFiles: string[] | string;
 }
 
 interface Submission {
@@ -26,52 +144,770 @@ interface Submission {
   purchases: Purchase[];
   totalAmount: string;
   submittedAt: Date;
-  lastUpdated: Date;
-  signatureURL?: string;
-  signatureSavedAt?: Date;
+  signed?: boolean; // Boolean flag to indicate if signature has been provided
   addedOnNumbersChecked?: boolean;
   addedOnNumbersCheckedAt?: Date;
   formType?: 'credit-card' | 'reimbursement'; // Form type to distinguish between credit card receipts and reimbursement requests
   amountAdjustedTo?: string;
   reasonForAdjustment?: string;
   approved?: boolean;
+  pdfURL?: string; // URL of the generated PDF file
 }
 
 interface ReceiptFile {
   name: string;
   url: string;
-  purchaseNumber: number;
-  fullPath?: string;
+}
+
+// --- PDF generation (client-side): credit card + reimbursement ---
+interface PdfFileData {
+  name: string;
+  url: string;
+}
+
+interface PdfSafePurchase {
+  date: string;
+  vendor: string;
+  reason: string;
+  amount: number;
+  description: string;
+}
+
+const pdfEscapeHtml = (str: string): string => {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+};
+
+const pdfSanitizeAmount = (amount: string | number): number => {
+  const num = typeof amount === 'string' ? parseFloat(amount) : amount;
+  return isNaN(num) || num < 0 ? 0 : Math.min(num, 1000000);
+};
+
+const pdfSanitizeString = (str: string | undefined | null, maxLength: number = 1000): string => {
+  if (!str) return '';
+  const sanitized = String(str)
+    .replace(/[<>]/g, '')
+    .substring(0, maxLength)
+    .trim();
+  return pdfEscapeHtml(sanitized);
+};
+
+function formatPdfStatusDateTimeNow(): string {
+  return new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'medium' });
+}
+
+const PDF_A4_WIDTH = 595.28;
+const PDF_A4_HEIGHT = 841.89;
+const PDF_IMAGE_PAGE_PADDING = 24;
+
+const pdfDocumentStyles = StyleSheet.create({
+  page: {
+    paddingTop: 24,
+    paddingBottom: 24,
+    paddingHorizontal: 24,
+    fontSize: 10,
+    color: '#000000',
+  },
+  header: {
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  headerTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  headerLine: {
+    borderBottomWidth: 2,
+    borderBottomColor: '#000000',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  infoSection: {
+    marginBottom: 16,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    marginBottom: 6,
+    alignItems: 'flex-end',
+  },
+  infoLabel: {
+    width: 120,
+    fontWeight: 'bold',
+  },
+  infoValue: {
+    flex: 1,
+    borderBottomWidth: 1,
+    borderBottomColor: '#000000',
+    paddingBottom: 2,
+  },
+  sectionTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  table: {
+    borderWidth: 1,
+    borderColor: '#000000',
+    marginBottom: 12,
+  },
+  tableHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#f5f5f5',
+    borderBottomWidth: 1,
+    borderBottomColor: '#000000',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: '#000000',
+  },
+  lastTableRow: {
+    borderBottomWidth: 0,
+  },
+  cell: {
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+    borderRightWidth: 1,
+    borderRightColor: '#000000',
+  },
+  lastCell: {
+    borderRightWidth: 0,
+  },
+  cellText: {
+    fontSize: 9,
+  },
+  totalSection: {
+    marginTop: 8,
+    marginBottom: 16,
+    textAlign: 'right',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
+  imagePage: {
+    paddingTop: 24,
+    paddingBottom: 24,
+    paddingHorizontal: 24,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imagePageImageWrap: {
+    width: PDF_A4_WIDTH - PDF_IMAGE_PAGE_PADDING * 2,
+    height: PDF_A4_HEIGHT - PDF_IMAGE_PAGE_PADDING * 2,
+    borderWidth: 1,
+    borderColor: '#cccccc',
+    padding: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  imagePageImage: {
+    width: '100%',
+    height: '100%',
+    objectFit: 'contain',
+  },
+});
+
+function buildCreditCardReceiptDocument(params: {
+  safeOffice: string;
+  safeName: string;
+  safeCardNumber: string;
+  safeDate: string;
+  safePurchases: PdfSafePurchase[];
+  totalAmount: number;
+  base64FilesData: PdfFileData[];
+  approved: boolean;
+  safeStatusDecidedAt: string;
+}) {
+  const {
+    safeOffice,
+    safeName,
+    safeCardNumber,
+    safeDate,
+    safePurchases,
+    totalAmount,
+    base64FilesData,
+    approved,
+    safeStatusDecidedAt,
+  } = params;
+
+  const statusLabel = approved ? 'Approved' : 'Not Approved';
+
+  const widths = ['8%', '14%', '22%', '26%', '14%', '16%'];
+
+  const summaryPage = React.createElement(
+    Page,
+    { size: 'A4', style: pdfDocumentStyles.page, wrap: true },
+    React.createElement(
+      View,
+      { style: pdfDocumentStyles.header },
+      React.createElement(Text, { style: pdfDocumentStyles.headerTitle }, `${safeOffice || 'Company'} Credit Card Receipt`),
+      React.createElement(View, { style: pdfDocumentStyles.headerLine })
+    ),
+    React.createElement(
+      View,
+      { style: pdfDocumentStyles.infoSection },
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Name:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, safeName)
+      ),
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Card Number:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, `${safeCardNumber}`)
+      ),
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Submission Date:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, safeDate)
+      ),
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Status:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, statusLabel)
+      ),
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Status date & time:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, safeStatusDecidedAt)
+      ),
+    ),
+    React.createElement(Text, { style: pdfDocumentStyles.sectionTitle }, 'Purchase Details'),
+    React.createElement(
+      View,
+      { style: pdfDocumentStyles.table },
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.tableHeader },
+        ['#', 'Date', 'Store/Website', 'Reason', 'Amount', 'Account'].map((label, index) =>
+          React.createElement(
+            View,
+            {
+              key: `header-${label}`,
+              style: [
+                pdfDocumentStyles.cell,
+                { width: widths[index] },
+                ...(index === 5 ? [pdfDocumentStyles.lastCell] : []),
+              ],
+            },
+            React.createElement(Text, { style: [pdfDocumentStyles.cellText, { fontWeight: 'bold' }] }, label)
+          )
+        )
+      ),
+      safePurchases.map((purchase, index) =>
+        React.createElement(
+          View,
+          {
+            key: `purchase-${index}`,
+            style: [
+              pdfDocumentStyles.tableRow,
+              ...(index === safePurchases.length - 1 ? [pdfDocumentStyles.lastTableRow] : []),
+            ],
+          },
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[0] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, String(index + 1))
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[1] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, purchase.date)
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[2] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, purchase.vendor)
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[3] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, purchase.reason)
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[4] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, `$${purchase.amount.toFixed(2)}`)
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[5] }, pdfDocumentStyles.lastCell] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, purchase.description)
+          )
+        )
+      )
+    ),
+    React.createElement(Text, { style: pdfDocumentStyles.totalSection }, `Total Amount: $${totalAmount.toFixed(2)}`)
+  );
+
+  const imagePages = base64FilesData.map((file, index) =>
+    React.createElement(
+      Page,
+      { key: `image-page-${index}`, size: 'A4', style: pdfDocumentStyles.imagePage, wrap: false },
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.imagePageImageWrap },
+        React.createElement(Image, { src: file.url, style: pdfDocumentStyles.imagePageImage })
+      )
+    )
+  );
+
+  return React.createElement(Document, null, summaryPage, ...imagePages);
+}
+
+function buildReimbursementReceiptDocument(params: {
+  safeOffice: string;
+  safeName: string;
+  safeDate: string;
+  safePurchases: PdfSafePurchase[];
+  totalAmount: number;
+  base64FilesData: PdfFileData[];
+  approved: boolean;
+  safeAmountAdjustedTo: string;
+  safeReasonForAdjustment: string;
+  safeStatusDecidedAt: string;
+}) {
+  const {
+    safeOffice,
+    safeName,
+    safeDate,
+    safePurchases,
+    totalAmount,
+    base64FilesData,
+    approved,
+    safeAmountAdjustedTo,
+    safeReasonForAdjustment,
+    safeStatusDecidedAt,
+  } = params;
+
+  const widths = ['8%', '12%', '18%', '36%', '26%'];
+  const headerLabels = ['#', 'Date', 'Store/Website', 'Reason', 'Amount'];
+
+  const statusLabel = approved ? 'Approved' : 'Not Approved';
+
+  const adjustmentBlock: React.ReactNode[] = [];
+  if (safeAmountAdjustedTo) {
+    adjustmentBlock.push(
+      React.createElement(
+        View,
+        { key: 'adj-amt', style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Amount adjusted to:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, `$${safeAmountAdjustedTo}`)
+      )
+    );
+  }
+  if (safeReasonForAdjustment) {
+    adjustmentBlock.push(
+      React.createElement(
+        View,
+        { key: 'adj-reason', style: { marginTop: 8 } },
+        React.createElement(Text, { style: { fontWeight: 'bold', marginBottom: 4 } }, 'Reason for adjustment / notes:'),
+        React.createElement(Text, { style: pdfDocumentStyles.cellText }, safeReasonForAdjustment)
+      )
+    );
+  }
+
+  const summaryPage = React.createElement(
+    Page,
+    { size: 'A4', style: pdfDocumentStyles.page, wrap: true },
+    React.createElement(
+      View,
+      { style: pdfDocumentStyles.header },
+      React.createElement(
+        Text,
+        { style: pdfDocumentStyles.headerTitle },
+        `${safeOffice || 'Company'} Reimbursement Request`
+      ),
+      React.createElement(View, { style: pdfDocumentStyles.headerLine })
+    ),
+    React.createElement(
+      View,
+      { style: pdfDocumentStyles.infoSection },
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Name:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, safeName)
+      ),
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Submission Date:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, safeDate)
+      ),
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Status:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, statusLabel)
+      ),
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.infoRow },
+        React.createElement(Text, { style: pdfDocumentStyles.infoLabel }, 'Status date & time:'),
+        React.createElement(Text, { style: pdfDocumentStyles.infoValue }, safeStatusDecidedAt)
+      ),
+      ...adjustmentBlock
+    ),
+    React.createElement(Text, { style: pdfDocumentStyles.sectionTitle }, 'Expense Details'),
+    React.createElement(
+      View,
+      { style: pdfDocumentStyles.table },
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.tableHeader },
+        headerLabels.map((label, index) =>
+          React.createElement(
+            View,
+            {
+              key: `h-${label}`,
+              style: [
+                pdfDocumentStyles.cell,
+                { width: widths[index] },
+                ...(index === headerLabels.length - 1 ? [pdfDocumentStyles.lastCell] : []),
+              ],
+            },
+            React.createElement(Text, { style: [pdfDocumentStyles.cellText, { fontWeight: 'bold' }] }, label)
+          )
+        )
+      ),
+      safePurchases.map((purchase, index) =>
+        React.createElement(
+          View,
+          {
+            key: `p-${index}`,
+            style: [
+              pdfDocumentStyles.tableRow,
+              ...(index === safePurchases.length - 1 ? [pdfDocumentStyles.lastTableRow] : []),
+            ],
+          },
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[0] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, String(index + 1))
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[1] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, purchase.date)
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[2] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, purchase.vendor)
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[3] }] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, purchase.reason)
+          ),
+          React.createElement(
+            View,
+            { style: [pdfDocumentStyles.cell, { width: widths[4] }, pdfDocumentStyles.lastCell] },
+            React.createElement(Text, { style: pdfDocumentStyles.cellText }, `$${purchase.amount.toFixed(2)}`)
+          )
+        )
+      )
+    ),
+    React.createElement(Text, { style: pdfDocumentStyles.totalSection }, `Total Amount: $${totalAmount.toFixed(2)}`)
+  );
+
+  const imagePages = base64FilesData.map((file, index) =>
+    React.createElement(
+      Page,
+      { key: `img-${index}`, size: 'A4', style: pdfDocumentStyles.imagePage, wrap: false },
+      React.createElement(
+        View,
+        { style: pdfDocumentStyles.imagePageImageWrap },
+        React.createElement(Image, { src: file.url, style: pdfDocumentStyles.imagePageImage })
+      )
+    )
+  );
+
+  return React.createElement(Document, null, summaryPage, ...imagePages);
+}
+
+async function buildBase64FilesData(filesData: PdfFileData[]): Promise<PdfFileData[]> {
+  const base64FilesData: PdfFileData[] = [];
+  for (const file of filesData) {
+    try {
+      const base64Url = await convertReceiptImageUrlToBase64(file.url);
+      base64FilesData.push({ ...file, url: base64Url });
+    } catch {
+      base64FilesData.push(file);
+    }
+  }
+  return base64FilesData;
+}
+
+function buildSafePurchasesFromPurchases(purchases: Purchase[]): PdfSafePurchase[] {
+  return purchases
+    .filter((purchase: Purchase) => {
+      return (
+        purchase &&
+        typeof purchase === 'object' &&
+        purchase.date &&
+        purchase.vendor &&
+        purchase.amount
+      );
+    })
+    .slice(0, 100)
+    .map((purchase: Purchase) => ({
+      date: pdfSanitizeString(purchase.date, 20),
+      vendor: pdfSanitizeString(purchase.vendor, 200),
+      reason: pdfSanitizeString(purchase.reason || '', 500),
+      amount: pdfSanitizeAmount(purchase.amount),
+      description: pdfSanitizeString(purchase.description || '', 200),
+    }));
+}
+
+async function generateReimbursementPdfBlob(params: {
+  name: string;
+  date: string;
+  office: string;
+  purchases: Purchase[];
+  filesData: PdfFileData[];
+  approved: boolean;
+  amountAdjustedTo?: string;
+  reasonForAdjustment?: string;
+}): Promise<Blob> {
+  const { name, date, office, purchases, filesData, approved, amountAdjustedTo, reasonForAdjustment } = params;
+
+  if (!name || !purchases) {
+    throw new Error('Missing required fields');
+  }
+  if (!Array.isArray(purchases) || purchases.length === 0 || purchases.length > 100) {
+    throw new Error('Invalid purchases data');
+  }
+  if (filesData && (!Array.isArray(filesData) || filesData.length > 50)) {
+    throw new Error('Invalid files data');
+  }
+
+  const safeName = pdfSanitizeString(name, 100);
+  const safeDate = pdfSanitizeString(date, 20);
+  const safeOffice = pdfSanitizeString(office, 50);
+  const safeAmountAdjustedTo = amountAdjustedTo?.trim()
+    ? pdfSanitizeString(amountAdjustedTo.replace(/^\$+/, '').trim(), 20)
+    : '';
+  const safeReasonForAdjustment = reasonForAdjustment?.trim()
+    ? pdfSanitizeString(reasonForAdjustment, 1000)
+    : '';
+  const safeStatusDecidedAt = pdfSanitizeString(formatPdfStatusDateTimeNow(), 120);
+
+  const base64FilesData = filesData?.length ? await buildBase64FilesData(filesData) : [];
+
+  const totalAmount = purchases.reduce((sum: number, purchase: Purchase) => {
+    return sum + pdfSanitizeAmount(purchase.amount);
+  }, 0);
+
+  const safePurchases = buildSafePurchasesFromPurchases(purchases);
+
+  const doc = buildReimbursementReceiptDocument({
+    safeOffice,
+    safeName,
+    safeDate,
+    safePurchases,
+    totalAmount,
+    base64FilesData,
+    approved,
+    safeAmountAdjustedTo,
+    safeReasonForAdjustment,
+    safeStatusDecidedAt,
+  });
+
+  return pdf(doc).toBlob();
+}
+
+function arrayBufferToBase64DataUrl(arrayBuffer: ArrayBuffer, mime: string): string {
+  const bytes = new Uint8Array(arrayBuffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+  }
+  const base64 = btoa(binary);
+  return `data:${mime};base64,${base64}`;
+}
+
+async function convertReceiptImageUrlToBase64(imageUrl: string): Promise<string> {
+  try {
+    try {
+      const url = new URL(imageUrl);
+      if (
+        url.protocol !== 'https:' ||
+        url.hostname !== 'firebasestorage.googleapis.com' ||
+        !url.pathname.startsWith('/v0/b/')
+      ) {
+        return imageUrl;
+      }
+    } catch {
+      return imageUrl;
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    const response = await fetch(imageUrl, { signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.status}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
+    if (arrayBuffer.byteLength > MAX_FILE_SIZE) {
+      throw new Error('File size exceeds limit');
+    }
+
+    const contentTypeHeader = response.headers.get('content-type');
+    const contentType = contentTypeHeader ? contentTypeHeader.split(';')[0].trim().toLowerCase() : '';
+    if (contentType && !contentType.startsWith('image/')) {
+      throw new Error('Invalid file type');
+    }
+
+    const allowedTypes = new Set(['image/png', 'image/jpeg', 'image/jpg']);
+    const normalizedType = contentType === 'image/jpg' ? 'image/jpeg' : contentType;
+    if (normalizedType && !allowedTypes.has(normalizedType)) {
+      throw new Error('Unsupported image type');
+    }
+
+    return arrayBufferToBase64DataUrl(arrayBuffer, normalizedType || 'image/jpeg');
+  } catch {
+    return imageUrl;
+  }
+}
+
+async function generateCreditCardPdfBlob(params: {
+  name: string;
+  cardNumber: string;
+  date: string;
+  office: string;
+  purchases: Purchase[];
+  filesData: PdfFileData[];
+  /** Admin PDF flow: credit card is only approved in UI; default true */
+  approved?: boolean;
+}): Promise<Blob> {
+  const { name, cardNumber, date, office, purchases, filesData } = params;
+  const approved = params.approved !== false;
+
+  if (!name || !cardNumber || !purchases) {
+    throw new Error('Missing required fields');
+  }
+  if (!Array.isArray(purchases) || purchases.length === 0 || purchases.length > 100) {
+    throw new Error('Invalid purchases data');
+  }
+  if (filesData && (!Array.isArray(filesData) || filesData.length > 50)) {
+    throw new Error('Invalid files data');
+  }
+
+  const safeName = pdfSanitizeString(name, 100);
+  const safeCardNumber = pdfSanitizeString(cardNumber, 4);
+  const safeDate = pdfSanitizeString(date, 20);
+  const safeOffice = pdfSanitizeString(office, 50);
+  const safeStatusDecidedAt = pdfSanitizeString(formatPdfStatusDateTimeNow(), 120);
+
+  const base64FilesData = filesData?.length ? await buildBase64FilesData(filesData) : [];
+
+  const totalAmount = purchases.reduce((sum: number, purchase: Purchase) => {
+    return sum + pdfSanitizeAmount(purchase.amount);
+  }, 0);
+
+  const safePurchases = buildSafePurchasesFromPurchases(purchases);
+
+  const doc = buildCreditCardReceiptDocument({
+    safeOffice,
+    safeName,
+    safeCardNumber,
+    safeDate,
+    safePurchases,
+    totalAmount,
+    base64FilesData,
+    approved,
+    safeStatusDecidedAt,
+  });
+
+  return pdf(doc).toBlob();
 }
 
 const AdminCreditCardReview = () => {
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [selectedSubmission, setSelectedSubmission] = useState<Submission | null>(null);
   const [loading, setLoading] = useState(false);
-  const [signature, setSignature] = useState('');
-  const [isDrawing, setIsDrawing] = useState(false);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [deleting, setDeleting] = useState(false);
   const [receiptFiles, setReceiptFiles] = useState<ReceiptFile[]>([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
-  const [savedSignature, setSavedSignature] = useState('');
-  const [isSignatureSaved, setIsSignatureSaved] = useState(false);
   const [filterDateFrom, setFilterDateFrom] = useState('');
   const [filterDateTo, setFilterDateTo] = useState('');
   const [filterOffice, setFilterOffice] = useState('');
-  const savedSignatureCanvasRef = useRef<HTMLCanvasElement>(null);
   const [amountAdjustedTo, setAmountAdjustedTo] = useState('');
   const [reasonForAdjustment, setReasonForAdjustment] = useState('');
+  const [pageReady, setPageReady] = useState(false);
 
-  // 🔒 보안 조치 활성화
   useEffect(() => {
-    enableAllSecurityMeasures({
-      disableConsole: true,
-      disableRightClick: true,
-      disableShortcuts: true,
-      disableCopy: false,
-      disableSelection: false,
-      monitorDevTools: false
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'HR' &&
+          userData?.role !== 'Director' 
+        ) {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
     });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   // Load all submissions from Firestore (both credit-card-receipts and reimbursement-requests)
@@ -122,12 +958,11 @@ const AdminCreditCardReview = () => {
             })),
             totalAmount: totalAmount.toFixed(2),
             submittedAt: data.date ? new Date(data.date) : (data.createdAt?.toDate() || new Date()),
-            lastUpdated: data.lastUpdated?.toDate() || new Date(),
-            signatureURL: data.signatureURL,
-            signatureSavedAt: data.signatureSavedAt?.toDate(),
+            signed: data.signed || false,
             addedOnNumbersChecked: data.addedOnNumbersChecked || false,
             addedOnNumbersCheckedAt: data.addedOnNumbersCheckedAt?.toDate(),
-            formType: 'credit-card'
+            formType: 'credit-card',
+            pdfURL: data.pdfURL || undefined
           });
         });
       }
@@ -174,20 +1009,6 @@ const AdminCreditCardReview = () => {
             submittedAtDate = new Date();
           }
           
-          // Handle lastUpdated
-          let lastUpdatedDate: Date;
-          if (data.lastUpdated) {
-            if (data.lastUpdated.toDate && typeof data.lastUpdated.toDate === 'function') {
-              lastUpdatedDate = data.lastUpdated.toDate();
-            } else if (data.lastUpdated instanceof Date) {
-              lastUpdatedDate = data.lastUpdated;
-            } else {
-              lastUpdatedDate = new Date(data.lastUpdated);
-            }
-          } else {
-            lastUpdatedDate = new Date();
-          }
-          
           submissions.push({
             id: doc.id,
             employeeName: data.name || 'Unknown',
@@ -205,24 +1026,34 @@ const AdminCreditCardReview = () => {
             })),
             totalAmount: totalAmount.toFixed(2),
             submittedAt: submittedAtDate,
-            lastUpdated: lastUpdatedDate,
-            signatureURL: data.signatureURL,
-            signatureSavedAt: data.signatureSavedAt?.toDate ? data.signatureSavedAt.toDate() : (data.signatureSavedAt ? new Date(data.signatureSavedAt) : undefined),
+            signed: data.signed || false,
             addedOnNumbersChecked: data.addedOnNumbersChecked || false,
             addedOnNumbersCheckedAt: data.addedOnNumbersCheckedAt?.toDate ? data.addedOnNumbersCheckedAt.toDate() : (data.addedOnNumbersCheckedAt ? new Date(data.addedOnNumbersCheckedAt) : undefined),
             formType: 'reimbursement',
             amountAdjustedTo: data.amountAdjustedTo || undefined,
             reasonForAdjustment: data.reasonForAdjustment || undefined,
-            approved: data.approved !== undefined ? data.approved : undefined
+            approved: data.approved !== undefined ? data.approved : undefined,
+            pdfURL: data.pdfURL || undefined
           });
         });
       }
       
-      // Sort by submission date (newest first)
-      submissions.sort((a: Submission, b: Submission) => b.submittedAt.getTime() - a.submittedAt.getTime());
+      // Sort: unchecked items first (by date), then checked items (by date)
+      submissions.sort((a: Submission, b: Submission) => {
+        const aChecked = a.addedOnNumbersChecked || false;
+        const bChecked = b.addedOnNumbersChecked || false;
+        
+        // If one is checked and the other is not, unchecked comes first
+        if (aChecked !== bChecked) {
+          return aChecked ? 1 : -1; // unchecked (false) comes first
+        }
+        
+        // If both have the same checked status, sort by date (newest first)
+        return b.submittedAt.getTime() - a.submittedAt.getTime();
+      });
       setSubmissions(submissions);
     } catch (error) {
-      alert('Error loading submissions: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      alert('Error loading submissions. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -249,6 +1080,7 @@ const AdminCreditCardReview = () => {
         const cardNumberPart = submission.cardNumber && submission.cardNumber.trim() !== '' ? `${submission.cardNumber}_` : '';
         submissionPrefix = `${submission.employeeName}_${cardNumberPart}${submission.submissionId}`;
       } else {
+        // No submission ID - cannot reliably match files, so don't load any
         setReceiptFiles([]);
         setLoadingFiles(false);
         return;
@@ -263,9 +1095,7 @@ const AdminCreditCardReview = () => {
             const downloadURL = await getDownloadURL(itemRef);
             files.push({
               name: itemRef.name,
-              url: downloadURL,
-              fullPath: itemRef.fullPath,
-              purchaseNumber: 0 // Will be set later when grouping
+              url: downloadURL
             });
           } catch (urlError) {
             // Continue with other files even if one fails
@@ -342,46 +1172,11 @@ const AdminCreditCardReview = () => {
     }
   };
 
-  // Load submissions on component mount
+  // Role 통과 후에만 제출 목록 로드
   useEffect(() => {
+    if (!pageReady) return;
     loadSubmissions();
-  }, []);
-
-  // Initialize canvas when modal opens
-  useEffect(() => {
-    if (selectedSubmission && !selectedSubmission.signatureURL && canvasRef.current) {
-      const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        // Initialize canvas with white background and drawing styles
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-      }
-    }
-  }, [selectedSubmission]);
-
-  // Load saved signature to canvas
-  useEffect(() => {
-    if (selectedSubmission?.signatureURL && savedSignatureCanvasRef.current) {
-      const canvas = savedSignatureCanvasRef.current;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) return;
-
-      ctx.fillStyle = '#fff';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      };
-      img.src = selectedSubmission.signatureURL;
-    }
-  }, [selectedSubmission]);
+  }, [pageReady]);
 
   // Filter submissions based on date range and office
   const getFilteredSubmissions = () => {
@@ -390,34 +1185,7 @@ const AdminCreditCardReview = () => {
     // Filter by date range (using submission date, not purchase date)
     if (filterDateFrom || filterDateTo) {
       filtered = filtered.filter((submission: Submission) => {
-        // Use the date string directly if available (format: "YYYY-MM-DD")
-        // This is the California date selected by the user
-        let submissionDateStr = submission.date;
-        
-        // If date string is not in the expected format, try to convert from submittedAt
-        if (!submissionDateStr || !/^\d{4}-\d{2}-\d{2}$/.test(submissionDateStr)) {
-          let submissionDate: Date;
-          
-          if (submission.submittedAt instanceof Date) {
-            submissionDate = submission.submittedAt;
-          } else {
-            submissionDate = new Date(submission.submittedAt);
-          }
-          
-          // Get California time components using Intl.DateTimeFormat
-          const formatter = new Intl.DateTimeFormat('en-US', {
-            timeZone: 'America/Los_Angeles',
-            year: 'numeric',
-            month: '2-digit',
-            day: '2-digit'
-          });
-          
-          const parts = formatter.formatToParts(submissionDate);
-          const year = parts.find(p => p.type === 'year')?.value || '';
-          const month = parts.find(p => p.type === 'month')?.value || '';
-          const day = parts.find(p => p.type === 'day')?.value || '';
-          submissionDateStr = `${year}-${month}-${day}`;
-        }
+        const submissionDateStr = getSubmissionDateStringForFilter(submission);
         
         // If only From date is set
         if (filterDateFrom && !filterDateTo) {
@@ -452,83 +1220,6 @@ const AdminCreditCardReview = () => {
   const getUniqueOffices = (): string[] => {
     const offices = [...new Set(submissions.map((s: Submission) => s.office))];
     return offices.filter((office): office is string => Boolean(office) && office !== 'N/A');
-  };
-
-  // Handle signature drawing
-  const startDrawing = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    setIsDrawing(true);
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    
-    let clientX, clientY;
-    if ('touches' in e) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
-    }
-    
-    ctx.beginPath();
-    ctx.moveTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
-  };
-
-  const draw = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    if (!isDrawing) return;
-    
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    
-    let clientX, clientY;
-    if ('touches' in e) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = e.clientX;
-      clientY = e.clientY;
-    }
-    
-    ctx.lineTo((clientX - rect.left) * scaleX, (clientY - rect.top) * scaleY);
-    ctx.stroke();
-  };
-
-  const stopDrawing = () => {
-    setIsDrawing(false);
-    const canvas = canvasRef.current;
-    if (canvas) {
-      setSignature(canvas.toDataURL());
-    }
-  };
-
-  const clearSignature = () => {
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        // Reset drawing styles
-        ctx.strokeStyle = '#000';
-        ctx.lineWidth = 2;
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        // Fill with white background
-        ctx.fillStyle = '#fff';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-      }
-    }
-    setSignature('');
   };
 
   // Check Added on Numbers (first step)
@@ -569,13 +1260,13 @@ const AdminCreditCardReview = () => {
       alert('✅ Added on Numbers checked successfully!');
       
     } catch (error) {
-      alert('Error checking Added on Numbers: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      alert('Error updating status. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Manager Not Approve - Save signature with rejection status for reimbursement
+  // Manager Not Approve — generate PDF (no signature pad on this page)
   const managerNotApprove = async () => {
     if (!selectedSubmission) {
       alert('No submission selected');
@@ -587,44 +1278,10 @@ const AdminCreditCardReview = () => {
       return;
     }
     
-    if (!signature) {
-      alert('Please provide a signature before processing.');
-      return;
-    }
-    
     try {
       setLoading(true);
       
-      // Convert signature data URL to blob
-      if (!signature || typeof signature !== 'string') {
-        throw new Error('Invalid signature data');
-      }
-      const base64Data = signature.split(',')[1];
-      const byteCharacters = atob(base64Data);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: 'image/png' });
-      
-      // Create filename with timestamp
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const cardNumberPart = selectedSubmission.cardNumber && selectedSubmission.cardNumber.trim() !== '' 
-        ? `${selectedSubmission.cardNumber}_` 
-        : '';
-      const fileName = `signatures/${selectedSubmission.employeeName}_${cardNumberPart}${timestamp}.png`;
-      
-      // Upload to Firebase Storage
-      const storageRef = ref(storage, fileName);
-      await uploadBytes(storageRef, blob);
-      const downloadURL = await getDownloadURL(storageRef);
-      
-      // Save signature data
-      setSavedSignature(signature);
-      setIsSignatureSaved(true);
-      
-      // Store signature URL and rejection info in Firestore
+      // Store rejection info in Firestore
       const collectionName = 'reimbursement-requests';
       const docRef = doc(db, collectionName, selectedSubmission.id);
       
@@ -635,10 +1292,9 @@ const AdminCreditCardReview = () => {
       while (retryCount < maxRetries && !firestoreSuccess) {
         try {
           const updateData: any = {
-            signatureURL: downloadURL,
-            signatureSavedAt: new Date(),
             approved: false, // Mark as not approved
-            rejectionDate: new Date()
+            rejectionDate: new Date(),
+            signed: true // Mark as signed
           };
           
           // 금액 및 사유 검증 및 sanitization
@@ -661,20 +1317,18 @@ const AdminCreditCardReview = () => {
           
           if (retryCount < maxRetries) {
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          } else {
           }
         }
       }
       
-      // Generate PDF with rejection status (saveToExcel handles not approved status via Firestore data)
-      await saveToExcel();
+      // Generate PDF with rejection status
+      await saveToExcel(true); // Pass notApproved flag
       
-      alert('❌ Reimbursement request marked as Not Approved. Signature saved and PDF generated.');
+      alert('❌ Not approved!');
       
       // Close modal and refresh submissions
       setSelectedSubmission(null);
-      setSignature('');
-      setSavedSignature('');
-      setIsSignatureSaved(false);
       setReceiptFiles([]);
       setAmountAdjustedTo('');
       setReasonForAdjustment('');
@@ -687,52 +1341,17 @@ const AdminCreditCardReview = () => {
     }
   };
 
-  // Manager Approve - Save signature and generate PDF in one action
+  // Manager Approve — generate PDF (no signature pad on this page)
   const managerApprove = async () => {
     if (!selectedSubmission) {
       alert('No submission selected');
       return;
     }
     
-    if (!signature) {
-      alert('Please provide a signature before approving.');
-      return;
-    }
-    
     try {
       setLoading(true);
       
-      // Convert signature data URL to blob (without fetch to avoid CORS)
-      if (!signature || typeof signature !== 'string') {
-        throw new Error('Invalid signature data');
-      }
-      const base64Data = signature.split(',')[1];
-      const byteCharacters = atob(base64Data);
-      const byteNumbers = new Array(byteCharacters.length);
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: 'image/png' });
-      
-      // Create filename with timestamp
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      // For reimbursement, cardNumber may be empty, so handle it differently
-      const cardNumberPart = selectedSubmission.cardNumber && selectedSubmission.cardNumber.trim() !== '' 
-        ? `${selectedSubmission.cardNumber}_` 
-        : '';
-      const fileName = `signatures/${selectedSubmission.employeeName}_${cardNumberPart}${timestamp}.png`;
-      
-      // Upload to Firebase Storage
-      const storageRef = ref(storage, fileName);
-      await uploadBytes(storageRef, blob);
-      const downloadURL = await getDownloadURL(storageRef);
-      
-      // Save signature data
-      setSavedSignature(signature);
-      setIsSignatureSaved(true);
-      
-      // Store signature URL in Firestore for future reference (with retry logic)
+      // Store approval status in Firestore
       // Use appropriate collection based on form type
       const collectionName = selectedSubmission.formType === 'reimbursement' ? 'reimbursement-requests' : 'credit-card-receipts';
       const docRef = doc(db, collectionName, selectedSubmission.id);
@@ -744,8 +1363,7 @@ const AdminCreditCardReview = () => {
       while (retryCount < maxRetries && !firestoreSuccess) {
         try {
           const updateData: any = {
-            signatureURL: downloadURL,
-            signatureSavedAt: new Date()
+            signed: true // Mark as signed
           };
           
           // For reimbursement, mark as approved and optionally save adjustment info
@@ -772,104 +1390,56 @@ const AdminCreditCardReview = () => {
           retryCount++;
           
           if (retryCount < maxRetries) {
+            // Wait before retry
             await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          } else {
           }
         }
       }
       
-      // Generate PDF and save to Excel (without opening print dialog)
+      // Generate PDF (CSV will be generated when Download CSV File is clicked)
       await saveToExcel();
       
-      alert('✅ Approved! Signature saved and PDF generated. Data saved to Excel file.');
+      alert('✅ Approved!');
       
       // Close modal and refresh submissions
       setSelectedSubmission(null);
-      setSignature('');
-      setSavedSignature('');
-      setIsSignatureSaved(false);
       setReceiptFiles([]);
       setAmountAdjustedTo('');
       setReasonForAdjustment('');
       loadSubmissions();
       
     } catch (error) {
-      alert('Error approving submission: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      alert('Error approving submission. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Download CSV file
+
+  // Generate and Download CSV file
   const downloadExcelFile = async () => {
     try {
       setLoading(true);
       
-      // Download the main CSV file (use the same filename as saveToExcel)
+      // Define CSV file reference
       const mainFileName = 'all-submissions.csv';
       const mainFileRef = ref(storage, `excel/${mainFileName}`);
       
-      try {
-        const downloadURL = await getDownloadURL(mainFileRef);
-        
-        // Download CSV file
-        const link = document.createElement('a');
-        link.href = downloadURL;
-        link.download = mainFileName;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        
-        alert('📊 CSV file downloaded successfully!');
-      } catch (error) {
-        alert('❌ CSV file not found. Please approve a submission first to create the CSV file.');
-      }
-    } catch (error) {
-      alert('Error downloading CSV file: ' + (error instanceof Error ? error.message : 'Unknown error'));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  // Save data to Excel file (client-side)
-  const saveToExcel = async () => {
-    if (!selectedSubmission) {
-      return;
-    }
-    
-    // Create local reference to avoid null checks
-    const submission = selectedSubmission;
-    
-    // Check if submission has signature (either saved in Firestore or current session)
-    const hasSignatureURL = submission.signatureURL && submission.signatureURL.trim() !== '';
-    const hasCurrentSignature = (savedSignature && savedSignature.trim() !== '') || (signature && signature.trim() !== '');
-    
-    if (!hasSignatureURL && !hasCurrentSignature) {
-      alert('❌ This submission has no signature. Please sign first before saving.');
-      return;
-    }
-    
-    try {
-      const totalAmount = submission.purchases.reduce((sum: number, purchase: Purchase) => {
-        return sum + (parseFloat(purchase.amount) || 0);
-      }, 0);
-
-      // Define CSV file reference (use combined file for both types)
-      const mainFileName = 'all-submissions.csv';
-      const mainFileRef = ref(storage, `excel/${mainFileName}`);
-      
-      let existingData = [
+      // Build CSV from Firestore data (완료 건만 — isFirestoreDocPdfWorkflowComplete)
+      let csvData = [
         ['Form Type', 'Employee Name', 'Office', 'Card Number', 'Purchase Date', 'Store/Website', 'Reason', 'Amount', 'Account Description', 'Total Amount', 'Submission Date', 'Status', 'PDF Link']
       ];
       
       try {
-        // Get all submissions that have been processed (have signatureURL) from both collections
+        // Get all submissions from both collections
         const processedSubmissions: any[] = [];
         
         // Get credit card receipts
         const creditCardSnapshot = await getDocs(collection(db, 'credit-card-receipts'));
         creditCardSnapshot.forEach((doc) => {
           const data = doc.data();
-          if (data.signatureURL) { // Only include signed/processed submissions
+          if (isFirestoreDocPdfWorkflowComplete(data)) {
             processedSubmissions.push({
               id: doc.id,
               employeeName: data.name,
@@ -877,8 +1447,7 @@ const AdminCreditCardReview = () => {
               cardNumber: data.cardNumber,
               date: data.date,
               purchases: data.data,
-              signatureURL: data.signatureURL,
-              signatureSavedAt: data.signatureSavedAt,
+              submissionDateDisplay: getSubmissionDateDisplayForCsv(data),
               pdfURL: data.pdfURL || '',
               formType: 'Credit Card Receipt'
             });
@@ -889,7 +1458,7 @@ const AdminCreditCardReview = () => {
         const reimbursementSnapshot = await getDocs(collection(db, 'reimbursement-requests'));
         reimbursementSnapshot.forEach((doc) => {
           const data = doc.data();
-          if (data.signatureURL) { // Only include signed/processed submissions
+          if (isFirestoreDocPdfWorkflowComplete(data)) {
             processedSubmissions.push({
               id: doc.id,
               employeeName: data.name,
@@ -897,122 +1466,231 @@ const AdminCreditCardReview = () => {
               cardNumber: data.cardNumber,
               date: data.date,
               purchases: data.data,
-              signatureURL: data.signatureURL,
-              signatureSavedAt: data.signatureSavedAt,
+              submissionDateDisplay: getSubmissionDateDisplayForCsv(data),
               pdfURL: data.pdfURL || '',
               formType: 'Reimbursement Request'
             });
           }
         });
         
-        // Add all processed submissions to CSV data (excluding current submission)
+        // Add all processed submissions to CSV data
         for (const submission of processedSubmissions) {
-          // Skip current submission to avoid duplication
-          // Note: using 'submission' constant defined at function start
-          const currentSubmissionId = selectedSubmission?.id;
-          if (submission.id === currentSubmissionId) {
-            continue;
+          // 🔒 보안: purchases 배열 검증
+          if (!submission.purchases || !Array.isArray(submission.purchases) || submission.purchases.length === 0) {
+            continue; // Skip invalid submissions
           }
           
           const totalAmount = submission.purchases.reduce((sum: number, purchase: Purchase) => {
-            return sum + (parseFloat(purchase.amount) || 0);
+            const amount = parseFloat(purchase.amount) || 0;
+            // 🔒 보안: 금액 범위 검증
+            return sum + (isFinite(amount) && amount >= 0 && amount <= 1000000 ? amount : 0);
           }, 0);
           
-            // Add each purchase as a row with CSV Injection protection
-            submission.purchases.forEach((purchase: Purchase, index: number) => {
-              existingData.push([
-                index === 0 ? sanitizeCSVCell(submission.formType || 'Credit Card Receipt') : '',
-                index === 0 ? sanitizeCSVCell(submission.employeeName) : '',
-                index === 0 ? sanitizeCSVCell(submission.office) : '',
-                index === 0 ? sanitizeCSVCell(`****${submission.cardNumber}`) : '',
-                sanitizeCSVCell(purchase.date),
-                sanitizeCSVCell(purchase.vendor),
-                sanitizeCSVCell(purchase.reason),
-                sanitizeCSVCell(`$${parseFloat(purchase.amount).toFixed(2)}`),
-                sanitizeCSVCell(purchase.description),
-                index === 0 ? sanitizeCSVCell(`$${totalAmount.toFixed(2)}`) : '',
-                sanitizeCSVCell(submission.signatureSavedAt ? submission.signatureSavedAt.toDate().toLocaleDateString() : new Date().toLocaleDateString()),
-                sanitizeCSVCell('Approved & PDF Generated'),
-                index === 0 ? sanitizeCSVCell(submission.pdfURL || '') : ''
-              ]);
-            });
+          // Add each purchase as a row with CSV Injection protection
+          submission.purchases.forEach((purchase: Purchase, index: number) => {
+            // 🔒 보안: purchase 객체 검증
+            if (!purchase || typeof purchase !== 'object') {
+              return; // Skip invalid purchases
+            }
+            
+            csvData.push([
+              index === 0 ? sanitizeCSVCell(submission.formType || 'Credit Card Receipt') : '',
+              index === 0 ? sanitizeCSVCell(submission.employeeName) : '',
+              index === 0 ? sanitizeCSVCell(submission.office) : '',
+              index === 0 ? sanitizeCSVCell(submission.cardNumber) : '',
+              sanitizeCSVCell(purchase.date),
+              sanitizeCSVCell(purchase.vendor),
+              sanitizeCSVCell(purchase.reason),
+              sanitizeCSVCell(`$${parseFloat(purchase.amount).toFixed(2)}`),
+              sanitizeCSVCell(purchase.description),
+              index === 0 ? sanitizeCSVCell(`$${totalAmount.toFixed(2)}`) : '',
+              sanitizeCSVCell(submission.submissionDateDisplay || new Date().toLocaleDateString()),
+              sanitizeCSVCell('Approved & PDF Generated'),
+              index === 0 ? sanitizeCSVCell(submission.pdfURL || '') : ''
+            ]);
+          });
         }
         
-      } catch (error) {
-      }
-
-      // Use submission constant defined at function start
-      const currentSubmission = selectedSubmission;
-      if (!currentSubmission) return;
-      
-      const formTypeLabel = currentSubmission.formType === 'reimbursement' ? 'Reimbursement Request' : 'Credit Card Receipt';
-      const newRows = currentSubmission.purchases.map((purchase: Purchase, index: number) => [
-        index === 0 ? sanitizeCSVCell(formTypeLabel) : '',
-        index === 0 ? sanitizeCSVCell(currentSubmission.employeeName) : '',
-        index === 0 ? sanitizeCSVCell(currentSubmission.office) : '',
-        index === 0 ? sanitizeCSVCell(`****${currentSubmission.cardNumber}`) : '',
-        sanitizeCSVCell(purchase.date),
-        sanitizeCSVCell(purchase.vendor),
-        sanitizeCSVCell(purchase.reason),
-        sanitizeCSVCell(`$${parseFloat(purchase.amount).toFixed(2)}`),
-        sanitizeCSVCell(purchase.description),
-        index === 0 ? sanitizeCSVCell(`$${totalAmount.toFixed(2)}`) : '',
-        sanitizeCSVCell(new Date().toLocaleDateString()),
-        sanitizeCSVCell('Approved & PDF Generated'),
-        ''
-      ]);
-
-      // Combine existing and new data
-      const updatedData = [...existingData, ...newRows];
-      
-      // Convert to CSV string with proper escaping (secure version)
-      // sanitizeCSVCell already handles CSV injection protection
-      // For extra safety, ensure proper CSV formatting with quotes when needed
-      const csvString = updatedData.map((row: any[]) => 
-        row.map((cell: string) => {
-          // sanitizeCSVCell already processed the cell, but ensure proper CSV formatting
-          // If cell contains comma, quote, or newline, wrap in quotes and escape internal quotes
-          if (cell === null || cell === undefined) return '';
-          const cellStr = String(cell);
-          if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n') || cellStr.includes('\r')) {
-            // Escape quotes by doubling them and wrap in quotes
-            return `"${cellStr.replace(/"/g, '""')}"`;
-          }
-          return cellStr;
-        }).join(',')
-      ).join('\n');
-      
-      // Create blob and upload to Firebase Storage (like credit-card-receipts.tsx)
-      try {
+        // Convert to CSV string
+        const csvString = csvData.map((row: any[]) => 
+          row.map((cell: string) => {
+            if (cell === null || cell === undefined) return '';
+            const cellStr = String(cell);
+            if (cellStr.includes(',') || cellStr.includes('"') || cellStr.includes('\n') || cellStr.includes('\r')) {
+              return `"${cellStr.replace(/"/g, '""')}"`;
+            }
+            return cellStr;
+          }).join(',')
+        ).join('\n');
+        
+        // Upload CSV to Firebase Storage
         const blob = new Blob([csvString], { type: 'text/csv' });
         await uploadBytes(mainFileRef, blob);
+        
+        // Download CSV file
+        const downloadURL = await getDownloadURL(mainFileRef);
+        const link = document.createElement('a');
+        link.href = downloadURL;
+        link.download = mainFileName;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        
+        alert(`Downloaded successfully!`);
       } catch (error) {
-        // Continue execution even if CSV upload fails
+        alert('❌ Error generating CSV file. Please try again.');
+      }
+    } catch (error) {
+      alert('Error downloading CSV file. Please try again.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Save data to Excel file (client-side)
+  const saveToExcel = async (notApproved: boolean = false) => {
+    if (!selectedSubmission) {
+      return;
+    }
+    
+    // Create local reference to avoid null checks
+    const submission = selectedSubmission;
+    
+    try {
+      // Generate PDF and save to Firebase Storage first
+      // Build filesData from submission data instead of receiptFiles state
+      const filesData: Array<{name: string, url: string, fullPath: string}> = [];
+      for (const purchase of submission.purchases) {
+        if (purchase.receiptFiles) {
+          let receiptFiles: string[] = [];
+          
+          // Handle different data types
+          if (typeof purchase.receiptFiles === 'string') {
+            const filesString: string = purchase.receiptFiles;
+            receiptFiles = filesString.split(', ');
+          } else if (Array.isArray(purchase.receiptFiles)) {
+            receiptFiles = purchase.receiptFiles;
+          }
+          
+          for (const fileName of receiptFiles) {
+            if (fileName && typeof fileName === 'string' && fileName.trim()) {
+              try {
+                // Use appropriate storage path based on form type
+                const storagePath = submission.formType === 'reimbursement' ? 'reimbursement-receipts/' : 'receipts/';
+                const fileRef = ref(storage, `${storagePath}${fileName.trim()}`);
+                const downloadURL = await getDownloadURL(fileRef);
+                filesData.push({
+                  name: fileName.trim(),
+                  url: downloadURL,
+                  fullPath: `${storagePath}${fileName.trim()}`
+                });
+              } catch (error) {
+              }
+            }
+          }
+        }
       }
       
-      // CSV 저장 완료 후 Storage에서 서명 삭제
-      if (selectedSubmission?.signatureURL && selectedSubmission.signatureURL.startsWith('https://')) {
+      let pdfBlob: Blob | null = null;
+
+      try {
+        if (submission.formType === 'reimbursement') {
+          const approved = notApproved
+            ? false
+            : submission.approved !== undefined
+              ? submission.approved
+              : true;
+          pdfBlob = await generateReimbursementPdfBlob({
+            name: submission.employeeName,
+            date: submission.date,
+            office: submission.office,
+            purchases: submission.purchases,
+            filesData,
+            approved,
+            amountAdjustedTo: submission.amountAdjustedTo || amountAdjustedTo || '',
+            reasonForAdjustment: submission.reasonForAdjustment || reasonForAdjustment || '',
+          });
+        } else {
+          const approved = notApproved
+            ? false
+            : submission.approved !== undefined
+              ? submission.approved
+              : true;
+          pdfBlob = await generateCreditCardPdfBlob({
+            name: submission.employeeName,
+            cardNumber: submission.cardNumber,
+            date: submission.date,
+            office: submission.office,
+            purchases: submission.purchases,
+            filesData,
+            approved,
+          });
+        }
+      } catch {
+        pdfBlob = null;
+      }
+
+      if (pdfBlob) {
         try {
-          const url = new URL(selectedSubmission.signatureURL);
-          const pathMatch = url.pathname.match(/\/o\/(.+)\?/);
-          
-          if (pathMatch && pathMatch[1]) {
-            const filePath = decodeURIComponent(pathMatch[1]);
-            const fileRef = ref(storage, filePath);
-            await deleteObject(fileRef);
+          const pdfArrayBuffer = await pdfBlob.arrayBuffer();
+          const pdfBytes = new Uint8Array(pdfArrayBuffer);
+          const pdfHeader = String.fromCharCode(pdfBytes[0], pdfBytes[1], pdfBytes[2], pdfBytes[3]);
+
+          if (pdfHeader !== '%PDF') {
+            return;
           }
-        } catch (deleteError) {
-          // 삭제 실패해도 계속 진행
+
+          //const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+          //const timestamp = new Date();
+
+          const now = new Date();
+          const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+          let hours = laTime.getHours();
+          const minutes = laTime.getMinutes();
+          const seconds = laTime.getSeconds();
+          const ampm = hours >= 12 ? 'pm' : 'am';
+          hours = hours % 12;
+          hours = hours ? hours : 12;
+          const timeStamp = `${hours}${minutes.toString().padStart(2, '0')}${seconds.toString().padStart(2, '0')}${ampm}`;
+
+          const cardNumberPart =
+            submission.cardNumber && submission.cardNumber.trim() !== ''
+              ? `${submission.cardNumber}_`
+              : '';
+          const pdfFileName = `pdfs/${submission.employeeName}_${submission.formType}_${submission.date}_${timeStamp}.pdf`;
+          const pdfRef = ref(storage, pdfFileName);
+          await uploadBytes(pdfRef, pdfBlob);
+
+          const pdfDownloadURL = await getDownloadURL(pdfRef);
+
+          try {
+            const collectionName =
+              submission.formType === 'reimbursement' ? 'reimbursement-requests' : 'credit-card-receipts';
+            const docRef = doc(db, collectionName, submission.id);
+            await setDoc(
+              docRef,
+              {
+                pdfURL: pdfDownloadURL,
+                pdfGeneratedAt: new Date(),
+              },
+              { merge: true }
+            );
+          } catch (firestoreError) {
+            // Continue even if Firestore save fails
+          }
+        } catch (error) {
+          // Continue without PDF link if storage fails
         }
       }
       
     } catch (error) {
+      // PDF 생성 실패 시 처리
     }
   };
 
   // Delete completed submissions only (Reset function)
   const resetAllData = async () => {
-    if (!confirm('⚠️ WARNING: This will delete ONLY completed submissions (signed and numbers checked). Incomplete submissions will remain. Are you sure you want to continue?')) {
+    if (!confirm('⚠️ This will delete ONLY completed submissions (PDF generated and numbers checked). Are you sure you want to continue?')) {
       return;
     }
     
@@ -1032,11 +1710,7 @@ const AdminCreditCardReview = () => {
       // Process credit card receipts
       creditCardSnapshot.forEach((doc) => {
         const data = doc.data();
-        const isSigned = data.signatureURL && typeof data.signatureURL === 'string' && data.signatureURL.trim() !== '';
-        const isNumbersChecked = data.addedOnNumbersChecked === true;
-        
-        if (isSigned && isNumbersChecked) {
-          // Both signature and numbers check are complete - safe to delete
+        if (isFirestoreDocPdfWorkflowComplete(data)) {
           completedSubmissions.push({
             id: doc.id,
             employeeName: data.name,
@@ -1055,11 +1729,7 @@ const AdminCreditCardReview = () => {
       // Process reimbursement requests
       reimbursementSnapshot.forEach((doc) => {
         const data = doc.data();
-        const isSigned = data.signatureURL && typeof data.signatureURL === 'string' && data.signatureURL.trim() !== '';
-        const isNumbersChecked = data.addedOnNumbersChecked === true;
-        
-        if (isSigned && isNumbersChecked) {
-          // Both signature and numbers check are complete - safe to delete
+        if (isFirestoreDocPdfWorkflowComplete(data)) {
           completedSubmissions.push({
             id: doc.id,
             employeeName: data.name,
@@ -1076,7 +1746,7 @@ const AdminCreditCardReview = () => {
       });
       
       if (completedCount === 0) {
-        alert('No completed submissions found to reset. All submissions must be both signed and have numbers checked.');
+        alert('No completed submissions found to reset. All submissions must have PDF generated and numbers checked.');
         setLoading(false);
         return;
       }
@@ -1086,11 +1756,11 @@ const AdminCreditCardReview = () => {
       }
       
       // Delete Storage files for completed submissions FIRST
-      
       try {
         // Delete files for each completed submission
         for (const submission of completedSubmissions) {
           try {
+            // Delete receipt files for this submission (now safe to delete since PDF uses Base64)
             // Determine storage path based on form type
             const receiptStoragePath = submission.formType === 'reimbursement' ? 'reimbursement-receipts/' : 'receipts/';
             
@@ -1111,31 +1781,14 @@ const AdminCreditCardReview = () => {
                     try {
                       await deleteObject(receiptRef);
                     } catch (error) {
+                      // Continue even if deletion fails
                     }
                   }
                 }
               }
             }
-            
-            // Delete signature file for this submission
-            try {
-              // For reimbursement, cardNumber may be empty, so handle it differently
-              const cardNumberPart = submission.cardNumber && submission.cardNumber.trim() !== '' 
-                ? `${submission.cardNumber}_` 
-                : '';
-              const signatureSearchPattern = `${submission.employeeName}_${cardNumberPart}`;
-              const signaturesRef = ref(storage, 'signatures/');
-              const signaturesList = await listAll(signaturesRef);
-              
-              for (const item of signaturesList.items) {
-                if (item.name.includes(signatureSearchPattern)) {
-                  await deleteObject(item);
-                }
-              }
-            } catch (error) {
-            }
-            
           } catch (submissionError) {
+            // Continue with next submission
           }
         }
         
@@ -1160,66 +1813,219 @@ const AdminCreditCardReview = () => {
       // Reset state
       setSubmissions([]);
       setSelectedSubmission(null);
-      setSignature('');
-      setSavedSignature('');
-      setIsSignatureSaved(false);
       setReceiptFiles([]);
       
       alert(`✅ Reset completed! Deleted ${completedCount} completed submissions. ${incompleteCount} incomplete submissions were kept.`);
       
     } catch (error) {
-      alert('Error resetting data: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      alert('Error resetting data. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  // Delete single submission data (but keep Excel file)
-  const deleteAllSubmissionData = async () => {
+  // Delete single submission completely
+  const deleteSubmission = async () => {
     if (!selectedSubmission) {
       alert('No submission selected');
       return;
     }
     
+    if (!confirm(`⚠️ Are you sure you want to delete "${selectedSubmission.employeeName}"'s submission?`)) {
+      return;
+    }
+    
     try {
-      // Delete from Firestore
-      await deleteDoc(doc(db, 'credit-card-receipts', selectedSubmission.id));
+      setDeleting(true);
       
-      // Delete receipt files from Storage
-      for (const file of receiptFiles) {
-        try {
-          const fileRef = ref(storage, file.fullPath);
-          await deleteObject(fileRef);
-        } catch (error) {
+      const submission = selectedSubmission;
+      const collectionName = submission.formType === 'reimbursement' ? 'reimbursement-requests' : 'credit-card-receipts';
+      
+      // 1. Delete from Firestore
+      await deleteDoc(doc(db, collectionName, submission.id));
+      
+      // 2. Delete receipt files from Storage
+      const receiptStoragePath = submission.formType === 'reimbursement' ? 'reimbursement-receipts/' : 'receipts/';
+      
+      for (const purchase of submission.purchases) {
+        if (purchase.receiptFiles) {
+          let receiptFiles: string[] = [];
+          
+          if (typeof purchase.receiptFiles === 'string') {
+            receiptFiles = purchase.receiptFiles.split(', ');
+          } else if (Array.isArray(purchase.receiptFiles)) {
+            receiptFiles = purchase.receiptFiles;
+          }
+          
+          for (const fileName of receiptFiles) {
+            if (fileName && typeof fileName === 'string' && fileName.trim()) {
+              try {
+                const receiptRef = ref(storage, `${receiptStoragePath}${fileName.trim()}`);
+                await deleteObject(receiptRef);
+              } catch (error) {
+                // Continue even if deletion fails
+              }
+            }
+          }
         }
       }
       
-      // Delete signature file from Storage if exists
-      if (selectedSubmission.signatureURL) {
+      // 3. Delete PDF file from Storage
+      let pdfDeleted = false;
+      
+      // Try to delete using pdfURL if available
+      if (submission.pdfURL) {
         try {
-          // Extract file path from URL
-          const url = new URL(selectedSubmission.signatureURL);
+          const url = new URL(submission.pdfURL);
           const pathMatch = url.pathname.match(/\/o\/(.+)\?/);
           if (pathMatch) {
             const filePath = decodeURIComponent(pathMatch[1]);
-            const signatureRef = ref(storage, filePath);
-            await deleteObject(signatureRef);
+            const pdfRef = ref(storage, filePath);
+            await deleteObject(pdfRef);
+            pdfDeleted = true;
           }
         } catch (error) {
-          // Continue execution even if signature deletion fails
+          // Continue to try alternative method
         }
       }
       
-      alert('✅ PDF generated and data saved to Excel! Submission removed from review list.');
+      // If pdfURL method failed or doesn't exist, try to find and delete from pdfs/ folder
+      if (!pdfDeleted) {
+        try {
+          const pdfsRef = ref(storage, 'pdfs/');
+          const pdfsList = await listAll(pdfsRef);
+          
+          // Build search pattern based on submission data
+          const cardNumberPart = submission.cardNumber && submission.cardNumber.trim() !== '' 
+            ? `${submission.cardNumber}_` 
+            : '';
+          const searchPrefix = `${submission.employeeName}_${cardNumberPart}`;
+          
+          // Find matching PDF files
+          for (const item of pdfsList.items) {
+            if (item.name.startsWith(searchPrefix)) {
+              try {
+                await deleteObject(item);
+                pdfDeleted = true;
+              } catch (error) {
+                // Continue with next file
+              }
+            }
+          }
+        } catch (error) {
+          // Continue even if PDF deletion fails
+        }
+      }
+      
+      // 4. Remove from Excel file
+      try {
+        const mainFileName = 'all-submissions.csv';
+        const mainFileRef = ref(storage, `excel/${mainFileName}`);
+        
+        // Try to get existing CSV file
+        try {
+          const csvBlob = await fetch(await getDownloadURL(mainFileRef)).then(r => r.blob());
+          const csvText = await csvBlob.text();
+          const lines = csvText.split('\n');
+          
+          // Filter out lines that belong to this submission
+          // CSV format: Form Type, Employee Name, Office, Card Number, Purchase Date, Store/Website, Reason, Amount, Account Description, Total Amount, Submission Date, Status, PDF Link
+          const filteredLines = lines.filter((line, index) => {
+            // Keep header
+            if (index === 0) return true;
+            // Skip empty lines
+            if (!line.trim()) return true; // Keep empty lines to preserve structure
+            
+            // Parse CSV line (handle quoted values properly)
+            const cells: string[] = [];
+            let currentCell = '';
+            let inQuotes = false;
+            
+            for (let i = 0; i < line.length; i++) {
+              const char = line[i];
+              const nextChar = i < line.length - 1 ? line[i + 1] : '';
+              
+              if (char === '"') {
+                // Handle escaped quotes ("")
+                if (inQuotes && nextChar === '"') {
+                  currentCell += '"';
+                  i++; // Skip next quote
+                } else {
+                  inQuotes = !inQuotes;
+                }
+              } else if (char === ',' && !inQuotes) {
+                cells.push(currentCell.trim());
+                currentCell = '';
+              } else {
+                currentCell += char;
+              }
+            }
+            cells.push(currentCell.trim()); // Add last cell
+            
+            // Need at least 13 columns
+            if (cells.length >= 13) {
+              // Clean up cells (remove quotes and sanitize)
+              const formType = cells[0].replace(/^["']|["']$/g, '').trim();
+              const employeeName = cells[1].replace(/^["']|["']$/g, '').trim();
+              const cardNumberCell = cells[3] ? cells[3].replace(/^["']|["']$/g, '').trim() : '';
+              // Card number is stored as ****1234, so extract the actual number
+              const cardNumber = cardNumberCell.replace(/^\*+/, '').trim();
+              const pdfURL = cells[12] ? cells[12].replace(/^["']|["']$/g, '').trim() : '';
+              
+              // Expected form type label
+              const expectedFormType = submission.formType === 'reimbursement' ? 'Reimbursement Request' : 'Credit Card Receipt';
+              
+              // Match by employee name, form type, and optionally card number or PDF URL
+              const nameMatches = employeeName === submission.employeeName;
+              const formTypeMatches = formType === expectedFormType;
+              
+              // For reimbursement, card number might be empty, so don't check it
+              // For credit card, check card number match
+              let cardMatches = true;
+              if (submission.formType !== 'reimbursement') {
+                if (cardNumber && submission.cardNumber) {
+                  cardMatches = cardNumber === submission.cardNumber;
+                } else if (!cardNumber && !submission.cardNumber) {
+                  cardMatches = true; // Both empty
+                } else {
+                  cardMatches = false; // One has it, one doesn't
+                }
+              }
+              
+              // PDF URL matching (if available)
+              let pdfMatches = true;
+              if (submission.pdfURL && pdfURL) {
+                pdfMatches = pdfURL === submission.pdfURL;
+              }
+              
+              // Remove line if all conditions match
+              if (nameMatches && formTypeMatches && cardMatches && pdfMatches) {
+                return false; // Remove this line
+              }
+            }
+            return true; // Keep this line
+          });
+          
+          // Upload updated CSV
+          const updatedCsv = filteredLines.join('\n');
+          const blob = new Blob([updatedCsv], { type: 'text/csv' });
+          await uploadBytes(mainFileRef, blob);
+        } catch (error) {
+          // Continue even if Excel update fails
+        }
+      } catch (error) {
+        // Continue even if Excel update fails
+      }
+      
+      alert('✅ Submission deleted successfully!');
       setSelectedSubmission(null);
-      setSignature('');
-      setSavedSignature('');
-      setIsSignatureSaved(false);
       setReceiptFiles([]);
       loadSubmissions(); // Reload submissions
       
     } catch (error) {
-      alert('Error deleting data: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      alert('Error deleting submission. Please try again.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -1270,18 +2076,15 @@ const AdminCreditCardReview = () => {
       transition: 'all 0.3s ease',
       border: '2px solid transparent'
     },
+    // Highlight when submission.signed (approved); same for credit-card and reimbursement
     submissionCardSigned: {
-      backgroundColor: 'rgba(173, 216, 230, 0.95)', // 하늘색 배경
+      backgroundColor: 'rgba(173, 216, 230, 0.95)',
       padding: '20px',
       borderRadius: '15px',
       boxShadow: '0 8px 32px rgba(0, 0, 0, 0.1)',
       cursor: 'pointer',
       transition: 'all 0.3s ease',
-      border: '2px solid #87CEEB' // 하늘색 테두리
-    },
-    submissionCardHover: {
-      transform: 'translateY(-5px)',
-      borderColor: '#4CAF50'
+      border: '2px solid #87CEEB'
     },
     submissionHeader: {
       display: 'flex',
@@ -1370,20 +2173,6 @@ const AdminCreditCardReview = () => {
       borderRadius: '10px',
       border: '2px solid #e9ecef'
     },
-    signatureTitle: {
-      fontSize: '18px',
-      fontWeight: 'bold',
-      marginBottom: '15px',
-      color: '#2c3e50'
-    },
-    signatureCanvas: {
-      border: '2px solid #dee2e6',
-      borderRadius: '8px',
-      cursor: 'crosshair',
-      backgroundColor: 'white',
-      touchAction: 'none' as const,
-      maxWidth: '100%'
-    },
     signatureButtons: {
       marginTop: '15px',
       display: 'flex',
@@ -1400,15 +2189,6 @@ const AdminCreditCardReview = () => {
       fontWeight: '600',
       transition: 'all 0.3s ease'
     },
-    buttonSecondary: {
-      backgroundColor: '#6c757d',
-      color: 'white',
-      padding: '8px 16px',
-      border: 'none',
-      borderRadius: '6px',
-      cursor: 'pointer',
-      fontSize: '14px'
-    },
     loading: {
       textAlign: 'center' as const,
       padding: '50px',
@@ -1417,11 +2197,22 @@ const AdminCreditCardReview = () => {
     }
   };
 
+  if (!pageReady) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          background: 'linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%)',
+        }}
+      />
+    );
+  }
+
   return (
     <div style={styles.body}>
       <div style={styles.container}>
         <header style={styles.header}>
-          <h1 style={styles.title}>🏢 Credit Card Receipts</h1>
+          <h1 style={styles.title}>Credit Card Receipts</h1>
           
           {/* Filter Section */}
           <div style={{
@@ -1536,7 +2327,7 @@ const AdminCreditCardReview = () => {
               onClick={downloadExcelFile}
               disabled={loading}
             >
-              📊 Download CSV File
+              Download CSV File
             </button>
             <button
               style={{
@@ -1548,7 +2339,7 @@ const AdminCreditCardReview = () => {
               onClick={resetAllData}
               disabled={loading}
             >
-              🔄 Reset All Data
+              Reset All Data
             </button>
           </div>
         </header>
@@ -1590,22 +2381,10 @@ const AdminCreditCardReview = () => {
           </div>
         ) : (
           <div style={styles.submissionsGrid}>
-            {getFilteredSubmissions().map((submission: Submission) => {
-              // Different colors for reimbursement vs credit card
-              // Reimbursement: white background (same for both signed and unsigned)
-              const isReimbursement = submission.formType === 'reimbursement';
-              const cardStyle = submission.signatureURL 
-                ? (isReimbursement 
-                  ? styles.submissionCardSigned // Use same sky blue when signed
-                  : styles.submissionCardSigned)
-                : (isReimbursement 
-                  ? styles.submissionCard // Use white background when not signed
-                  : styles.submissionCard);
-              
-              return (
+            {getFilteredSubmissions().map((submission: Submission) => (
               <div
                 key={submission.id}
-                style={cardStyle}
+                style={submission.signed ? styles.submissionCardSigned : styles.submissionCard}
                 onClick={() => {
                   setSelectedSubmission(submission);
                   loadReceiptFiles(submission);
@@ -1631,37 +2410,9 @@ const AdminCreditCardReview = () => {
                         Reimbursement Request
                       </span>
                     )}
-                    {submission.signatureURL && (
-                      <span style={{
-                        marginLeft: '10px',
-                        fontSize: '16px',
-                        color: '#0066cc'
-                      }}>
-                        ✍️ Signed
-                      </span>
-                    )}
                   </div>
                   <div style={styles.submissionDate}>
-                    Submitted: {submission.date || (() => {
-                      // Fallback: Convert to California time zone if date string not available
-                      const submissionDate = submission.submittedAt instanceof Date 
-                        ? submission.submittedAt 
-                        : new Date(submission.submittedAt);
-                      
-                      const formatter = new Intl.DateTimeFormat('en-US', {
-                        timeZone: 'America/Los_Angeles',
-                        year: 'numeric',
-                        month: '2-digit',
-                        day: '2-digit'
-                      });
-                      
-                      const parts = formatter.formatToParts(submissionDate);
-                      const year = parts.find(p => p.type === 'year')?.value || '';
-                      const month = parts.find(p => p.type === 'month')?.value || '';
-                      const day = parts.find(p => p.type === 'day')?.value || '';
-                      
-                      return `${year}-${month}-${day}`;
-                    })()}
+                    Submitted: {getSubmissionDateDisplayLabel(submission)}
                   </div>
                 </div>
                 <div style={styles.submissionDetails}>
@@ -1683,7 +2434,7 @@ const AdminCreditCardReview = () => {
                   }}>
                     <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center'}}>
                       <span style={{color: '#6c757d'}}>
-                        📊 Added on Numbers:
+                       Added on Numbers:
                       </span>
                       {submission.addedOnNumbersChecked ? (
                         <span style={{color: '#28a745', fontWeight: 'bold'}}>
@@ -1697,15 +2448,16 @@ const AdminCreditCardReview = () => {
                     </div>
                   </div>
                   
-                  {submission.signatureURL && (
+                  {submission.signed && (
                     <p style={{color: '#0066cc', fontWeight: 'bold', marginTop: '8px'}}>
-                      ✅ Signed this submission
+                      {submission.formType === 'reimbursement' && submission.approved === false 
+                        ? '❌ Not Approved' 
+                        : '✅ Approved'}
                     </p>
                   )}
                 </div>
               </div>
-              );
-            })}
+            ))}
           </div>
         )}
 
@@ -1729,28 +2481,9 @@ const AdminCreditCardReview = () => {
                 <p><strong>Name:</strong> {selectedSubmission.employeeName}</p>
                 <p><strong>Office:</strong> {selectedSubmission.office}</p>
                 {selectedSubmission.formType !== 'reimbursement' && (
-                  <p><strong>Card Number:</strong> ****{selectedSubmission.cardNumber}</p>
+                  <p><strong>Card Number:</strong> {selectedSubmission.cardNumber}</p>
                 )}
-                <p><strong>Submission Date:</strong> {selectedSubmission.date || (() => {
-                  // Fallback: Convert to California time zone if date string not available
-                  const submissionDate = selectedSubmission.submittedAt instanceof Date 
-                    ? selectedSubmission.submittedAt 
-                    : new Date(selectedSubmission.submittedAt);
-                  
-                  const formatter = new Intl.DateTimeFormat('en-US', {
-                    timeZone: 'America/Los_Angeles',
-                    year: 'numeric',
-                    month: '2-digit',
-                    day: '2-digit'
-                  });
-                  
-                  const parts = formatter.formatToParts(submissionDate);
-                  const year = parts.find(p => p.type === 'year')?.value || '';
-                  const month = parts.find(p => p.type === 'month')?.value || '';
-                  const day = parts.find(p => p.type === 'day')?.value || '';
-                  
-                  return `${year}-${month}-${day}`;
-                })()}</p>
+                <p><strong>Submission Date:</strong> {getSubmissionDateDisplayLabel(selectedSubmission)}</p>
 
                 <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px'}}>
                   <h3 style={{margin: 0}}>Purchase Details</h3>
@@ -1830,13 +2563,9 @@ const AdminCreditCardReview = () => {
                         // Group files by purchase number
                         const filesByPurchase: Record<number, ReceiptFile[]> = {};
                         receiptFiles.forEach((file: ReceiptFile) => {
-                          // Extract purchase number from new filename pattern: Name_CardNumber_Timestamp_purchaseX_SequenceNumber_Filename
-                          // e.g., "John_1234_2024-01-15T10-30-45-123Z_purchase1_0001759527445729_receipt.jpg" -> Purchase 1
                           const parts = file.name.split('_');
                           let purchaseNum = 0;
                           
-                          // Find the purchase number by looking for "purchaseX" pattern
-                          // Pattern: Name_CardNumber_SubmissionID_purchaseX_SequenceNumber_Filename
                           for (let i = 0; i < parts.length; i++) {
                             // Check if this part contains "purchase" followed by a number
                             const purchaseMatch = parts[i].match(/purchase(\d+)/i);
@@ -1965,10 +2694,7 @@ const AdminCreditCardReview = () => {
 
 
                 <div style={styles.signatureSection}>
-                  <div style={styles.signatureTitle}>Digital Signature</div>
-                  
-                  {/* Reimbursement adjustment fields - only show for reimbursement and when not signed */}
-                  {selectedSubmission.formType === 'reimbursement' && !selectedSubmission.signatureURL && (
+                  {!selectedSubmission?.signed && selectedSubmission.formType === 'reimbursement' && (
                     <div style={{
                       marginBottom: '20px',
                       padding: '20px',
@@ -2030,125 +2756,122 @@ const AdminCreditCardReview = () => {
                     </div>
                   )}
                   
-                  <p>Please sign below to approve this submission:</p>
-                  
-                  {/* Show saved signature if exists */}
-                  {selectedSubmission.signatureURL && (
-                    <div style={{marginBottom: '20px', padding: '15px', backgroundColor: '#e8f5e8', borderRadius: '8px', border: '2px solid #28a745'}}>
-                      <h4 style={{margin: '0 0 10px 0', color: '#155724'}}>✅ Saved Signature</h4>
-                      <canvas 
-                        ref={savedSignatureCanvasRef}
-                        width={800}
-                        height={200}
-                        style={{
-                          maxWidth: '300px',
-                          maxHeight: '100px',
-                          width: '100%',
-                          height: 'auto',
-                          border: '1px solid #ddd',
-                          backgroundColor: 'white',
-                          borderRadius: '4px',
-                          display: 'block'
-                        }}
-                      />
-                      <p style={{margin: '10px 0 0 0', fontSize: '12px', color: '#666'}}>
-                        Saved on: {selectedSubmission?.signatureSavedAt ? 
-                          (selectedSubmission.signatureSavedAt && typeof (selectedSubmission.signatureSavedAt as any).toDate === 'function' ? 
-                            new Date((selectedSubmission.signatureSavedAt as any).toDate()).toLocaleString() : 
-                            new Date(selectedSubmission.signatureSavedAt as any).toLocaleString()) : 
-                          'Unknown'}
-                      </p>
-                    </div>
-                  )}
-                  
-                  {/* Only show canvas if not already signed */}
-                  {!selectedSubmission?.signatureURL && (
-                    <canvas
-                      ref={canvasRef}
-                      width={800}
-                      height={200}
-                      style={{...styles.signatureCanvas, width: '100%', height: 'auto', aspectRatio: '4/1'}}
-                      onMouseDown={startDrawing}
-                      onMouseMove={draw}
-                      onMouseUp={stopDrawing}
-                      onMouseLeave={stopDrawing}
-                      onTouchStart={startDrawing}
-                      onTouchMove={draw}
-                      onTouchEnd={stopDrawing}
-                    />
-                  )}
-                  
                   <div style={styles.signatureButtons}>
-                    {selectedSubmission.signatureURL ? (
+                    {selectedSubmission.signed ? (
                       // Already signed - show approval status based on approved field (for reimbursement)
-                      selectedSubmission.formType === 'reimbursement' && selectedSubmission.approved === false ? (
-                        // Reimbursement: Not Approved
-                        <div style={{
-                          padding: '15px',
-                          backgroundColor: '#f8d7da',
-                          borderRadius: '8px',
-                          border: '2px solid #dc3545',
-                          textAlign: 'center'
-                        }}>
-                          <h4 style={{margin: '0 0 10px 0', color: '#721c24'}}>❌ Not Approved</h4>
-                          <p style={{margin: '0', color: '#721c24', fontSize: '14px'}}>
-                            This reimbursement request has been marked as not approved and PDF has been generated.
-                          </p>
-                        </div>
-                      ) : (
-                        // Approved (default for credit card or reimbursement with approved: true)
-                        <div style={{
-                          padding: '15px',
-                          backgroundColor: '#d4edda',
-                          borderRadius: '8px',
-                          border: '2px solid #28a745',
-                          textAlign: 'center'
-                        }}>
-                          <h4 style={{margin: '0 0 10px 0', color: '#155724'}}>✅ Approved</h4>
-                          <p style={{margin: '0', color: '#155724', fontSize: '14px'}}>
-                            This submission has been approved and PDF has been generated.
-                          </p>
-                        </div>
-                      )
+                      (() => {
+                        // Reimbursement: Check approved status
+                        if (selectedSubmission.formType === 'reimbursement') {
+                          // Strict check: approved must be explicitly false
+                          const isNotApproved = selectedSubmission.approved === false;
+                          const isApproved = selectedSubmission.approved === true;
+                          
+                          if (isNotApproved) {
+                            // Not Approved
+                            return (
+                              <div style={{
+                                padding: '15px',
+                                backgroundColor: '#f8d7da',
+                                borderRadius: '8px',
+                                border: '2px solid #dc3545',
+                                textAlign: 'center'
+                              }}>
+                                <h4 style={{margin: '0 0 10px 0', color: '#721c24'}}>❌ Not Approved</h4>
+                              </div>
+                            );
+                          } else if (isApproved || selectedSubmission.approved === undefined) {
+                            // Approved (true or undefined)
+                            return (
+                              <div style={{
+                                padding: '15px',
+                                backgroundColor: '#d4edda',
+                                borderRadius: '8px',
+                                border: '2px solid #28a745',
+                                textAlign: 'center'
+                              }}>
+                                <h4 style={{margin: '0', color: '#155724', fontSize: '16px', fontWeight: 'bold'}}>
+                                  ✅ Approved
+                                </h4>
+                              </div>
+                            );
+                          } else {
+                            // Fallback: show Approved
+                            return (
+                              <div style={{
+                                padding: '15px',
+                                backgroundColor: '#d4edda',
+                                borderRadius: '8px',
+                                border: '2px solid #28a745',
+                                textAlign: 'center'
+                              }}>
+                                <h4 style={{margin: '0', color: '#155724', fontSize: '16px', fontWeight: 'bold'}}>
+                                  ✅ Approved
+                                </h4>
+                              </div>
+                            );
+                          }
+                        } else {
+                          // Credit Card: Always show Approved when signed
+                          return (
+                            <div style={{
+                              padding: '15px',
+                              backgroundColor: '#d4edda',
+                              borderRadius: '8px',
+                              border: '2px solid #28a745',
+                              textAlign: 'center'
+                            }}>
+                              <h4 style={{margin: '0', color: '#155724', fontSize: '16px', fontWeight: 'bold'}}>
+                                ✅ Approved
+                              </h4>
+                            </div>
+                          );
+                        }
+                      })()
                     ) : (
-                      // Not signed yet - show signature buttons
                       <>
-                        <button
-                          style={styles.buttonSecondary}
-                          onClick={clearSignature}
-                        >
-                          Clear Signature
-                        </button>
                         {selectedSubmission.formType === 'reimbursement' ? (
-                          // Reimbursement: Show both Approve and Not Approved buttons
                           <>
                             <button
                               style={{...styles.button, backgroundColor: '#28a745'}}
                               onClick={managerApprove}
-                              disabled={!signature || loading}
+                              disabled={loading}
                             >
                               {loading ? 'Approving...' : '✅ Approve'}
                             </button>
                             <button
                               style={{...styles.button, backgroundColor: '#dc3545'}}
                               onClick={managerNotApprove}
-                              disabled={!signature || loading}
+                              disabled={loading}
                             >
-                              {loading ? 'Processing...' : '❌ Not Approved'}
+                              {loading ? 'Processing...' : '❌ Not Approve'}
                             </button>
                           </>
                         ) : (
-                          // Credit Card: Show only Approve button
                           <button
                             style={{...styles.button, backgroundColor: '#28a745'}}
                             onClick={managerApprove}
-                            disabled={!signature || loading}
+                            disabled={loading}
                           >
                             {loading ? 'Approving...' : '✅ Approve'}
                           </button>
                         )}
                       </>
                     )}
+                  </div>
+                  
+                  {/* Delete Submission Button */}
+                  <div style={{marginTop: '20px', paddingTop: '20px', borderTop: '2px solid #e9ecef'}}>
+                    <button
+                      style={{
+                        ...styles.button,
+                        backgroundColor: '#dc3545',
+                        width: '100%'
+                      }}
+                      onClick={deleteSubmission}
+                      disabled={loading || deleting}
+                    >
+                      {deleting ? 'Deleting...' : '🗑️ Delete Submission'}
+                    </button>
                   </div>
                 </div>
               </div>
@@ -2161,3 +2884,5 @@ const AdminCreditCardReview = () => {
 };
 
 export default AdminCreditCardReview;
+
+
