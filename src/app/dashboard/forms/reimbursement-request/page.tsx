@@ -1,15 +1,46 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '@/lib/firebase.config';
-import { enableAllSecurityMeasures } from '@/lib/security-client';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { ref, uploadBytes } from 'firebase/storage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { db, storage, auth } from '@/lib/firebase.config';
+
+// 🔒 보안: 입력 데이터 sanitization 함수
+const sanitizeInput = (input: string, maxLength: number = 1000): string => {
+  if (!input) return '';
+  return String(input)
+    .replace(/[<>]/g, '') // Remove < and >
+    .substring(0, maxLength)
+    .trim();
+};
+
+// 🔒 보안: 파일명 sanitization (path traversal 방지)
+const sanitizeFileName = (fileName: string): string => {
+  return fileName
+    .replace(/[<>:"/\\|?*]/g, '') // Remove dangerous characters
+    .replace(/\.\./g, '') // Remove path traversal attempts
+    .substring(0, 255); // Limit length
+};
+
+const ALLOWED_RECEIPT_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png']);
+const ALLOWED_RECEIPT_EXT = /\.(jpe?g|png)$/i;
+
+/** Receipt: JPG, JPEG, PNG only (MIME + extension if type missing) */
+function isAllowedReceiptImageFile(file: File): boolean {
+  const type = (file.type || '').toLowerCase().trim();
+  if (type && ALLOWED_RECEIPT_MIME.has(type)) {
+    return true;
+  }
+  if (type && type.startsWith('image/')) {
+    return false;
+  }
+  return ALLOWED_RECEIPT_EXT.test(file.name || '');
+}
 
 // Interfaces for type safety
 interface ReceiptFile {
   name: string;
-  url: string;
 }
 
 interface Purchase {
@@ -39,17 +70,60 @@ const ReimbursementRequest = () => {
   const [loading, setLoading] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const [submissionId, setSubmissionId] = useState('');
+  /** c_page와 동일: pink/blue/green 통과 전까지 폼 숨김; 미통과 시 알림 없이 `/`로 이동 */
+  const [pageReady, setPageReady] = useState(false);
 
-  // 🔒 보안 조치 활성화
   useEffect(() => {
-    enableAllSecurityMeasures({
-      disableConsole: true,
-      disableRightClick: true,
-      disableShortcuts: true,
-      disableCopy: false,
-      disableSelection: false,
-      monitorDevTools: false
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'Manager' &&
+          userData?.role !== 'HR' &&
+          userData?.role !== 'Director'
+        ) {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
     });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   // Office options
@@ -65,16 +139,20 @@ const ReimbursementRequest = () => {
   // Save data to Firestore
   const saveData = async (currentSubmissionId: string) => {
     try {
+      // 🔒 보안: 입력 데이터 sanitization
+      const sanitizedName = sanitizeInput(formData.name, 100);
+      const sanitizedOffice = sanitizeInput(formData.office, 50);
+      
       // Generate unique document ID with timestamp to prevent overwriting
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const uniqueId = `${formData.name}_${timestamp}`;
+      const uniqueId = `${sanitizedName}_${timestamp}`;
       
       const docRef = doc(db, 'reimbursement-requests', uniqueId);
       await setDoc(docRef, {
-        name: formData.name,
+        name: sanitizedName,
         cardNumber: '', // Not used for reimbursement requests
         date: formData.date,
-        office: formData.office,
+        office: sanitizedOffice,
         submissionId: currentSubmissionId,
         data: collectFormData(),
         lastUpdated: new Date(),
@@ -82,34 +160,71 @@ const ReimbursementRequest = () => {
       }, { merge: true });
       
     } catch (error) {
-      console.error('Error saving data:', error);
+      // 🔒 보안: 에러 메시지에서 민감 정보 제외
     }
   };
 
   // Upload file to Firebase Storage
   const uploadFile = async (file: File, fileName: string) => {
     try {
-      console.log('Starting file upload:', { fileName, fileSize: file.size, fileType: file.type });
+      // 🔒 보안: 파일 크기 제한 (10MB)
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+      if (file.size > MAX_FILE_SIZE) {
+        return { success: false, error: 'File size exceeds limit' };
+      }
+
+      if (!isAllowedReceiptImageFile(file)) {
+        return { success: false, error: 'Only JPG, JPEG, or PNG images are allowed' };
+      }
       
-      const storageRef = ref(storage, `reimbursement-receipts/${fileName}`);
-      const snapshot = await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(snapshot.ref);
+      // 🔒 보안: 파일명 sanitization
+      const sanitizedFileName = sanitizeFileName(fileName);
       
-      console.log('File uploaded successfully:', downloadURL);
-      
+      const storageRef = ref(storage, `reimbursement-receipts/${sanitizedFileName}`);
+      await uploadBytes(storageRef, file);
+
       return {
         success: true,
-        fileName: fileName,
-        downloadURL: downloadURL
+        fileName: sanitizedFileName,
       };
     } catch (error) {
-      console.error('Error uploading file:', error);
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+      // 🔒 보안: 에러 메시지에서 민감 정보 제외
+      return { success: false, error: 'File upload failed' };
     }
+  };
+
+  /** 상단(Office, Date, Name) + 각 구매 행 + 구매마다 영수증 1장 이상 */
+  const isSubmissionComplete = (): boolean => {
+    if (!formData.office?.trim() || !formData.date?.trim() || !formData.name?.trim()) {
+      return false;
+    }
+    for (const p of purchases) {
+      if (!p.date?.trim() || !p.vendor?.trim() || !p.reason?.trim()) {
+        return false;
+      }
+      if (!p.amount?.toString().trim()) {
+        return false;
+      }
+      const amt = parseFloat(String(p.amount).replace(/,/g, ''));
+      if (!isFinite(amt) || amt < 0) {
+        return false;
+      }
+      if (!p.receiptFiles || p.receiptFiles.length === 0) {
+        return false;
+      }
+    }
+    return true;
   };
 
   // Handle form submission
   const handleSubmit = async () => {
+    if (!isSubmissionComplete()) {
+      alert(
+        'Please fill in all fields for every purchase, including at least one receipt image (JPG, JPEG, or PNG) for each purchase.'
+      );
+      return;
+    }
+
     try {
       setLoading(true);
       setSubmitStatus('📤 Submitting...');
@@ -119,7 +234,6 @@ const ReimbursementRequest = () => {
       if (!currentSubmissionId) {
         currentSubmissionId = generateSubmissionId();
         setSubmissionId(currentSubmissionId);
-        console.log('🆔 Generated submission ID during submit:', currentSubmissionId);
       }
 
       // Save data to Firestore (final save)
@@ -130,13 +244,13 @@ const ReimbursementRequest = () => {
       setPurchases([{ date: '', vendor: '', reason: '', amount: '', description: '', receiptFiles: [] }]);
       setSubmissionId(''); // Reset submission ID for next submission
 
-      setSubmitStatus('✅ Submitted successfully! Data saved for manager review.');
+      setSubmitStatus('✅ Submitted successfully!');
       
       setTimeout(() => setSubmitStatus(''), 7000);
 
     } catch (error) {
-      console.error('Submit error:', error);
-      setSubmitStatus('❌ Submission failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
+      // 🔒 보안: 에러 메시지에서 민감 정보 제외
+      setSubmitStatus('❌ Submission failed. Please try again.');
       setTimeout(() => setSubmitStatus(''), 7000);
     } finally {
       setLoading(false);
@@ -146,15 +260,15 @@ const ReimbursementRequest = () => {
   // Collect form data
   const collectFormData = () => {
     return purchases.map((purchase: Purchase, index: number) => ({
-      name: formData.name,
+      name: sanitizeInput(formData.name, 100),
       cardLastFour: '', // Not used for reimbursement requests
       date: purchase.date,
-      office: formData.office,
-      vendor: purchase.vendor,
-      reason: purchase.reason,
-      amount: purchase.amount,
+      office: sanitizeInput(formData.office, 50),
+      vendor: sanitizeInput(purchase.vendor, 200),
+      reason: sanitizeInput(purchase.reason, 500),
+      amount: sanitizeInput(purchase.amount, 20),
       description: '', // Account Description not used for reimbursement requests
-      receiptFiles: purchase.receiptFiles.map((file: ReceiptFile) => file.name).join(', '),
+      receiptFiles: purchase.receiptFiles.map((file: ReceiptFile) => sanitizeFileName(file.name)).join(', '),
       index: index + 1
     }));
   };
@@ -188,24 +302,26 @@ const ReimbursementRequest = () => {
 
   // Handle file upload
   const handleFileUpload = async (index: number, files: FileList) => {
-    console.log('handleFileUpload called:', { index, fileCount: files.length });
-    
     if (!files || files.length === 0) {
-      console.log('No files to upload');
       return;
     }
 
-    // Filter out PDF files - only allow image files
-    const imageFiles = Array.from(files).filter(file => {
-      const isImage = file.type.startsWith('image/');
-      if (!isImage) {
-        alert(`❌ PDF files are not allowed. Please upload image files only. File "${file.name}" was rejected.`);
+    // 🔒 보안: 파일 개수 제한 (최대 10개)
+    const MAX_FILES = 10;
+    const fileArray = Array.from(files).slice(0, MAX_FILES);
+
+    const imageFiles = fileArray.filter(file => {
+      if (isAllowedReceiptImageFile(file)) {
+        return true;
       }
-      return isImage;
+      alert(
+        `❌ Only JPG, JPEG, or PNG files are allowed. File "${sanitizeFileName(file.name)}" was rejected.`
+      );
+      return false;
     });
 
     if (imageFiles.length === 0) {
-      alert('❌ No valid image files selected. Please upload image files only (PDF files are not allowed).');
+      alert('❌ No valid files selected. Please upload JPG, JPEG, or PNG images only.');
       return;
     }
 
@@ -214,48 +330,33 @@ const ReimbursementRequest = () => {
     if (!currentSubmissionId) {
       currentSubmissionId = generateSubmissionId();
       setSubmissionId(currentSubmissionId);
-      console.log('🆔 Generated new submission ID:', currentSubmissionId);
-    } else {
-      console.log('🆔 Using existing submission ID:', currentSubmissionId);
     }
 
-    console.log('Starting file upload process...');
+    // 🔒 보안: 입력 데이터 sanitization
+    const sanitizedName = sanitizeInput(formData.name, 100);
+    
     const uploadPromises = imageFiles.map(async (file: File, fileIndex: number) => {
-      console.log(`Processing file ${fileIndex + 1}:`, { name: file.name, size: file.size, type: file.type });
+      // 🔒 보안: 파일명 sanitization
+      const sanitizedOriginalName = sanitizeFileName(file.name);
       
       // Use the current submission ID for all files in this upload
       const sequenceNumber = String(Date.now() + fileIndex).padStart(15, '0');
-      const fileName = `${formData.name}_${currentSubmissionId}_purchase${index + 1}_${sequenceNumber}_${file.name}`;
-      console.log('📁 Generated fileName:', fileName);
-      console.log('📁 Submission ID:', currentSubmissionId);
-      console.log('📁 Purchase index:', index + 1);
-      console.log('📁 File parts:', fileName.split('_'));
+      const fileName = `${sanitizedName}_${currentSubmissionId}_purchase${index + 1}_${sequenceNumber}_${sanitizedOriginalName}`;
       
       const uploadResult = await uploadFile(file, fileName);
-      console.log('Upload result:', uploadResult);
       
       if (uploadResult?.success) {
-        console.log('File uploaded successfully:', fileName);
-        return { name: fileName, url: uploadResult.downloadURL };
+        return { name: uploadResult.fileName };
       } else {
-        console.error('File upload failed:', uploadResult?.error);
         return null;
       }
     });
 
-    console.log('Waiting for all uploads to complete...');
     const uploadedFiles = (await Promise.all(uploadPromises)).filter((file): file is ReceiptFile => file !== null);
-    console.log('Uploaded files:', uploadedFiles);
     
     if (uploadedFiles.length > 0) {
-      const currentFiles = purchases[index].receiptFiles || [];
-      console.log('Current files:', currentFiles);
-      console.log('Replacing files for purchase...');
       // Replace existing files with new ones (don't append)
       updatePurchase(index, 'receiptFiles', uploadedFiles);
-      console.log('Files replaced for purchase');
-    } else {
-      console.log('No files were successfully uploaded');
     }
   };
 
@@ -264,7 +365,7 @@ const ReimbursementRequest = () => {
       fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
       lineHeight: 1.6,
       color: '#333',
-      background: 'linear-gradient(135deg, #e0c3fc 0%, #8ec5fc 100%)',
+      background: 'linear-gradient(135deg, #f3e8ff 0%, #e0f2fe 100%)',
       minHeight: '100vh',
       margin: 0,
       padding: 0
@@ -416,6 +517,17 @@ const ReimbursementRequest = () => {
       border: '1px solid #bee5eb'
     }
   };
+
+  if (!pageReady) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          background: 'linear-gradient(135deg, #f3e8ff 0%, #e0f2fe 100%)',
+        }}
+      />
+    );
+  }
 
   return (
     <div style={styles.body}>
@@ -583,10 +695,10 @@ const ReimbursementRequest = () => {
                   </div>
                   
                   <div style={styles.formGroup}>
-                    <label style={styles.label}>Receipt Images</label>
+                    <label style={styles.label}>Receipt Images *</label>
                     <input
                       type="file"
-                      accept="image/*"
+                      accept=".jpg,.jpeg,.png,image/jpeg,image/png"
                       multiple
                       onChange={(e) => {
                         const files = e.target.files;
@@ -627,16 +739,16 @@ const ReimbursementRequest = () => {
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={loading || !formData.office || !formData.date || !formData.name}
+              disabled={loading || !isSubmissionComplete()}
               style={{
                 ...styles.button,
                 fontSize: '18px',
                 padding: '15px 30px',
-                opacity: (loading || !formData.office || !formData.date || !formData.name) ? 0.7 : 1,
-                cursor: (loading || !formData.office || !formData.date || !formData.name) ? 'not-allowed' : 'pointer'
+                opacity: loading || !isSubmissionComplete() ? 0.7 : 1,
+                cursor: loading || !isSubmissionComplete() ? 'not-allowed' : 'pointer'
               }}
             >
-              {loading ? '⏳ Processing...' : '📄 Submit Report'}
+              {loading ? '⏳ Processing...' : '📄 Submit'}
             </button>
           </div>
         </form>
@@ -646,3 +758,5 @@ const ReimbursementRequest = () => {
 };
 
 export default ReimbursementRequest;
+
+

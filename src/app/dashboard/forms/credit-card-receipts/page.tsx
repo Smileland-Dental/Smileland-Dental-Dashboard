@@ -1,15 +1,46 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import { doc, setDoc, getDoc, deleteDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '@/lib/firebase.config';
-import { enableAllSecurityMeasures } from '@/lib/security-client';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { ref, uploadBytes } from 'firebase/storage';
+import { onAuthStateChanged } from 'firebase/auth';
+import { db, storage, auth } from '@/lib/firebase.config';
+
+// 🔒 보안: 입력 데이터 sanitization 함수
+const sanitizeInput = (input: string, maxLength: number = 1000): string => {
+  if (!input) return '';
+  return String(input)
+    .replace(/[<>]/g, '') // Remove < and >
+    .substring(0, maxLength)
+    .trim();
+};
+
+// 🔒 보안: 파일명 sanitization (path traversal 방지)
+const sanitizeFileName = (fileName: string): string => {
+  return fileName
+    .replace(/[<>:"/\\|?*]/g, '') // Remove dangerous characters
+    .replace(/\.\./g, '') // Remove path traversal attempts
+    .substring(0, 255); // Limit length
+};
+
+const ALLOWED_RECEIPT_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png']);
+const ALLOWED_RECEIPT_EXT = /\.(jpe?g|png)$/i;
+
+/** Receipt: JPG, JPEG, PNG only (MIME + extension if type missing) */
+function isAllowedReceiptImageFile(file: File): boolean {
+  const type = (file.type || '').toLowerCase().trim();
+  if (type && ALLOWED_RECEIPT_MIME.has(type)) {
+    return true;
+  }
+  if (type && type.startsWith('image/')) {
+    return false;
+  }
+  return ALLOWED_RECEIPT_EXT.test(file.name || '');
+}
 
 // Interfaces for type safety
 interface ReceiptFile {
   name: string;
-  url: string;
 }
 
 interface Purchase {
@@ -40,26 +71,66 @@ const CreditCardReceipts = () => {
   const [loading, setLoading] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
   const [submissionId, setSubmissionId] = useState('');
+  /** Role(pink/blue/green) 통과 전까지 폼 숨김; 미통과 시 알림 없이 `/`로 이동 */
+  const [pageReady, setPageReady] = useState(false);
   // Auto-save status removed since auto-save is disabled
 
-  // 🔒 보안 조치 활성화
+  // one-page와 동일: `animal/{uid}` + `role` — 알림/거절 화면 없이 미통과만 리다이렉트
   useEffect(() => {
-    enableAllSecurityMeasures({
-      disableConsole: true,
-      disableRightClick: true,
-      disableShortcuts: true,
-      disableCopy: false,
-      disableSelection: false,
-      monitorDevTools: false
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'Manager' &&
+          userData?.role !== 'HR' &&
+          userData?.role !== 'Director'
+        ) {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
     });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, []);
 
   // Office options
   const officeOptions = ['Bernard', 'California', 'Corporate', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
-
-  // Firebase is already initialized in firebase.config.ts
-
-  // Load data functionality removed - one-time submission only
 
   // Generate unique submission ID
   const generateSubmissionId = () => {
@@ -88,29 +159,74 @@ const CreditCardReceipts = () => {
       }, { merge: true });
       
     } catch (error) {
+      console.error('Error saving data:', error);
     }
   };
 
   // Upload file to Firebase Storage
   const uploadFile = async (file: File, fileName: string) => {
     try {
-      const storageRef = ref(storage, `receipts/${fileName}`);
-      const snapshot = await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(snapshot.ref);
+      // 🔒 보안: 파일 크기 제한 (10MB)
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+      if (file.size > MAX_FILE_SIZE) {
+        return { success: false, error: 'File size exceeds limit' };
+      }
+
+      if (!isAllowedReceiptImageFile(file)) {
+        return { success: false, error: 'Only JPG, JPEG, or PNG images are allowed' };
+      }
       
+      // 🔒 보안: 파일명 sanitization
+      const sanitizedFileName = sanitizeFileName(fileName);
+      
+      const storageRef = ref(storage, `receipts/${sanitizedFileName}`);
+      await uploadBytes(storageRef, file);
+
       return {
         success: true,
-        fileName: fileName,
-        downloadURL: downloadURL
+        fileName: sanitizedFileName,
       };
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+      // 🔒 보안: 에러 메시지에서 민감 정보 제외
+      return { success: false, error: 'File upload failed' };
     }
   };
 
+  /** 상단 필드 + 각 구매 행 전체(영수증 이미지 최소 1장) 충족 여부 */
+  const isSubmissionComplete = (): boolean => {
+    if (!formData.office?.trim() || !formData.date?.trim() || !formData.name?.trim()) {
+      return false;
+    }
+    if (!/^\d{4}$/.test((formData.cardLastFour || '').trim())) {
+      return false;
+    }
+    for (const p of purchases) {
+      if (!p.date?.trim() || !p.vendor?.trim() || !p.reason?.trim() || !p.description?.trim()) {
+        return false;
+      }
+      if (!p.amount?.toString().trim()) {
+        return false;
+      }
+      const amt = parseFloat(String(p.amount).replace(/,/g, ''));
+      if (!isFinite(amt) || amt < 0) {
+        return false;
+      }
+      if (!p.receiptFiles || p.receiptFiles.length === 0) {
+        return false;
+      }
+    }
+    return true;
+  };
 
   // Handle form submission
   const handleSubmit = async () => {
+    if (!isSubmissionComplete()) {
+      alert(
+        'Please fill in all fields for every purchase, including at least one receipt image (JPG, JPEG, or PNG) for each purchase.'
+      );
+      return;
+    }
+
     try {
       setLoading(true);
       setSubmitStatus('📤 Submitting...');
@@ -120,6 +236,7 @@ const CreditCardReceipts = () => {
       if (!currentSubmissionId) {
         currentSubmissionId = generateSubmissionId();
         setSubmissionId(currentSubmissionId);
+        console.log('🆔 Generated submission ID during submit:', currentSubmissionId);
       }
 
       // Save data to Firestore (final save)
@@ -130,11 +247,12 @@ const CreditCardReceipts = () => {
       setPurchases([{ date: '', vendor: '', reason: '', amount: '', description: '', receiptFiles: [] }]);
       setSubmissionId(''); // Reset submission ID for next submission
 
-      setSubmitStatus('✅ Submitted successfully! Data saved for manager review.');
+      setSubmitStatus('✅ Submitted successfully!');
       
       setTimeout(() => setSubmitStatus(''), 7000);
 
     } catch (error) {
+      console.error('Submit error:', error);
       setSubmitStatus('❌ Submission failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
       setTimeout(() => setSubmitStatus(''), 7000);
     } finally {
@@ -145,15 +263,15 @@ const CreditCardReceipts = () => {
   // Collect form data
   const collectFormData = () => {
     return purchases.map((purchase: Purchase, index: number) => ({
-      name: formData.name,
-      cardLastFour: formData.cardLastFour,
+      name: sanitizeInput(formData.name, 100),
+      cardLastFour: sanitizeInput(formData.cardLastFour, 4),
       date: purchase.date, // Use individual purchase date, not form submission date
-      office: formData.office,
-      vendor: purchase.vendor,
-      reason: purchase.reason,
-      amount: purchase.amount,
-      description: purchase.description,
-      receiptFiles: purchase.receiptFiles.map((file: ReceiptFile) => file.name).join(', '),
+      office: sanitizeInput(formData.office, 50),
+      vendor: sanitizeInput(purchase.vendor, 200),
+      reason: sanitizeInput(purchase.reason, 500),
+      amount: sanitizeInput(purchase.amount, 20),
+      description: sanitizeInput(purchase.description, 200),
+      receiptFiles: purchase.receiptFiles.map((file: ReceiptFile) => sanitizeFileName(file.name)).join(', '),
       index: index + 1
     }));
   };
@@ -189,23 +307,26 @@ const CreditCardReceipts = () => {
 
   // Handle file upload
   const handleFileUpload = async (index: number, files: FileList) => {
-    
     if (!files || files.length === 0) {
-      console.log('No files to upload');
       return;
     }
 
-    // Filter out PDF files - only allow image files
-    const imageFiles = Array.from(files).filter(file => {
-      const isImage = file.type.startsWith('image/');
-      if (!isImage) {
-        alert(`❌ PDF files are not allowed. Please upload image files only. File "${file.name}" was rejected.`);
+    // 🔒 보안: 파일 개수 제한 (최대 10개)
+    const MAX_FILES = 10;
+    const fileArray = Array.from(files).slice(0, MAX_FILES);
+
+    const imageFiles = fileArray.filter(file => {
+      if (isAllowedReceiptImageFile(file)) {
+        return true;
       }
-      return isImage;
+      alert(
+        `❌ Only JPG, JPEG, or PNG files are allowed. File "${sanitizeFileName(file.name)}" was rejected.`
+      );
+      return false;
     });
 
     if (imageFiles.length === 0) {
-      alert('❌ No valid image files selected. Please upload image files only (PDF files are not allowed).');
+      alert('❌ No valid files selected. Please upload JPG, JPEG, or PNG images only.');
       return;
     }
 
@@ -214,19 +335,24 @@ const CreditCardReceipts = () => {
     if (!currentSubmissionId) {
       currentSubmissionId = generateSubmissionId();
       setSubmissionId(currentSubmissionId);
-    } else {
     }
 
+    // 🔒 보안: 입력 데이터 sanitization
+    const sanitizedName = sanitizeInput(formData.name, 100);
+    const sanitizedCardNumber = sanitizeInput(formData.cardLastFour, 4);
+    
     const uploadPromises = imageFiles.map(async (file: File, fileIndex: number) => {
+      // 🔒 보안: 파일명 sanitization
+      const sanitizedOriginalName = sanitizeFileName(file.name);
       
       // Use the current submission ID for all files in this upload
       const sequenceNumber = String(Date.now() + fileIndex).padStart(15, '0');
-      const fileName = `${formData.name}_${formData.cardLastFour}_${currentSubmissionId}_purchase${index + 1}_${sequenceNumber}_${file.name}`;
-    
+      const fileName = `${sanitizedName}_${sanitizedCardNumber}_${currentSubmissionId}_purchase${index + 1}_${sequenceNumber}_${sanitizedOriginalName}`;
+      
       const uploadResult = await uploadFile(file, fileName);
-  
+      
       if (uploadResult?.success) {
-        return { name: fileName, url: uploadResult.downloadURL };
+        return { name: uploadResult.fileName };
       } else {
         return null;
       }
@@ -235,10 +361,8 @@ const CreditCardReceipts = () => {
     const uploadedFiles = (await Promise.all(uploadPromises)).filter((file): file is ReceiptFile => file !== null);
     
     if (uploadedFiles.length > 0) {
-      const currentFiles = purchases[index].receiptFiles || [];
       // Replace existing files with new ones (don't append)
       updatePurchase(index, 'receiptFiles', uploadedFiles);
-    } else {
     }
   };
 
@@ -403,6 +527,17 @@ const CreditCardReceipts = () => {
       border: '1px solid #bee5eb'
     }
   };
+
+  if (!pageReady) {
+    return (
+      <div
+        style={{
+          minHeight: '100vh',
+          background: 'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
+        }}
+      />
+    );
+  }
 
   return (
     <div style={styles.body}>
@@ -608,22 +743,56 @@ const CreditCardReceipts = () => {
                     <label style={styles.label}>Store/Website *</label>
                     <input
                       type="text"
+                      list={`vendor-options-${index}`}
                       value={purchase.vendor}
                       onChange={(e) => updatePurchase(index, 'vendor', e.target.value)}
                       style={styles.input}
+                      placeholder="Select or Type"
                       required
                     />
+                    <datalist id={`vendor-options-${index}`}>
+                      <option value="Amazon">Amazon</option>
+                      <option value="Target">Target</option>
+                      <option value="Smart and Final">Smart and Final</option>
+                      <option value="Sams Club">Sams Club</option>
+                      <option value="Costco">Costco</option>
+                      <option value="Walmart">Walmart</option>
+                      <option value="Home Depot">Home Depot</option>
+                      <option value="Family Dollar">Family Dollar</option>
+                      <option value="Dollar Tree">Dollar Tree</option>
+                      <option value="Dollar General">Dollar General</option>
+                      <option value="Post Office">Post Office</option>
+                      <option value="Vons">Vons</option>
+                      <option value="Bakersfield Rubber Stamps">Bakersfield Rubber Stamps</option>
+                      <option value="Scholastic">Scholastic</option>
+                      <option value="UPD">UPD</option>
+                      <option value="Office Depot">Office Depot</option>
+                      <option value="Scent Air">Scent Air</option>
+                      <option value="Bill Wright Toyota">Bill Wright Toyota</option>
+                      <option value="Loma Linda Spore Tests">Loma Linda Spore Tests</option>
+                      <option value="CDA">CDA</option>
+                    </datalist>
                   </div>
                   
                   <div style={styles.formGroup}>
                     <label style={styles.label}>Reason for Purchase *</label>
                     <input
                       type="text"
+                      list={`reason-options-${index}`}
                       value={purchase.reason}
                       onChange={(e) => updatePurchase(index, 'reason', e.target.value)}
                       style={styles.input}
+                      placeholder="Select or Type"
                       required
                     />
+                    <datalist id={`reason-options-${index}`}>
+                      <option value="Gas">Gas</option>
+                      <option value="Toys">Toys</option>
+                      <option value="Water">Water</option>
+                      <option value="Event">Event</option>
+                      <option value="Food for Staff">Food for Staff</option>
+                      <option value="Stamps">Stamps</option>
+                    </datalist>
                   </div>
                   
                   <div style={styles.formGroup}>
@@ -655,10 +824,10 @@ const CreditCardReceipts = () => {
                   </div>
                   
                   <div style={styles.formGroup}>
-                    <label style={styles.label}>Receipt Images</label>
+                    <label style={styles.label}>Receipt Images *</label>
                     <input
                       type="file"
-                      accept="image/*"
+                      accept=".jpg,.jpeg,.png,image/jpeg,image/png"
                       multiple
                       onChange={(e) => {
                         const files = e.target.files;
@@ -699,16 +868,16 @@ const CreditCardReceipts = () => {
             <button
               type="button"
               onClick={handleSubmit}
-              disabled={loading || !formData.office || !formData.date || !formData.name || !formData.cardLastFour}
+              disabled={loading || !isSubmissionComplete()}
               style={{
                 ...styles.button,
                 fontSize: '18px',
                 padding: '15px 30px',
-                opacity: (loading || !formData.office || !formData.date || !formData.name || !formData.cardLastFour) ? 0.7 : 1,
-                cursor: (loading || !formData.office || !formData.date || !formData.name || !formData.cardLastFour) ? 'not-allowed' : 'pointer'
+                opacity: loading || !isSubmissionComplete() ? 0.7 : 1,
+                cursor: loading || !isSubmissionComplete() ? 'not-allowed' : 'pointer'
               }}
             >
-              {loading ? '⏳ Processing...' : '📄 Submit Report'}
+              {loading ? '⏳ Processing...' : '📄 Submit'}
             </button>
           </div>
         </form>
@@ -719,3 +888,4 @@ const CreditCardReceipts = () => {
 };
 
 export default CreditCardReceipts;
+
