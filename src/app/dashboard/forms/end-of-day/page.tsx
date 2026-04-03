@@ -3,15 +3,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { db, auth } from '@/lib/firebase.config';
 import { doc, getDoc } from 'firebase/firestore';
-import { getStorage, ref, listAll, getMetadata, getDownloadURL } from 'firebase/storage';
+import { getStorage, ref, listAll, getMetadata, getDownloadURL, getBlob } from 'firebase/storage';
+import JSZip from 'jszip';
 import { onAuthStateChanged } from 'firebase/auth';
+
+function extractSubmissionDateFromStoragePath(fullPath: string, office: string): string | null {
+  if (!fullPath || !office) return null;
+  const parts = fullPath.split('/').filter(Boolean);
+  if (parts.length < 4) return null;
+  if (parts[0] !== 'endofday-pdfs' || parts[1] !== office) return null;
+  const folder = parts[2];
+  return /^\d{4}-\d{2}-\d{2}$/.test(folder) ? folder : null;
+}
 
 export default function EndOfDay() {
   const [selectedOffice, setSelectedOffice] = useState('');
   const [pdfs, setPdfs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [filteredPdfs, setFilteredPdfs] = useState<any[]>([]);
-  const [monthFilter, setMonthFilter] = useState('');
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewingPdf, setViewingPdf] = useState<any | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
@@ -19,9 +28,10 @@ export default function EndOfDay() {
   const [pdfError, setPdfError] = useState(false);
   const pdfBlobUrlRef = useRef<string | null>(null);
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
+  const [zipDownloading, setZipDownloading] = useState(false);
 
   // 오피스 옵션
-  const officeOptions = ['Call_Center', 'Janitor', 'Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+  const officeOptions = ['Bernard', 'Ming', 'Delano', 'Janitor', 'California', 'Fresno', 'Ortho', 'Tulare', 'Visalia', 'Call_Center'];
 
 
   // 보안: Office 값 검증
@@ -42,16 +52,7 @@ export default function EndOfDay() {
       alert('Invalid office selection.');
       return;
     }
-  /*  
-    // 선택된 office의 첫 알파벳 대문자를 비밀번호로 사용
-    const officePassword = newOffice.charAt(0).toUpperCase();
-    const password = prompt(`Enter password to change office: `);
-    if (password === null) return;
-    if (password !== officePassword) {
-      alert("Incorrect password. Office change cancelled.");
-      return;
-    }
-  */
+
     setSelectedOffice(newOffice);
   };
 
@@ -89,7 +90,12 @@ export default function EndOfDay() {
         pdfItems.map(async (item) => {
           const meta = await getMetadata(item);
           const createdAt = meta.timeCreated ? new Date(meta.timeCreated) : new Date();
-          const dateStr = createdAt.toISOString().slice(0, 10);
+          const submissionDate = extractSubmissionDateFromStoragePath(
+            item.fullPath,
+            selectedOffice
+          );
+          const dateStr =
+            submissionDate ?? createdAt.toISOString().slice(0, 10);
           return {
             path: item.fullPath,
             filename: item.name,
@@ -191,19 +197,6 @@ export default function EndOfDay() {
     }
   }, [selectedOffice, isAuthorized]);
 
-  // 키보드: Escape로 뷰어 닫기
-  useEffect(() => {
-    if (!viewerOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        closeViewer();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewerOpen]);
-
   // PDF 로드: path에서 download URL을 받아 바로 표시
   useEffect(() => {
     if (!viewerOpen || !viewingPdf) {
@@ -284,27 +277,17 @@ export default function EndOfDay() {
     };
   }, [viewerOpen, viewingPdf]);
 
-  // 날짜 필터링 (초기값 비움: 제출된 PDF 전체가 기본 표시)
   const [dateFilter, setDateFilter] = useState('');
   
   useEffect(() => {
     let filtered = pdfs;
     
-    // Date 필터 적용
     if (dateFilter) {
-      filtered = filtered.filter(pdf => pdf.date === dateFilter);
+      filtered = filtered.filter((pdf) => pdf.date === dateFilter);
     }
     
-    // Month 필터 적용 (YYYY-MM 형식)
-    if (monthFilter) {
-      filtered = filtered.filter(pdf => {
-        if (!pdf.date) return false;
-        return pdf.date.startsWith(monthFilter);
-      });
-    }
-
     setFilteredPdfs(filtered);
-  }, [dateFilter, monthFilter, pdfs]);
+  }, [dateFilter, pdfs]);
 
   const formatTime = (timestamp: Date | { toDate?: () => Date } | number) => {
     if (!timestamp) return '';
@@ -355,17 +338,107 @@ export default function EndOfDay() {
     setViewingPdf(null);
   };
 
-  // 월 목록 생성 (1~12)
-  const getMonthOptions = (): Array<{ value: string; label: string }> => {
-    const months: Array<{ value: string; label: string }> = [];
-    const currentYear = new Date().getFullYear();
-    for (let i = 1; i <= 12; i++) {
-      const month = String(i).padStart(2, '0');
-      const monthValue = `${currentYear}-${month}`;
-      months.push({ value: monthValue, label: String(i) });
-    }
-    return months;
+  const goToPrevPdf = () => {
+    if (!viewingPdf?.path) return;
+    const i = filteredPdfs.findIndex((p) => p.path === viewingPdf.path);
+    if (i <= 0) return;
+    const prev = filteredPdfs[i - 1];
+    if (prev?.path && isValidStoragePath(prev.path)) setViewingPdf(prev);
   };
+
+  const goToNextPdf = () => {
+    if (!viewingPdf?.path) return;
+    const i = filteredPdfs.findIndex((p) => p.path === viewingPdf.path);
+    if (i < 0 || i >= filteredPdfs.length - 1) return;
+    const next = filteredPdfs[i + 1];
+    if (next?.path && isValidStoragePath(next.path)) setViewingPdf(next);
+  };
+
+  const handleDownloadZip = async () => {
+    if (!selectedOffice || filteredPdfs.length === 0 || zipDownloading) return;
+    setZipDownloading(true);
+    try {
+      const zip = new JSZip();
+      const storage = getStorage();
+      const usedEntryNames = new Set<string>();
+
+      for (let i = 0; i < filteredPdfs.length; i++) {
+        const pdf = filteredPdfs[i];
+        const storagePath = normalizeStoragePath(pdf.path);
+        if (!storagePath) continue;
+        const blob = await getBlob(ref(storage, storagePath));
+        let entryName = (pdf.filename || `file-${i}.pdf`).replace(/[/\\]/g, '_');
+        if (!entryName.toLowerCase().endsWith('.pdf')) entryName += '.pdf';
+        let unique = entryName;
+        let suffix = 0;
+        while (usedEntryNames.has(unique)) {
+          suffix += 1;
+          const base = entryName.replace(/\.pdf$/i, '');
+          unique = `${base}_${suffix}.pdf`;
+        }
+        usedEntryNames.add(unique);
+        zip.file(unique, blob);
+      }
+
+      if (usedEntryNames.size === 0) {
+        alert('No files could be added to the zip.');
+        return;
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const suffix = dateFilter ? dateFilter : 'all-dates';
+      const filename = `endofday-pdfs-${selectedOffice}-${suffix}.zip`;
+      const url = URL.createObjectURL(zipBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('ZIP download failed:', err);
+      alert('Failed to download zip. Please try again.');
+    } finally {
+      setZipDownloading(false);
+    }
+  };
+
+  // 키보드: Escape 닫기, 좌우 화살표로 이전·다음 PDF
+  useEffect(() => {
+    if (!viewerOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closeViewer();
+        return;
+      }
+      if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        const i = viewingPdf?.path
+          ? filteredPdfs.findIndex((p) => p.path === viewingPdf.path)
+          : -1;
+        if (i > 0) {
+          const prev = filteredPdfs[i - 1];
+          if (prev?.path && isValidStoragePath(prev.path)) setViewingPdf(prev);
+        }
+        return;
+      }
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        const i = viewingPdf?.path
+          ? filteredPdfs.findIndex((p) => p.path === viewingPdf.path)
+          : -1;
+        if (i >= 0 && i < filteredPdfs.length - 1) {
+          const next = filteredPdfs[i + 1];
+          if (next?.path && isValidStoragePath(next.path)) setViewingPdf(next);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [viewerOpen, viewingPdf, filteredPdfs]);
 
   const styles = {
     body: {
@@ -426,15 +499,17 @@ export default function EndOfDay() {
       fontWeight: '500'
     },
     pdfList: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
-      gap: '20px',
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: '12px',
       marginTop: '20px'
     },
     pdfCard: {
+      width: '100%',
+      boxSizing: 'border-box' as const,
       border: '1px solid #e1e5ea',
       borderRadius: '12px',
-      padding: '20px',
+      padding: '16px 20px',
       background: 'white',
       boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)',
       transition: 'transform 0.2s ease, box-shadow 0.2s ease',
@@ -483,6 +558,35 @@ export default function EndOfDay() {
     return null; // 리다이렉트 중이므로 아무것도 렌더링하지 않음
   }
 
+  const pdfNavIndex =
+    viewerOpen && viewingPdf?.path
+      ? filteredPdfs.findIndex((p) => p.path === viewingPdf.path)
+      : -1;
+  const pdfNavShowPrev = viewerOpen && pdfNavIndex > 0;
+  const pdfNavShowNext =
+    viewerOpen && pdfNavIndex >= 0 && pdfNavIndex < filteredPdfs.length - 1;
+
+  const navArrowButton: React.CSSProperties = {
+    position: 'absolute',
+    top: '50%',
+    transform: 'translateY(-50%)',
+    width: '48px',
+    height: '48px',
+    borderRadius: '50%',
+    border: 'none',
+    background: 'rgba(255, 255, 255, 0.95)',
+    color: '#4a6fa1',
+    fontSize: '28px',
+    lineHeight: 1,
+    cursor: 'pointer',
+    zIndex: 1001,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontWeight: 'bold',
+    boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)'
+  };
+
   return (
     <>
       <div style={styles.body}>
@@ -511,51 +615,49 @@ export default function EndOfDay() {
               type="date"
               id="dateFilter"
               value={dateFilter}
-              onChange={(e: any) => {
-                setDateFilter(e.target.value);
-                setMonthFilter(''); // 날짜 필터 선택 시 월 필터 초기화
-              }}
+              onChange={(e: any) => setDateFilter(e.target.value)}
               style={styles.input}
             />
 
             {selectedOffice && (
-              <>
-                <label style={styles.label} htmlFor="monthFilter">📆 Month:</label>
-                <select
-                  id="monthFilter"
-                  value={monthFilter}
-                  onChange={(e: any) => {
-                    setMonthFilter(e.target.value);
-                    setDateFilter(''); // 월 필터 선택 시 날짜 필터 초기화
-                  }}
-                  style={styles.select}
-                >
-                  <option value="">--All Months--</option>
-                  {getMonthOptions().map(month => (
-                    <option key={month.value} value={month.value}>{month.label}</option>
-                  ))}
-                </select>
-                {(dateFilter || monthFilter) && (
-                  <button
-                    onClick={() => {
-                      setDateFilter('');
-                      setMonthFilter('');
-                    }}
-                    style={{
-                      padding: '10px 15px',
-                      background: '#ff6b6b',
-                      color: 'white',
-                      border: 'none',
-                      borderRadius: '8px',
-                      cursor: 'pointer',
-                      fontSize: '14px',
-                      fontWeight: '600'
-                    }}
-                  >
-                    Clear Filters
-                  </button>
-                )}
-              </>
+              <button
+                type="button"
+                disabled={zipDownloading || filteredPdfs.length === 0}
+                onClick={handleDownloadZip}
+                style={{
+                  padding: '10px 15px',
+                  background:
+                    zipDownloading || filteredPdfs.length === 0 ? '#b8c5d6' : '#4a6fa1',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor:
+                    zipDownloading || filteredPdfs.length === 0 ? 'not-allowed' : 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  whiteSpace: 'nowrap' as const
+                }}
+              >
+                {zipDownloading ? 'Preparing ZIP…' : '📦 Download ZIP'}
+              </button>
+            )}
+
+            {selectedOffice && dateFilter && (
+              <button
+                onClick={() => setDateFilter('')}
+                style={{
+                  padding: '10px 15px',
+                  background: '#ff6b6b',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: '600'
+                }}
+              >
+                Clear Filters
+              </button>
             )}
         </div>
 
@@ -628,6 +730,33 @@ export default function EndOfDay() {
             }
           }}
         >
+          {pdfNavShowPrev && (
+            <button
+              type="button"
+              aria-label="Previous PDF"
+              onClick={(e) => {
+                e.stopPropagation();
+                goToPrevPdf();
+              }}
+              style={{ ...navArrowButton, left: '16px' }}
+            >
+              ‹
+            </button>
+          )}
+          {pdfNavShowNext && (
+            <button
+              type="button"
+              aria-label="Next PDF"
+              onClick={(e) => {
+                e.stopPropagation();
+                goToNextPdf();
+              }}
+              style={{ ...navArrowButton, right: '16px' }}
+            >
+              ›
+            </button>
+          )}
+
           {/* 닫기 버튼 */}
           <button
             onClick={closeViewer}
