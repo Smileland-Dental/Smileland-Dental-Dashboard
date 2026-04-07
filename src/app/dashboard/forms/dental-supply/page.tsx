@@ -2,9 +2,26 @@
 
 import React, { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { collection, getDocs, addDoc, doc, setDoc, deleteDoc, getDoc, query, where, updateDoc } from "firebase/firestore";
+import {
+  collection,
+  getDocs,
+  doc,
+  getDoc,
+  setDoc,
+  serverTimestamp,
+} from "firebase/firestore";
+import {
+  getStorage,
+  ref,
+  uploadBytes,
+  listAll,
+  getMetadata,
+  getDownloadURL,
+  type StorageReference,
+} from "firebase/storage";
 import { db, auth } from "@/lib/firebase.config";
 import { onAuthStateChanged } from 'firebase/auth';
+import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 
 // Firebase 데이터 sanitization (prototype pollution 방지, 값 검증)
@@ -57,6 +74,212 @@ function getSafeUrl(url: string | undefined | null): string | null {
   }
 }
 
+function pdfSafeStr(v: unknown, max: number): string {
+  if (v == null) return '';
+  return String(v).trim().slice(0, max).replace(/[<>]/g, '');
+}
+
+/** Storage 폴더(날짜)와 PDF 파일명 접미사용 — LA 기준, 시간은 HH-mm-ss */
+function getCaliforniaDateAndTimeForSupplyPdf(): { dateFolder: string; timeSuffix: string } {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+  const y = parts.find((p) => p.type === 'year')?.value || '';
+  const m = parts.find((p) => p.type === 'month')?.value || '';
+  const d = parts.find((p) => p.type === 'day')?.value || '';
+  const h = parts.find((p) => p.type === 'hour')?.value || '';
+  const min = parts.find((p) => p.type === 'minute')?.value || '';
+  const s = parts.find((p) => p.type === 'second')?.value || '';
+  return {
+    dateFolder: `${y}-${m}-${d}`,
+    timeSuffix: `${h}${min}${s}`,
+  };
+}
+
+function sanitizeSupplyPdfFilename(name: string): string {
+  return name.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 200);
+}
+
+/** 제출 시각(orderDate ISO) → LA 기준 YYYY-MM-DD (PDF 업로드 폴더와 동일) */
+type SupplyPdfRow = {
+  idx: number;
+  supplyType: string;
+  category: string;
+  item: string;
+  extraInfo: string;
+  seller: string;
+  code: string;
+  quantity: number;
+};
+
+function normalizeSupplyStoragePath(path: string): string | null {
+  if (typeof path !== 'string' || !path.trim()) return null;
+  const p = path.trim().replace(/^\/*/, '');
+  if (!p || p.includes('..') || p.includes('//') || p.length > 1024) return null;
+  return p;
+}
+
+/** 문서 ID `{office}_{YYYY-MM-DD}_{시간}`. 필드: `office_status`, `manager_status`(Supply Manager), `updateAt` */
+const SUPPLY_ORDER_PDF_STATUS_COLLECTION = "supply-order-pdf-status";
+
+type SupplyOrderPdfStatus = "requested" | "received";
+
+/** 제출 시점의 오피스·날짜(LA)·시간 접미사로 상태 문서 ID 생성 */
+function buildSupplyOrderPdfStatusDocId(
+  office: string,
+  dateFolder: string,
+  timeSuffix: string
+): string | null {
+  const o = String(office).trim();
+  const d = String(dateFolder).trim();
+  const t = String(timeSuffix).trim();
+  if (!o || !/^\d{4}-\d{2}-\d{2}$/.test(d) || !t) return null;
+  if (!/^[a-zA-Z0-9_-]+$/.test(o)) return null;
+  if (!/^[0-9A-Za-z-]+$/.test(t)) return null;
+  const id = `${o}_${d}_${t}`;
+  return id.length > 800 ? id.slice(0, 800) : id;
+}
+
+/** Storage 경로·파일명에서 오피스·날짜·시간을 읽어 동일한 문서 ID 계산 (목록·상태 변경 시) */
+function supplyOrderPdfStatusDocIdFromStoragePath(storagePath: string): string | null {
+  const n = normalizeSupplyStoragePath(storagePath);
+  if (!n) return null;
+  const segments = n.split("/").filter(Boolean);
+  if (segments.length < 4 || segments[0] !== "orders") return null;
+  const office = segments[1];
+  const dateFolder = segments[2];
+  const filename = segments[segments.length - 1];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFolder)) return null;
+  const base = filename.replace(/\.pdf$/i, "");
+  const expectedPrefix = `Supply_Order_${office}_${dateFolder}_`;
+  if (!base.startsWith(expectedPrefix)) return null;
+  const timeSuffix = base.slice(expectedPrefix.length);
+  if (!timeSuffix) return null;
+  return buildSupplyOrderPdfStatusDocId(office, dateFolder, timeSuffix);
+}
+
+function parseSupplyOrderPdfStatusFromFirestore(
+  data: Record<string, unknown>
+): SupplyOrderPdfStatus {
+  const raw =
+    data.office_status !== undefined ? data.office_status : data.status;
+  return raw === "received" ? "received" : "requested";
+}
+
+type SupplyOrderPdfEntry = {
+  id: string;
+  path: string;
+  filename: string;
+  createdAt: Date;
+  dateFolder: string;
+  status: SupplyOrderPdfStatus;
+};
+
+const supplyPdfStyles = StyleSheet.create({
+  page: { padding: 24, fontFamily: 'Helvetica', fontSize: 8 },
+  headerBox: { marginBottom: 10 },
+  title: { fontSize: 14, fontWeight: 'bold', marginBottom: 6, color: '#000000' },
+  meta: { fontSize: 9, marginBottom: 2, color: '#444444' },
+  table: { marginTop: 6 },
+  rowHeader: {
+    flexDirection: 'row',
+    backgroundColor: '#e8e8e8',
+    borderBottomWidth: 1,
+    borderColor: '#000000',
+  },
+  row: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#cccccc' },
+  th: { padding: 5, fontSize: 7, fontWeight: 'bold', color: '#000000' },
+  td: { padding: 4, fontSize: 7, color: '#222222' },
+  colIdx: { width: '6%' },
+  colType: { width: '10%' },
+  colCat: { width: '12%' },
+  colItem: { width: '24%' },
+  colExtra: { width: '18%' },
+  colSeller: { width: '10%' },
+  colCode: { width: '10%' },
+  colQty: { width: '10%' },
+  footer: { marginTop: 14, fontSize: 8, color: '#666666' },
+});
+
+function SupplyOrderPdfDocument({
+  office,
+  orderDateFormatted,
+  generatedAt,
+  rows,
+}: {
+  office: string;
+  orderDateFormatted: string;
+  generatedAt: string;
+  rows: SupplyPdfRow[];
+}) {
+  const ROWS_PER_PAGE = 22;
+  const pages: SupplyPdfRow[][] = [];
+  for (let i = 0; i < rows.length; i += ROWS_PER_PAGE) {
+    pages.push(rows.slice(i, i + ROWS_PER_PAGE));
+  }
+  const s = supplyPdfStyles;
+
+  return (
+    <Document>
+      {pages.map((chunk, pageIndex) => (
+        <Page key={pageIndex} size="A4" style={s.page}>
+          <View style={s.headerBox}>
+            {pageIndex === 0 ? (
+              <>
+                <Text style={s.title}>Supply Order</Text>
+                <Text style={s.meta}>Office: {pdfSafeStr(office, 80)}</Text>
+                <Text style={s.meta}>Order date: {pdfSafeStr(orderDateFormatted, 120)}</Text>
+              </>
+            ) : (
+              <Text style={s.title}>Supply Order (continued)</Text>
+            )}
+            {pages.length > 1 ? (
+              <Text style={s.meta}>
+                Page {pageIndex + 1} of {pages.length}
+              </Text>
+            ) : null}
+          </View>
+          <View style={s.table}>
+            <View style={s.rowHeader}>
+              <Text style={[s.th, s.colIdx]}>#</Text>
+              <Text style={[s.th, s.colType]}>Type</Text>
+              <Text style={[s.th, s.colCat]}>Category</Text>
+              <Text style={[s.th, s.colItem]}>Item</Text>
+              <Text style={[s.th, s.colExtra]}>Extra</Text>
+              <Text style={[s.th, s.colSeller]}>Seller</Text>
+              <Text style={[s.th, s.colCode]}>Code</Text>
+              <Text style={[s.th, s.colQty]}>Qty</Text>
+            </View>
+            {chunk.map((r) => (
+              <View key={r.idx} style={s.row}>
+                <Text style={[s.td, s.colIdx]}>{String(r.idx)}</Text>
+                <Text style={[s.td, s.colType]}>{pdfSafeStr(r.supplyType, 20)}</Text>
+                <Text style={[s.td, s.colCat]}>{pdfSafeStr(r.category, 40)}</Text>
+                <Text style={[s.td, s.colItem]}>{pdfSafeStr(r.item, 200)}</Text>
+                <Text style={[s.td, s.colExtra]}>{pdfSafeStr(r.extraInfo, 120)}</Text>
+                <Text style={[s.td, s.colSeller]}>{pdfSafeStr(r.seller, 30)}</Text>
+                <Text style={[s.td, s.colCode]}>{pdfSafeStr(r.code, 40)}</Text>
+                <Text style={[s.td, s.colQty]}>{String(r.quantity)}</Text>
+              </View>
+            ))}
+          </View>
+          {pageIndex === pages.length - 1 ? (
+            <Text style={s.footer}>Generated: {pdfSafeStr(generatedAt, 120)}</Text>
+          ) : null}
+        </Page>
+      ))}
+    </Document>
+  );
+}
+
 // 개별 아이템 행 컴포넌트
 const ItemRow = React.memo(({ 
   item, 
@@ -81,39 +304,13 @@ const ItemRow = React.memo(({
       <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>
         {item.displayId}
       </td>
-      {supplyType === 'processing-request' && (
-        <td style={{ padding: '8px', textAlign: 'center' }}>
-          <span style={{
-            padding: '4px 8px',
-            borderRadius: '4px',
-            fontSize: '12px',
-            fontWeight: 'bold',
-            backgroundColor: item.supplyType === 'dental' ? '#e7f3ff' : '#f0f8ff',
-            color: item.supplyType === 'dental' ? '#0077B6' : '#495057'
-          }}>
-            {item.supplyType === 'dental' ? 'Dental' : 'Office'}
-          </span>
-        </td>
-      )}
       {supplyType === 'dental' && (
         <td style={{ padding: '8px' }}>
           {item.category}
         </td>
       )}
       <td style={{ padding: '8px' }}>
-        {supplyType === 'processing-request' ? (
-          <div>
-            <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-              {item.item}
-            </div>
-            <div style={{ fontSize: '12px', color: '#666' }}>
-              📅 {item.orderDate ? new Date(item.orderDate).toLocaleDateString() : 'N/A'} | 
-              🆔 Order #{item.requestDisplayId}
-            </div>
-          </div>
-        ) : (
-          item.item
-        )}
+        {item.item}
       </td>
       <td style={{ padding: '8px' }}>
         {item.extraInfo}
@@ -137,36 +334,19 @@ const ItemRow = React.memo(({
       </td>
       <td style={{ padding: '8px', textAlign: 'center' }}>
         {item.seller === 'JB' ? (
-          supplyType === 'processing-request' ? (
-            // Processing Request에서는 읽기 전용으로 quantity 표시
-            <span style={{
-              display: 'inline-block',
-              padding: '4px 8px',
-              backgroundColor: '#e9ecef',
-              borderRadius: '4px',
-              fontWeight: 'bold',
-              color: '#495057',
-              minWidth: '60px',
-              textAlign: 'center'
-            }}>
-              {supplyType === 'processing-request' ? (item.quantity || '0') : (displayValue || '0')}
-            </span>
-          ) : (
-            // Dental/Office Supply에서는 입력 가능
-            <input
-              type="number"
-              min="0"
-              value={displayValue}
-              onChange={(e) => onQuantityChange(item.id, e.target.value)}
-              placeholder="0"
-              style={{
-                ...inputStyle,
-                width: '80px',
-                textAlign: 'center',
-                padding: '4px 8px'
-              }}
-            />
-          )
+          <input
+            type="number"
+            min="0"
+            value={displayValue}
+            onChange={(e) => onQuantityChange(item.id, e.target.value)}
+            placeholder="0"
+            style={{
+              ...inputStyle,
+              width: '80px',
+              textAlign: 'center',
+              padding: '4px 8px'
+            }}
+          />
         ) : (
           ''
         )}
@@ -194,7 +374,7 @@ function SupplyViewSystemContent() {
   const searchParams = useSearchParams();
   
   // Supply type 상태
-  const [supplyType, setSupplyType] = useState('dental'); // 'dental', 'office', or 'processing-request'
+  const [supplyType, setSupplyType] = useState('dental'); // 'dental' | 'office' | 'processing-order'
   
   // 기본 상태
   const [loading, setLoading] = useState(false);
@@ -211,6 +391,17 @@ function SupplyViewSystemContent() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [sellerFilter, setSellerFilter] = useState('');
   const [searchInput, setSearchInput] = useState('');
+  const [processingDateFilter, setProcessingDateFilter] = useState('');
+
+  const [processingPdfs, setProcessingPdfs] = useState<SupplyOrderPdfEntry[]>([]);
+  const [filteredProcessingPdfs, setFilteredProcessingPdfs] = useState<SupplyOrderPdfEntry[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+
+  const [viewingOrderPdf, setViewingOrderPdf] = useState<SupplyOrderPdfEntry | null>(null);
+  const [pdfStatusUpdatingPath, setPdfStatusUpdatingPath] = useState<string | null>(null);
+  const [processingPdfViewerUrl, setProcessingPdfViewerUrl] = useState<string | null>(null);
+  const [processingPdfViewerLoading, setProcessingPdfViewerLoading] = useState(false);
+  const [processingPdfViewerError, setProcessingPdfViewerError] = useState(false);
 
   // Order Quantity 상태 (오피스별로 분리 저장)
   const [orderQuantitiesByOffice, setOrderQuantitiesByOffice] = useState<{ [office: string]: { [itemId: string]: string | number } }>({});
@@ -220,48 +411,40 @@ function SupplyViewSystemContent() {
 
   // Office 선택 상태
   const [selectedOffice, setSelectedOffice] = useState('');
-  const [userOfficesOptions, setuserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
+  const [userOfficeBasedOptions, setuserOfficeBasedOptions] = useState<string[]>([]); // 사용자의 office_based 옵션들
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
-  
+
   // 현재 선택된 오피스의 orderQuantities
   const orderQuantities = orderQuantitiesByOffice[selectedOffice] || {};
   
   // 현재 선택된 오피스의 editingQuantities
   const editingQuantities = editingQuantitiesByOffice[selectedOffice] || {};
   
-  // Office 선택 시 임시 저장된 값들을 불러오는 함수
-  const handleOfficeSelect = useCallback(async (office: string) => {
+  // Office 선택 (example 컬렉션 미사용 — 수량은 이 세션 메모리에만 유지)
+  const handleOfficeSelect = useCallback((office: string) => {
     if (!office) return;
-    
     setSelectedOffice(office);
-    
-    // 임시 저장된 quantity 불러오기
-    try {
-      const draftRef = doc(db, 'office-draft-orders', office);
-      const draftSnap = await getDoc(draftRef);
-      
-      if (draftSnap.exists()) {
-        const draftData = sanitizeData(draftSnap.data());
-        setOrderQuantitiesByOffice(prev => ({
-          ...prev,
-          [office]: draftData.quantities || {}
-        }));
-      }
-    } catch (error) {
-      // 로드 실패 무시
-    }
   }, []);
   
   // debounce 타이머 저장
   const quantityTimersRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
-  
+  const prevSelectedOfficeForTempRef = useRef<string>('');
+  const pdfViewerBlobUrlRef = useRef<string | null>(null);
+
   // 이전 supplyType 추적 (useEffect에서 실제 변경 감지용)
   const prevSupplyTypeRef = useRef(supplyType);
   
   // Office 옵션 목록
   const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
-  const supplyTypeLabel = supplyType === 'dental' ? 'Dental' : (supplyType === 'office' ? 'Office' : 'Processing Request');
+  const supplyTypeLabel =
+    supplyType === 'dental'
+      ? 'Dental'
+      : supplyType === 'office'
+        ? 'Office'
+        : 'Processing Order';
+
+  const isProcessingOrders = supplyType === 'processing-order';
 
   // 카테고리 옵션 (실제 데이터에서 동적으로 생성)
   const categoryOptions = [...new Set(items.map(item => item.category).filter(Boolean))].sort();
@@ -269,7 +452,7 @@ function SupplyViewSystemContent() {
   // URL 파라미터에서 supply type 설정
   useEffect(() => {
     const type = searchParams.get('type');
-    if (type === 'dental' || type === 'office') {
+    if (type === 'dental' || type === 'office' || type === 'processing-order') {
       setSupplyType(type);
     }
   }, [searchParams]);
@@ -279,7 +462,7 @@ function SupplyViewSystemContent() {
     const supplyTypeChanged = prevSupplyTypeRef.current !== supplyType;
     prevSupplyTypeRef.current = supplyType;
 
-    // supply type 변경 전에 편집 중인 값들을 먼저 저장
+    // supply type 변경 전에 편집 중인 값들을 로컬 상태에만 반영
     if (supplyTypeChanged && selectedOffice && Object.keys(editingQuantities).length > 0) {
       const updatedQuantities = {
         ...(orderQuantitiesByOffice[selectedOffice] || {}),
@@ -289,21 +472,14 @@ function SupplyViewSystemContent() {
         ...prev,
         [selectedOffice]: updatedQuantities
       }));
-      // Firebase에 즉시 저장
-      saveDraftQuantities(selectedOffice, updatedQuantities);
     }
 
     if (supplyType === 'dental') {
       setItems(dentalItems);
     } else if (supplyType === 'office') {
       setItems(officeItems);
-    } else if (supplyType === 'processing-request' && supplyTypeChanged) {
-      // supplyType이 실제로 변경되었을 때만 items 초기화
-      // dentalItems/officeItems 변경으로 이 effect가 재실행될 때는 processing-request 데이터를 유지
+    } else if (supplyType === 'processing-order') {
       setItems([]);
-      if (selectedOffice) {
-        setLoading(true);
-      }
     }
 
     // supplyType이 실제로 변경되었을 때만 필터/편집 상태 초기화
@@ -311,112 +487,10 @@ function SupplyViewSystemContent() {
       setCategoryFilter('');
       setSellerFilter('');
       setSearchInput('');
+      setProcessingDateFilter('');
       setEditingQuantitiesByOffice({});
     }
   }, [supplyType, dentalItems, officeItems]);
-
-  // Processing Requests 로드 함수 (선택된 오피스의 주문 내역)
-  const loadProcessingRequests = useCallback(async () => {
-    
-    if (!selectedOffice) {
-      setItems([]);
-      return;
-    }
-
-    try {
-      setLoading(true);
-      // 서버 측에서 해당 오피스의 주문만 필터링하여 가져옴
-      const officeQuery = query(
-        collection(db, 'order-requests'),
-        where('office', '==', selectedOffice)
-      );
-      const requestsSnapshot = await getDocs(officeQuery);
-      
-      const requestsList: any[] = [];
-      
-      requestsSnapshot.forEach((doc) => {
-        const sanitizedData = sanitizeData(doc.data());
-        
-        // 사용자가 삭제한 주문은 제외
-        if (sanitizedData.deletedByUser === true) {
-          return;
-        }
-        
-        // 새로운 구조 (items 배열) 또는 기존 구조 (개별 문서) 처리
-        if (sanitizedData.items && sanitizedData.items.length > 0) {
-          const itemsWithQuantity = sanitizedData.items.map((item: any) => {
-            const quantity = sanitizedData.quantities?.[item.id] || 0;
-            return {
-              ...item,
-              quantity: quantity
-            };
-          });
-          
-          requestsList.push({ 
-            id: doc.id, 
-            ...sanitizedData,
-            items: itemsWithQuantity,
-            displayId: requestsList.length + 1
-          });
-        } else if (sanitizedData.item) {
-          const quantity = sanitizedData.quantity || 0;
-          const itemWithQuantity = {
-            ...sanitizedData,
-            quantity: quantity
-          };
-          
-          requestsList.push({ 
-            id: doc.id, 
-            ...sanitizedData,
-            items: [itemWithQuantity],
-            displayId: requestsList.length + 1
-          });
-        }
-      });
-
-      // 주문 날짜 기준 최신순 정렬
-      requestsList.sort((a, b) => {
-        return new Date(b.orderDate || 0).getTime() - new Date(a.orderDate || 0).getTime();
-      });
-
-      setItems(requestsList);
-    } catch (error) {
-      alert('❌ Error occured.');
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedOffice]);
-
-  // Processing Request 삭제 핸들러
-  const handleDeleteProcessingRequest = useCallback(async (orderId: string) => {
-    if (!confirm('Are you sure you want to delete this order?')) {
-      return;
-    }
-
-    try {
-      const orderRef = doc(db, 'order-requests', orderId);
-      const orderSnap = await getDoc(orderRef);
-
-      if (orderSnap.exists()) {
-        const data = orderSnap.data();
-        if (data.deletedByManager === true) {
-          // 양쪽 모두 삭제 확인 → Firestore에서 실제 삭제
-          await deleteDoc(orderRef);
-        } else {
-          // 사용자 측만 삭제 → soft-delete
-          await updateDoc(orderRef, sanitizeData({
-            deletedByUser: true,
-            lastUpdated: new Date().toISOString()
-          }));
-        }
-      }
-
-      // 로컬 상태에서 제거
-      setItems(prev => prev.filter(item => item.id !== orderId));
-    } catch (error) {
-      alert('❌ Failed to delete order.');
-    }
-  }, []);
 
   // Dental과 Office 데이터 모두 로드하는 함수
   const loadAllItems = useCallback(async () => {
@@ -451,8 +525,6 @@ function SupplyViewSystemContent() {
       });
       setOfficeItems(officeList);
       
-      // 현재 선택된 supply type에 맞는 items 설정
-      // processing-request일 때는 loadProcessingRequests가 items를 관리하므로 여기서 덮어쓰지 않음
       if (supplyType === 'dental') {
         setItems(dentalList);
       } else if (supplyType === 'office') {
@@ -465,12 +537,118 @@ function SupplyViewSystemContent() {
     }
   }, [supplyType]);
 
+  const loadSupplyOrderPdfs = useCallback(async () => {
+    if (!selectedOffice) {
+      setProcessingPdfs([]);
+      setFilteredProcessingPdfs([]);
+      return;
+    }
+    setOrdersLoading(true);
+    try {
+      const storage = getStorage();
+      const listRef = ref(storage, `orders/${selectedOffice}/`);
+      const collectSupplyOrderPdfs = async (
+        currentRef: StorageReference
+      ): Promise<StorageReference[]> => {
+        const current = await listAll(currentRef);
+        const direct = current.items.filter(
+          (it) =>
+            it.name.toLowerCase().endsWith('.pdf') &&
+            it.name.startsWith('Supply_Order_')
+        );
+        const nestedArrays = await Promise.all(
+          current.prefixes.map((prefixRef) => collectSupplyOrderPdfs(prefixRef))
+        );
+        return direct.concat(...nestedArrays);
+      };
+      const pdfItems = await collectSupplyOrderPdfs(listRef);
+      const baseList: SupplyOrderPdfEntry[] = await Promise.all(
+        pdfItems.map(async (item) => {
+          const meta = await getMetadata(item);
+          const createdAt = meta.timeCreated ? new Date(meta.timeCreated) : new Date();
+          const parts = item.fullPath.split('/').filter(Boolean);
+          const dateFolder =
+            parts.length >= 3 && /^\d{4}-\d{2}-\d{2}$/.test(parts[2]) ? parts[2] : '';
+          return {
+            id: item.fullPath,
+            path: item.fullPath,
+            filename: item.name,
+            createdAt,
+            dateFolder,
+            status: "requested" as SupplyOrderPdfStatus,
+          };
+        })
+      );
+      const list = await Promise.all(
+        baseList.map(async (entry) => {
+          const docId = supplyOrderPdfStatusDocIdFromStoragePath(entry.path);
+          if (!docId) return entry;
+          const snap = await getDoc(doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, docId));
+          if (!snap.exists()) return entry;
+          const data = sanitizeData(snap.data() || {});
+          return {
+            ...entry,
+            status: parseSupplyOrderPdfStatusFromFirestore(data),
+          };
+        })
+      );
+      list.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+      setProcessingPdfs(list);
+    } catch (e) {
+      console.error('loadSupplyOrderPdfs:', e);
+      alert('Failed to load supply order PDFs from storage.');
+      setProcessingPdfs([]);
+    } finally {
+      setOrdersLoading(false);
+    }
+  }, [selectedOffice]);
+
+  const handleSupplyOrderPdfStatusChange = useCallback(
+    async (order: SupplyOrderPdfEntry, value: SupplyOrderPdfStatus) => {
+      if (value !== "requested" && value !== "received") return;
+
+      setPdfStatusUpdatingPath(order.path);
+      try {
+        const docId = supplyOrderPdfStatusDocIdFromStoragePath(order.path);
+        if (!docId) throw new Error("invalid path");
+        await setDoc(
+          doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, docId),
+          {
+            office_status: value,
+            updateAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+        setProcessingPdfs((prev) =>
+          prev.map((o) =>
+            o.path === order.path ? { ...o, status: value } : o
+          )
+        );
+      } catch (err) {
+        console.error(err);
+        alert("Failed to update status.");
+      } finally {
+        setPdfStatusUpdatingPath(null);
+      }
+    },
+    []
+  );
+
   // 컴포넌트 마운트 시 데이터 로드
   useEffect(() => {
     loadAllItems();
   }, [loadAllItems]);
 
-  // 컴포넌트 마운트 시 사용자 인증, role 확인 및 offices 기반 오피스 자동 선택
+  useEffect(() => {
+    if (supplyType === 'processing-order' && selectedOffice) {
+      loadSupplyOrderPdfs();
+    } else if (supplyType === 'processing-order' && !selectedOffice) {
+      setProcessingPdfs([]);
+      setFilteredProcessingPdfs([]);
+    }
+  }, [supplyType, selectedOffice, loadSupplyOrderPdfs]);
+
+  // 컴포넌트 마운트 시 사용자 인증, role 확인 및 office_based 기반 오피스 자동 선택
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
@@ -490,7 +668,7 @@ function SupplyViewSystemContent() {
 
         const userData = sanitizeData(userDoc.data() || {});
 
-        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
+        if (userData?.role !== 'Manager') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           if (typeof window !== 'undefined') {
@@ -501,22 +679,20 @@ function SupplyViewSystemContent() {
 
         setIsAuthorized(true);
 
-        // offices 처리: 배열이거나 단일 값일 수 있음
-        if (userData?.offices) {
-          const OfficesArray = Array.isArray(userData.offices) 
-            ? userData.offices 
-            : [userData.offices];
+        // office_based 처리: 배열이거나 단일 값일 수 있음
+        if (userData?.office_based) {
+          const OfficeBasedArray = Array.isArray(userData.office_based) 
+            ? userData.office_based 
+            : [userData.office_based];
           
           // officeOptions에 포함된 값들만 필터링
-          const validOptions = OfficesArray.filter((g: string) => officeOptions.includes(g));
+          const validOptions = OfficeBasedArray.filter((g: string) => officeOptions.includes(g));
           
           if (validOptions.length > 0) {
-            setuserOfficesOptions(validOptions);
+            setuserOfficeBasedOptions(validOptions);
             // 단일 값이면 자동 선택 (비밀번호 없이)
             if (validOptions.length === 1) {
               setSelectedOffice(validOptions[0]);
-              // 자동 선택된 오피스의 draft 불러오기
-              loadDraftQuantities(validOptions[0]);
             }
           }
         }
@@ -538,75 +714,48 @@ function SupplyViewSystemContent() {
     };
   }, []);
 
-  // 컴포넌트 언마운트 시 타이머 정리 + 편집 중인 값 저장
+  // 컴포넌트 언마운트 시 debounce 타이머만 정리 (example 저장 없음)
   useEffect(() => {
     return () => {
-      // 언마운트 전에 편집 중인 값들을 먼저 저장 (모든 오피스)
-      Object.keys(editingQuantitiesByOffice).forEach(office => {
-        // office 미선택 상태로 생성된 임시 키('temp')는 저장 금지
-        if (!office || office === 'temp') {
-          return;
-        }
-        const editingValues = editingQuantitiesByOffice[office];
-        if (Object.keys(editingValues).length > 0) {
-          const updatedQuantities = {
-            ...(orderQuantitiesByOffice[office] || {}),
-            ...editingValues
-          };
-          // 동기적으로 Firebase에 저장 (async 불가능하므로 best effort)
-          const draftRef = doc(db, 'office-draft-orders', office);
-          const draftData = sanitizeData({
-            office: office,
-            quantities: updatedQuantities,
-            lastUpdated: new Date().toISOString()
-          });
-          setDoc(draftRef, draftData).catch(() => {});
-        }
-      });
-      
-      // 타이머 정리
       Object.keys(quantityTimersRef.current).forEach((key) => {
         clearTimeout(quantityTimersRef.current[key]);
       });
     };
-  }, [selectedOffice, editingQuantitiesByOffice, orderQuantitiesByOffice]);
+  }, []);
 
-  // supply type 변경 시 편집 중인 값 초기화 (office 변경은 유지)
+  // Office가 바뀔 때만 temp 버킷 제거 (입력마다 effect 실행되지 않도록 deps에 editing 상태 미포함)
   useEffect(() => {
-    if (selectedOffice) {
-      setEditingQuantitiesByOffice(prev => ({
-        ...prev,
-        [selectedOffice]: {}
-      }));
-    }
-  }, [supplyType, selectedOffice]);
+    const prev = prevSelectedOfficeForTempRef.current;
+    prevSelectedOfficeForTempRef.current = selectedOffice;
+    if (!selectedOffice || prev === selectedOffice) return;
+    setEditingQuantitiesByOffice((p) => {
+      if (!p.temp || Object.keys(p.temp).length === 0) return p;
+      return { ...p, temp: {} };
+    });
+  }, [selectedOffice]);
 
-  // Office 선택 시 임시 값(temp)을 폐기하여 사전 입력이 따라오지 않도록 처리
+  // 필터 변경 시 데이터 필터링 (Dental / Office)
   useEffect(() => {
-    if (selectedOffice && editingQuantitiesByOffice['temp'] && Object.keys(editingQuantitiesByOffice['temp']).length > 0) {
-      setEditingQuantitiesByOffice(prev => ({
-        ...prev,
-        temp: {}
-      }));
-    }
-  }, [selectedOffice, editingQuantitiesByOffice]);
-
-  // selectedOffice 변경 시 Processing Request 로드
-  useEffect(() => {
-    if (supplyType === 'processing-request' && selectedOffice) {
-      loadProcessingRequests();
-    }
-  }, [selectedOffice, supplyType, loadProcessingRequests]);
-
-  // 필터 변경 시 데이터 필터링
-  useEffect(() => {
+    if (supplyType === 'processing-order') return;
     filterItems();
-  }, [items, categoryFilter, sellerFilter, searchInput]);
+  }, [items, categoryFilter, sellerFilter, searchInput, supplyType]);
 
-  // 페이지 변경 시 필터링된 데이터 업데이트
+  useEffect(() => {
+    if (supplyType !== 'processing-order') return;
+    let f = [...processingPdfs];
+    if (processingDateFilter) {
+      f = f.filter((p) => p.dateFolder === processingDateFilter);
+    }
+    if (searchInput.trim()) {
+      const q = searchInput.trim().toLowerCase();
+      f = f.filter((p) => p.filename.toLowerCase().includes(q));
+    }
+    setFilteredProcessingPdfs(f);
+  }, [supplyType, processingPdfs, processingDateFilter, searchInput]);
+
   useEffect(() => {
     setCurrentPage(1);
-  }, [categoryFilter, sellerFilter, searchInput]);
+  }, [categoryFilter, sellerFilter, searchInput, supplyType, processingDateFilter]);
 
   // 필터링 함수
   const filterItems = () => {
@@ -632,55 +781,26 @@ function SupplyViewSystemContent() {
     setFilteredItems(filtered);
   };
 
+  const listForPage = isProcessingOrders ? filteredProcessingPdfs : filteredItems;
+  const mainLoading = isProcessingOrders ? ordersLoading : loading;
+
+  const orderDateFolders: string[] = processingPdfs
+    .map((p) => p.dateFolder)
+    .filter((d): d is string => typeof d === 'string' && d.length > 0);
+  const processingDateOptions = [...new Set(orderDateFolders)].sort((a, b) => b.localeCompare(a));
+
   // 페이지네이션 계산
-  const totalPages = Math.ceil(filteredItems.length / itemsPerPage);
+  const totalPages = Math.ceil(listForPage.length / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = startIndex + itemsPerPage;
-  const currentPageItems = filteredItems.slice(startIndex, endIndex);
+  const currentPageItems = listForPage.slice(startIndex, endIndex);
 
   // 페이지 변경 함수
   const goToPage = (page: number) => {
     setCurrentPage(page);
   };
 
-  // Firebase에서 오피스별 임시 저장된 quantity 불러오기
-  const loadDraftQuantities = useCallback(async (office: string) => {
-    if (!office) return;
-    
-    try {
-      const draftRef = doc(db, 'office-draft-orders', office);
-      const draftSnap = await getDoc(draftRef);
-      
-      if (draftSnap.exists()) {
-        const draftData = sanitizeData(draftSnap.data());
-        setOrderQuantitiesByOffice(prev => ({
-          ...prev,
-          [office]: draftData.quantities || {}
-        }));
-      }
-    } catch (error) {
-      // 로드 실패 무시
-    }
-  }, []);
-
-  // Firebase에 오피스별 임시 quantity 저장
-  const saveDraftQuantities = useCallback(async (office: string, quantities: { [itemId: string]: string | number }) => {
-    if (!office || office === 'temp') return;
-    
-    try {
-      const draftRef = doc(db, 'office-draft-orders', office);
-      const draftData = sanitizeData({
-        office: office,
-        quantities: quantities,
-        lastUpdated: new Date().toISOString()
-      });
-      await setDoc(draftRef, draftData);
-    } catch (error) {
-      // 저장 실패 무시
-    }
-  }, []);
-
-  // Order Quantity 변경 핸들러 (편집 중인 값을 별도 관리 + Firebase에 저장)
+  // Order Quantity 변경 핸들러 (편집 중인 값을 별도 관리, DB example 없음)
   const handleQuantityChange = useCallback((itemId: string, value: string) => {
     
     // 편집 중인 값을 항상 저장 (office 선택 여부와 관계없이)
@@ -705,35 +825,33 @@ function SupplyViewSystemContent() {
       clearTimeout(quantityTimersRef.current[timerKey]);
     }
     
-    // 새 타이머 설정 (300ms 후 실제 상태 업데이트 + Firebase 저장)
+    // 새 타이머 설정 (300ms 후 로컬 orderQuantities만 갱신)
+    // orderQuantitiesByOffice는 클로저에 두지 않고 함수형 업데이트로 병합 → 다른 행 입력이 서로 덮어쓰지 않음
     quantityTimersRef.current[timerKey] = setTimeout(() => {
-      const updatedQuantities = {
-        ...(orderQuantitiesByOffice[selectedOffice] || {}),
-        [itemId]: value
-      };
-      
-      setOrderQuantitiesByOffice(prev => ({
-        ...prev,
-        [selectedOffice]: updatedQuantities
-      }));
-      
-      // Firebase에 임시 저장
-      saveDraftQuantities(selectedOffice, updatedQuantities);
-      
-      // 편집 완료된 값 제거 (오피스별로)
-      setEditingQuantitiesByOffice(prev => {
+      setOrderQuantitiesByOffice((prev) => {
+        const officeKey = selectedOffice;
+        const prevOffice = prev[officeKey] || {};
+        return {
+          ...prev,
+          [officeKey]: {
+            ...prevOffice,
+            [itemId]: value,
+          },
+        };
+      });
+
+      setEditingQuantitiesByOffice((prev) => {
         const officeQuantities = prev[selectedOffice] || {};
         const { [itemId]: _, ...restQuantities } = officeQuantities;
         return {
           ...prev,
-          [selectedOffice]: restQuantities
+          [selectedOffice]: restQuantities,
         };
       });
-      
-      // 타이머 정리
+
       delete quantityTimersRef.current[timerKey];
     }, 300);
-  }, [selectedOffice, orderQuantitiesByOffice, saveDraftQuantities]);
+  }, [selectedOffice]);
 
   // 주문 제출 핸들러
   const handleSubmitOrder = useCallback(async () => {
@@ -763,72 +881,104 @@ function SupplyViewSystemContent() {
     try {
       setLoading(true);
 
-      // 주문 세션을 위한 고유 ID 생성
-      const orderSessionId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       const orderDate = new Date().toISOString();
 
-      // 주문 데이터를 하나의 문서로 저장 (items 배열 포함)
-      const orderData = sanitizeData({
-        orderSessionId: orderSessionId,
-        office: selectedOffice,
-        orderDate: orderDate,
-        status: 'pending',
-        items: orderedItems.map(item => ({
-          id: item.id,
-          category: item.category || '',
-          item: item.item,
-          extraInfo: item.extraInfo || '',
-          seller: item.seller,
-          code: item.code || '',
-          url: item.url || '',
-          supplyType: item.sourceType || 'dental'
-        })),
-        quantities: orderedItems.reduce((acc, item) => {
-          acc[item.id] = parseInt(String(currentOrderQuantities[item.id]));
-          return acc;
-        }, {} as { [itemId: string]: number })
+      const rows: SupplyPdfRow[] = orderedItems.map((item, index) => ({
+        idx: index + 1,
+        supplyType: item.sourceType === 'dental' ? 'Dental' : 'Office',
+        category: pdfSafeStr(item.category, 80),
+        item: pdfSafeStr(item.item, 500),
+        extraInfo: pdfSafeStr(item.extraInfo, 300),
+        seller: pdfSafeStr(item.seller, 40),
+        code: pdfSafeStr(item.code, 80),
+        quantity: parseInt(String(currentOrderQuantities[item.id]), 10) || 0,
+      }));
+
+      const orderDateFormatted = new Date(orderDate).toLocaleString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      });
+      const generatedAt = new Date().toLocaleString('en-US', {
+        timeZone: 'America/Los_Angeles',
+        dateStyle: 'full',
+        timeStyle: 'short',
       });
 
-      await addDoc(collection(db, 'order-requests'), orderData);
+      let pdfUploadOk = true;
+      try {
+        const storage = getStorage();
+        const { dateFolder, timeSuffix } = getCaliforniaDateAndTimeForSupplyPdf();
+        const pdfBlob = await pdf(
+          <SupplyOrderPdfDocument
+            office={selectedOffice}
+            orderDateFormatted={orderDateFormatted}
+            generatedAt={generatedAt}
+            rows={rows}
+          />
+        ).toBlob();
+        const fname = sanitizeSupplyPdfFilename(
+          `Supply_Order_${selectedOffice}_${dateFolder}_${timeSuffix}.pdf`
+        );
+        const storageRef = ref(storage, `orders/${selectedOffice}/${dateFolder}/${fname}`);
+        await uploadBytes(storageRef, pdfBlob);
+        const fullPath = `orders/${selectedOffice}/${dateFolder}/${fname}`;
+        const statusDocId = buildSupplyOrderPdfStatusDocId(
+          selectedOffice,
+          dateFolder,
+          timeSuffix
+        );
+        if (statusDocId) {
+          try {
+            await setDoc(
+              doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, statusDocId),
+              {
+                office_status: "requested",
+                updateAt: serverTimestamp(),
+              },
+              { merge: true }
+            );
+          } catch (statusErr) {
+            console.error("Supply order PDF status write failed:", statusErr);
+          }
+        }
+      } catch (pdfErr) {
+        pdfUploadOk = false;
+        console.error('Supply order PDF upload failed:', pdfErr);
+      }
 
-      // 주문 내역 요약
       const dentalCount = orderedItems.filter(item => item.sourceType === 'dental').length;
       const officeCount = orderedItems.filter(item => item.sourceType === 'office').length;
-      
-      let summary = `✅ Order submitted successfully!\n\n`;
-      summary += `Total: ${orderedItems.length} items from ${selectedOffice}\n`;
-      if (dentalCount > 0) summary += `Dental: ${dentalCount} items\n`;
-      if (officeCount > 0) summary += `Office: ${officeCount} items`;
-      
+
+      if (!pdfUploadOk) {
+        alert(
+          `❌ Could not save the order PDF to storage.\n\nThe order was not recorded. Please try again or contact staff.\n\nPrepared: ${orderedItems.length} item(s) from ${selectedOffice}.`
+        );
+        return;
+      }
+
+      let summary = `✅ Order PDF saved successfully.\n\n`;
+      summary += `Total: ${orderedItems.length} item(s) from ${selectedOffice}\n`;
+      if (dentalCount > 0) summary += `Dental: ${dentalCount} item(s)\n`;
+      if (officeCount > 0) summary += `Office: ${officeCount} item(s)`;
+
       alert(summary);
-      
-      // 주문 후 완전한 페이지 리셋
+
       setOrderQuantitiesByOffice(prev => ({
         ...prev,
         [selectedOffice]: {}
       }));
-      
-      // 편집 중인 값들도 초기화
+
       setEditingQuantitiesByOffice(prev => ({
         ...prev,
         [selectedOffice]: {}
       }));
-      
-      // 필터 및 검색 초기화
+
       setCategoryFilter('');
       setSellerFilter('');
       setSearchInput('');
-      
-      // 페이지 초기화
+
       setCurrentPage(1);
-      
-      // Firebase에서 임시 저장 삭제
-      try {
-        const draftRef = doc(db, 'office-draft-orders', selectedOffice);
-        await deleteDoc(draftRef);
-      } catch (error) {
-        // Draft 삭제 실패해도 주문은 완료됐으므로 에러 무시
-      }
       
     } catch (error) {
       alert('❌ Failed to submit order. Please try again.');
@@ -836,6 +986,72 @@ function SupplyViewSystemContent() {
       setLoading(false);
     }
   }, [selectedOffice, dentalItems, officeItems, orderQuantitiesByOffice, editingQuantitiesByOffice]);
+
+  useEffect(() => {
+    const revokeBlob = () => {
+      if (pdfViewerBlobUrlRef.current) {
+        URL.revokeObjectURL(pdfViewerBlobUrlRef.current);
+        pdfViewerBlobUrlRef.current = null;
+      }
+    };
+
+    if (!viewingOrderPdf?.path) {
+      revokeBlob();
+      setProcessingPdfViewerUrl(null);
+      setProcessingPdfViewerLoading(false);
+      setProcessingPdfViewerError(false);
+      return;
+    }
+    const p = normalizeSupplyStoragePath(viewingOrderPdf.path);
+    if (!p) {
+      revokeBlob();
+      setProcessingPdfViewerError(true);
+      setProcessingPdfViewerLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setProcessingPdfViewerLoading(true);
+    setProcessingPdfViewerError(false);
+    setProcessingPdfViewerUrl(null);
+    revokeBlob();
+
+    const storageRef = ref(getStorage(), p);
+    getDownloadURL(storageRef)
+      .then(async (url) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
+        const blob = await res.blob();
+        if (cancelled) return;
+        revokeBlob();
+        const blobUrl = URL.createObjectURL(blob);
+        pdfViewerBlobUrlRef.current = blobUrl;
+        setProcessingPdfViewerUrl(blobUrl);
+        setProcessingPdfViewerLoading(false);
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) {
+          setProcessingPdfViewerError(true);
+          setProcessingPdfViewerLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+      revokeBlob();
+    };
+  }, [viewingOrderPdf]);
+
+  useEffect(() => {
+    if (!viewingOrderPdf) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setViewingOrderPdf(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [viewingOrderPdf]);
 
   // 스타일 정의
   const containerStyle = {
@@ -980,6 +1196,7 @@ function SupplyViewSystemContent() {
   }
 
   return (
+    <>
     <div style={bodyStyle}>
       <div style={containerStyle}>
         {/* 헤더 + Office 선택 */}
@@ -1006,7 +1223,7 @@ function SupplyViewSystemContent() {
             <label style={{ display: 'block', marginBottom: '8px', fontWeight: 'bold', color: '#495057', fontSize: '14px' }}>
               Select Office:
             </label>
-            {userOfficesOptions.length === 1 ? (
+            {userOfficeBasedOptions.length === 1 ? (
               <span style={{
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -1034,7 +1251,7 @@ function SupplyViewSystemContent() {
                 }}
               >
                 <option value="">-- Select an Office --</option>
-                {(userOfficesOptions.length > 0 ? userOfficesOptions : officeOptions).map(office => (
+                {(userOfficeBasedOptions.length > 0 ? userOfficeBasedOptions : officeOptions).map(office => (
                   <option key={office} value={office}>{office}</option>
                 ))}
               </select>
@@ -1044,7 +1261,6 @@ function SupplyViewSystemContent() {
 
         {/* Supply Type 선택 */}
         <div style={sectionStyle}>
-          <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>Supply Type Selection</h2>
           <div style={{ display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}>
               <input
@@ -1072,18 +1288,20 @@ function SupplyViewSystemContent() {
               <input
                 type="radio"
                 name="supplyType"
-                value="processing-request"
-                checked={supplyType === 'processing-request'}
+                value="processing-order"
+                checked={supplyType === 'processing-order'}
                 onChange={(e) => setSupplyType(e.target.value)}
                 disabled={!selectedOffice}
                 style={{ margin: 0 }}
               />
-              <span style={{ 
-                fontSize: '16px', 
-                fontWeight: 'bold',
-                color: !selectedOffice ? '#ccc' : 'inherit'
-              }}>
-                Processing Request
+              <span
+                style={{
+                  fontSize: '16px',
+                  fontWeight: 'bold',
+                  color: !selectedOffice ? '#ccc' : 'inherit',
+                }}
+              >
+                Processing Order
                 {!selectedOffice && ' (Select Office First)'}
               </span>
             </label>
@@ -1092,247 +1310,235 @@ function SupplyViewSystemContent() {
 
         {/* 통합 아이템 관리 섹션 */}
         <div style={sectionStyle}>
-          {/* 헤더와 통계 정보 */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
-            <h2 style={{ color: '#0077B6', margin: 0 }}>{supplyTypeLabel} Supply Items</h2>
-            <div style={{ 
-              fontSize: '14px',
-              color: '#666'
-            }}>
-               {filteredItems.length} of {items.length} {supplyType === 'processing-request' ? 'orders' : 'items'}
-              {categoryFilter && ` • ${categoryFilter}`}
-              {sellerFilter && ` • ${sellerFilter}`}
-              {searchInput && ` • "${searchInput}"`}
-            </div>
-          </div>
-          
-          {/* 필터 컨트롤 - Processing Request가 아닐 때만 표시 */}
-          {supplyType !== 'processing-request' && (
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
-            {supplyType === 'dental' && (
-              <div style={{ flex: '1', minWidth: '200px' }}>
-                <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                  Category:
-                </label>
-                <select
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                  style={inputStyle}
-                >
-                  <option value="">All Categories</option>
-                  {categoryOptions.map(category => (
-                    <option key={category} value={category}>{category}</option>
-                  ))}
-                </select>
-              </div>
+            {isProcessingOrders ? (
+              <>
+                <div style={{ flex: '1', minWidth: '200px' }}>
+                  <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                    Order date (folder):
+                  </label>
+                  <select
+                    value={processingDateFilter}
+                    onChange={(e) => setProcessingDateFilter(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">All dates</option>
+                    {processingDateOptions.map((d) => (
+                      <option key={d} value={d}>
+                        {d}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ flex: '1', minWidth: '200px' }}>
+                  <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                    Search:
+                  </label>
+                  <input
+                    type="text"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    placeholder="Search by file name..."
+                    style={inputStyle}
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                {supplyType === 'dental' && (
+                  <div style={{ flex: '1', minWidth: '200px' }}>
+                    <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                      Category:
+                    </label>
+                    <select
+                      value={categoryFilter}
+                      onChange={(e) => setCategoryFilter(e.target.value)}
+                      style={inputStyle}
+                    >
+                      <option value="">All Categories</option>
+                      {categoryOptions.map(category => (
+                        <option key={category} value={category}>{category}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                <div style={{ flex: '1', minWidth: '200px' }}>
+                  <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                    Seller:
+                  </label>
+                  <select
+                    value={sellerFilter}
+                    onChange={(e) => setSellerFilter(e.target.value)}
+                    style={inputStyle}
+                  >
+                    <option value="">All Sellers</option>
+                    {[...new Set(items.map(item => item.seller).filter(Boolean))].sort().map(seller => (
+                      <option key={seller} value={seller}>{seller}</option>
+                    ))}
+                  </select>
+                </div>
+                <div style={{ flex: '1', minWidth: '200px' }}>
+                  <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
+                    Search:
+                  </label>
+                  <input
+                    type="text"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    placeholder="Search item name..."
+                    style={inputStyle}
+                  />
+                </div>
+              </>
             )}
-            
-            <div style={{ flex: '1', minWidth: '200px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                Seller:
-              </label>
-              <select
-                value={sellerFilter}
-                onChange={(e) => setSellerFilter(e.target.value)}
-                style={inputStyle}
-              >
-                <option value="">All Sellers</option>
-                {[...new Set(items.map(item => item.seller).filter(Boolean))].sort().map(seller => (
-                  <option key={seller} value={seller}>{seller}</option>
-                ))}
-              </select>
-            </div>
-
-            <div style={{ flex: '1', minWidth: '200px' }}>
-              <label style={{ display: 'block', marginBottom: '5px', fontWeight: 'bold' }}>
-                Search:
-              </label>
-              <input
-                type="text"
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                placeholder="Search item name..."
-                style={inputStyle}
-              />
-            </div>
 
             <div style={{ flex: '1', minWidth: '200px', display: 'flex', alignItems: 'end' }}>
               <button 
-                onClick={loadAllItems}
-                disabled={loading}
+                type="button"
+                onClick={() => (isProcessingOrders ? loadSupplyOrderPdfs() : loadAllItems())}
+                disabled={mainLoading}
                 style={{
                   ...buttonStyle,
                   backgroundColor: '#28a745',
                   width: '100%'
                 }}
               >
-                {loading ? 'Loading...' : '🔄 Refresh Data'}
+                {mainLoading ? 'Loading...' : '🔄 Refresh Data'}
               </button>
             </div>
           </div>
-          )}
           
-          {loading ? (
+          {mainLoading ? (
             <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
-              Loading items...
+              {isProcessingOrders ? 'Loading order PDFs...' : 'Loading items...'}
             </div>
-          ) : filteredItems.length === 0 ? (
+          ) : listForPage.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
-              No items found for the selected criteria.
+              {isProcessingOrders
+                ? 'No supply order PDFs found for this office. Submit an order from Dental or Office Supply first.'
+                : 'No items found for the selected criteria.'}
             </div>
-          ) : supplyType === 'processing-request' ? (
-            // Processing Request: 주문별로 그룹화하여 표시
+          ) : isProcessingOrders ? (
             <div style={{ overflowX: 'auto' }}>
               {currentPageItems.map((order, orderIndex) => (
-                <div key={order.id} style={{ marginBottom: '30px', border: '1px solid #e0e0e0', borderRadius: '8px', overflow: 'hidden' }}>
-                  {/* 주문 헤더 */}
-                  <div style={{ 
-                    backgroundColor: order.deletedByManager ? '#28a745' : '#0077B6', 
-                    color: 'white', 
-                    padding: '15px 20px',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center'
-                  }}>
-                    <div>
-                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        Order #{startIndex + orderIndex + 1}
-                        {order.deletedByManager ? (
-                          <span style={{
-                            fontSize: '13px',
-                            padding: '3px 10px',
-                            borderRadius: '12px',
-                            backgroundColor: 'rgba(255,255,255,0.25)',
-                            fontWeight: '600'
-                          }}>
-                            ✅ Completed
-                          </span>
-                        ) : order.status === 'processing' ? (
-                          <span style={{
-                            fontSize: '13px',
-                            padding: '3px 10px',
-                            borderRadius: '12px',
-                            backgroundColor: 'rgba(255,255,255,0.25)',
-                            fontWeight: '600'
-                          }}>
-                            🔄 Processing
-                          </span>
-                        ) : (
-                          <span style={{
-                            fontSize: '13px',
-                            padding: '3px 10px',
-                            borderRadius: '12px',
-                            backgroundColor: 'rgba(255,255,255,0.15)',
-                            fontWeight: '600'
-                          }}>
-                            Pending
-                          </span>
-                        )}
-                      </h3>
-                      <div style={{ fontSize: '14px', opacity: 0.9, marginTop: '5px' }}>
-                        {order.orderDate ? new Date(order.orderDate).toLocaleDateString() : 'N/A'}
+                <div
+                  key={order.id}
+                  style={{
+                    marginBottom: '20px',
+                    border: '1px solid #e0e0e0',
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                  }}
+                >
+                  <div
+                    style={{
+                      backgroundColor: '#eef2f6',
+                      color: '#334155',
+                      padding: '15px 20px',
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: '12px',
+                      borderBottom: '1px solid #dde5ee',
+                    }}
+                  >
+                    <div style={{ flex: '1', minWidth: '200px' }}>
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          color: '#94a3b8',
+                          marginBottom: '4px',
+                          wordBreak: 'break-all',
+                        }}
+                      >
+                        {pdfSafeStr(order.filename, 180)}
+                      </div>
+                      <div
+                        style={{
+                          fontSize: '14px',
+                          color: '#64748b',
+                        }}
+                      >
+                        {order.createdAt.toLocaleString('en-US', {
+                          timeZone: 'America/Los_Angeles',
+                          dateStyle: 'medium',
+                          timeStyle: 'short',
+                        })}
                       </div>
                     </div>
-                    <button
-                      onClick={() => handleDeleteProcessingRequest(order.id)}
+                    <div
                       style={{
-                        backgroundColor: 'rgba(255,255,255,0.2)',
-                        color: 'white',
-                        border: '1px solid rgba(255,255,255,0.4)',
-                        padding: '8px 16px',
-                        borderRadius: '6px',
-                        fontSize: '14px',
-                        fontWeight: 'bold',
-                        cursor: 'pointer',
-                        transition: 'all 0.2s ease',
-                        whiteSpace: 'nowrap'
+                        display: 'flex',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: '10px',
                       }}
                     >
-                      🗑️ Delete
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!normalizeSupplyStoragePath(order.path)) {
+                            alert('Cannot open the file.');
+                            return;
+                          }
+                          setViewingOrderPdf(order);
+                        }}
+                        style={{
+                          backgroundColor: '#ffffff',
+                          color: '#475569',
+                          border: '1px solid #cbd5e1',
+                          padding: '8px 16px',
+                          borderRadius: '6px',
+                          fontSize: '14px',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                          boxShadow: '0 1px 2px rgba(15, 23, 42, 0.06)',
+                        }}
+                      >
+                        📄 View PDF
+                      </button>
+                      <label
+                        style={{
+                          fontSize: '13px',
+                          fontWeight: 600,
+                          color: '#475569',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        Status
+                      </label>
+                      <select
+                        value={order.status}
+                        disabled={pdfStatusUpdatingPath === order.path}
+                        onChange={(e) => {
+                          void handleSupplyOrderPdfStatusChange(
+                            order,
+                            e.target.value as SupplyOrderPdfStatus
+                          );
+                        }}
+                        style={{
+                          padding: '8px 12px',
+                          borderRadius: '6px',
+                          border: '1px solid #cbd5e1',
+                          fontSize: '14px',
+                          color: '#334155',
+                          backgroundColor: '#ffffff',
+                          minWidth: '130px',
+                          cursor:
+                            pdfStatusUpdatingPath === order.path ? 'wait' : 'pointer',
+                        }}
+                      >
+                        <option value="requested">Requested</option>
+                        <option value="received">Received</option>
+                      </select>
+                    </div>
                   </div>
-
-                  {/* 주문 아이템 테이블 */}
-                  {order.items && order.items.length > 0 && (
-                    <table style={{ ...tableStyle, margin: 0, border: 'none' }}>
-                      <thead style={{ backgroundColor: '#f8f9fa', color: '#495057' }}>
-                        <tr>
-                          <th style={{ padding: '10px 8px', textAlign: 'center', minWidth: '60px' }}>#</th>
-                          <th style={{ padding: '10px 8px', textAlign: 'center', minWidth: '120px' }}>Supply Type</th>
-                          <th style={{ padding: '10px 8px', textAlign: 'center', minWidth: '400px' }}>Item</th>
-                          <th style={{ padding: '10px 8px', textAlign: 'center', minWidth: '250px' }}>Extra Info</th>
-                          <th style={{ padding: '10px 8px', textAlign: 'center', minWidth: '200px' }}>Seller</th>
-                          <th style={{ padding: '10px 8px', textAlign: 'center', minWidth: '150px' }}>Code</th>
-                          <th style={{ padding: '10px 8px', textAlign: 'center', minWidth: '120px' }}>Quantity</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {order.items.map((item: any, itemIndex: number) => (
-                          <tr key={`${order.id}-${item.id}-${itemIndex}`} style={{ backgroundColor: itemIndex % 2 === 0 ? '#f9f9f9' : 'white' }}>
-                            <td style={{ padding: '8px', textAlign: 'center', fontWeight: 'bold' }}>
-                              {itemIndex + 1}
-                            </td>
-                            <td style={{ padding: '8px', textAlign: 'center' }}>
-                              <span style={{
-                                padding: '4px 8px',
-                                borderRadius: '4px',
-                                fontSize: '12px',
-                                fontWeight: 'bold',
-                                backgroundColor: item.supplyType === 'dental' ? '#e7f3ff' : '#f0f8ff',
-                                color: item.supplyType === 'dental' ? '#0077B6' : '#495057'
-                              }}>
-                                {item.supplyType === 'dental' ? 'Dental' : 'Office'}
-                              </span>
-                            </td>
-                            <td style={{ padding: '8px' }}>
-                              <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
-                                {item.item}
-                              </div>
-                            </td>
-                            <td style={{ padding: '8px' }}>
-                              {item.extraInfo}
-                            </td>
-                            <td style={{ padding: '8px' }}>
-                              {getSafeUrl(item.url) ? (
-                                <a 
-                                  href={getSafeUrl(item.url)!} 
-                                  target="_blank" 
-                                  rel="noopener noreferrer"
-                                  style={{ color: '#0077B6', textDecoration: 'none' }}
-                                >
-                                  {item.seller}
-                                </a>
-                              ) : (
-                                item.seller
-                              )}
-                            </td>
-                            <td style={{ padding: '8px' }}>
-                              {item.code}
-                            </td>
-                            <td style={{ padding: '8px', textAlign: 'center' }}>
-                              <span style={{
-                                display: 'inline-block',
-                                padding: '4px 8px',
-                                backgroundColor: '#e9ecef',
-                                borderRadius: '4px',
-                                fontWeight: 'bold',
-                                color: '#495057',
-                                minWidth: '60px',
-                                textAlign: 'center'
-                              }}>
-                                {item.quantity || '0'}
-                              </span>
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
                 </div>
               ))}
             </div>
           ) : (
-            // Dental/Office Supply: 기존 테이블 구조
             <div style={{ overflowX: 'auto' }}>
               <table style={tableStyle}>
                 <thead style={{ backgroundColor: '#0077B6', color: 'white' }}>
@@ -1349,7 +1555,7 @@ function SupplyViewSystemContent() {
                   </tr>
                 </thead>
                 <tbody>
-                  {currentPageItems.map((item, index) => (
+                  {(currentPageItems as any[]).map((item, index) => (
                     <ItemRow
                       key={`${item.id}-${item.requestId || 'no-request'}-${index}`}
                       item={{...item, displayId: startIndex + index + 1}}
@@ -1408,15 +1614,14 @@ function SupplyViewSystemContent() {
             color: '#666', 
             fontSize: '14px' 
           }}>
-            {supplyType === 'processing-request' 
-              ? `Showing ${startIndex + 1} to ${Math.min(endIndex, filteredItems.length)} of ${filteredItems.length} orders`
-              : `Showing ${startIndex + 1} to ${Math.min(endIndex, filteredItems.length)} of ${filteredItems.length} items`
-            }
+            {isProcessingOrders
+              ? `Showing ${startIndex + 1} to ${Math.min(endIndex, listForPage.length)} of ${listForPage.length} orders`
+              : `Showing ${startIndex + 1} to ${Math.min(endIndex, listForPage.length)} of ${listForPage.length} items`}
           </div>
         </div>
 
         {/* Submit Order Button - 맨 아래 중앙에 위치 */}
-        {selectedOffice && supplyType !== 'processing-request' && (
+        {selectedOffice && !isProcessingOrders && (
           <div style={{
             textAlign: 'center',
             padding: '30px'
@@ -1441,6 +1646,128 @@ function SupplyViewSystemContent() {
 
       </div>
     </div>
+
+    {viewingOrderPdf && (
+      <div
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'rgba(0, 0, 0, 0.9)',
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) setViewingOrderPdf(null);
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Close"
+          onClick={(e) => {
+            e.stopPropagation();
+            setViewingOrderPdf(null);
+          }}
+          style={{
+            position: 'absolute',
+            top: '20px',
+            right: '20px',
+            background: '#ff6b6b',
+            color: 'white',
+            border: 'none',
+            borderRadius: '50%',
+            width: '40px',
+            height: '40px',
+            fontSize: '20px',
+            cursor: 'pointer',
+            zIndex: 1001,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontWeight: 'bold',
+          }}
+        >
+          ×
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            setViewingOrderPdf(null);
+          }}
+          style={{
+            position: 'absolute',
+            top: '20px',
+            right: '72px',
+            background: 'rgba(255,255,255,0.95)',
+            color: '#023047',
+            border: '1px solid #ccc',
+            borderRadius: '8px',
+            padding: '8px 16px',
+            fontSize: '14px',
+            fontWeight: '600',
+            cursor: 'pointer',
+            zIndex: 1001,
+          }}
+        >
+          Close
+        </button>
+        {processingPdfViewerLoading ? (
+          <div
+            style={{
+              width: '90%',
+              height: '90%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              fontSize: '18px',
+            }}
+          >
+            Loading PDF…
+          </div>
+        ) : processingPdfViewerError ? (
+          <div
+            style={{
+              width: '90%',
+              height: '90%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ffcccc',
+              fontSize: '16px',
+              padding: '24px',
+              textAlign: 'center',
+            }}
+          >
+            Could not load PDF.
+          </div>
+        ) : processingPdfViewerUrl ? (
+          <object
+            data={processingPdfViewerUrl}
+            type="application/pdf"
+            style={{
+              width: '90%',
+              height: '90%',
+              border: 'none',
+              borderRadius: '8px',
+              background: 'white',
+            }}
+            title={pdfSafeStr(viewingOrderPdf.filename, 200)}
+          >
+            <p style={{ padding: '20px', color: '#333' }}>
+              Your browser does not support viewing PDFs.
+            </p>
+          </object>
+        ) : null}
+      </div>
+    )}
+    </>
   );
 }
 
