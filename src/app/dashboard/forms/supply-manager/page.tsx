@@ -2,7 +2,8 @@
 
 import React, { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { doc, setDoc, collection, getDocs, getDoc, updateDoc, deleteDoc, writeBatch } from "firebase/firestore";
+import { doc,setDoc, collection, getDocs, getDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp, } from "firebase/firestore";
+import { getStorage, ref, listAll, getMetadata, getDownloadURL, deleteObject, type StorageReference, } from "firebase/storage";
 import { db, auth } from "@/lib/firebase.config";
 import { onAuthStateChanged } from 'firebase/auth';
 const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
@@ -36,6 +37,94 @@ function sanitizeData<T extends Record<string, unknown>>(data: T): T {
     result[sanitizedKey] = sanitizeValue(data[key]);
   }
   return result as T;
+}
+
+function normalizeSupplyStoragePath(path: string): string | null {
+  if (typeof path !== "string" || !path.trim()) return null;
+  const p = path.trim().replace(/^\/*/, "");
+  if (!p || p.includes("..") || p.includes("//") || p.length > 1024) return null;
+  return p;
+}
+
+const SUPPLY_ORDER_PDF_STATUS_COLLECTION = "supply-order-pdf-status";
+
+type ManagerSupplyPdfStatus =
+  | "requested"
+  | "processing"
+  | "completed"
+  | "received"
+  | "delete";
+
+function buildSupplyOrderPdfStatusDocId(
+  office: string,
+  dateFolder: string,
+  timeSuffix: string
+): string | null {
+  const o = String(office).trim();
+  const d = String(dateFolder).trim();
+  const t = String(timeSuffix).trim();
+  if (!o || !/^\d{4}-\d{2}-\d{2}$/.test(d) || !t) return null;
+  if (!/^[a-zA-Z0-9_-]+$/.test(o)) return null;
+  if (!/^[0-9A-Za-z-]+$/.test(t)) return null;
+  const id = `${o}_${d}_${t}`;
+  return id.length > 800 ? id.slice(0, 800) : id;
+}
+
+function supplyOrderPdfStatusDocIdFromStoragePath(storagePath: string): string | null {
+  const n = normalizeSupplyStoragePath(storagePath);
+  if (!n) return null;
+  const segments = n.split("/").filter(Boolean);
+  if (segments.length < 4 || segments[0] !== "orders") return null;
+  const office = segments[1];
+  const dateFolder = segments[2];
+  const filename = segments[segments.length - 1];
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateFolder)) return null;
+  const base = filename.replace(/\.pdf$/i, "");
+  const expectedPrefix = `Supply_Order_${office}_${dateFolder}_`;
+  if (!base.startsWith(expectedPrefix)) return null;
+  const timeSuffix = base.slice(expectedPrefix.length);
+  if (!timeSuffix) return null;
+  return buildSupplyOrderPdfStatusDocId(office, dateFolder, timeSuffix);
+}
+
+function getDisplayStatusForPdf(pdf: {
+  officeStatusFirestore: "requested" | "received";
+  managerStatusFirestore: string | null;
+}): ManagerSupplyPdfStatus {
+  if (pdf.officeStatusFirestore === "received") return "received";
+  const m = String(pdf.managerStatusFirestore || "")
+    .trim()
+    .toLowerCase();
+  if (m === "processing" || m === "completed" || m === "delete") return m;
+  if (m === "received") return "received";
+  return "requested";
+}
+
+type StorageOrderPdf = {
+  id: string;
+  path: string;
+  filename: string;
+  office: string;
+  dateFolder: string;
+  createdAt: Date;
+  canSyncStatus: boolean;
+  officeStatusFirestore: "requested" | "received";
+  managerStatusFirestore: string | null;
+};
+
+async function collectSupplyOrderPdfRefs(
+  currentRef: StorageReference
+): Promise<StorageReference[]> {
+  const current = await listAll(currentRef);
+  const direct = current.items.filter(
+    (it) =>
+      it.name.toLowerCase().endsWith(".pdf") &&
+      it.name.startsWith("Supply_Order_")
+  );
+  const nested = await Promise.all(
+    current.prefixes.map((prefixRef) => collectSupplyOrderPdfRefs(prefixRef))
+  );
+  return direct.concat(...nested);
 }
 
 // 개별 아이템 행 컴포넌트 (엑셀 스타일)
@@ -232,69 +321,211 @@ function SupplyManagerSystemContent() {
     url: ''
   });
   const [insertAfterRow, setInsertAfterRow] = useState('');
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [editingValues, setEditingValues] = useState<{ [key: string]: any }>({});
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const [orderRequestPdfs, setOrderRequestPdfs] = useState<StorageOrderPdf[]>([]);
+  const [filteredOrderPdfs, setFilteredOrderPdfs] = useState<StorageOrderPdf[]>([]);
+  const [viewingStoragePdf, setViewingStoragePdf] = useState<StorageOrderPdf | null>(null);
+  const [storagePdfViewerUrl, setStoragePdfViewerUrl] = useState<string | null>(null);
+  const [storagePdfViewerLoading, setStoragePdfViewerLoading] = useState(false);
+  const [storagePdfViewerError, setStoragePdfViewerError] = useState(false);
+  const storagePdfBlobUrlRef = useRef<string | null>(null);
+  const [managerStatusUpdatingPath, setManagerStatusUpdatingPath] = useState<string | null>(null);
 
-  const collectionName = supplyType === 'order-request' ? 'order-requests' : (supplyType === 'dental' ? 'dental-supplies' : 'office-supplies');
+  const collectionName = supplyType === 'dental' ? 'dental-supplies' : 'office-supplies';
   const supplyTypeLabel = supplyType === 'order-request' ? 'Order Request' : (supplyType === 'dental' ? 'Dental' : 'Office');
   const supplyTypeEmoji = supplyType === 'order-request' ? '📦' : (supplyType === 'dental' ? '🦷' : '📋');
 
   // 카테고리 옵션 동적 생성
   const categoryOptions = [...new Set(items.map(item => item.category).filter(Boolean))].sort();
 
-  // 데이터 로드
-  const loadItems = useCallback(async () => {
+  const loadOrderRequestPdfsFromStorage = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
-      
+      const storage = getStorage();
+      const rootRef = ref(storage, "orders/");
+      const top = await listAll(rootRef);
+      const allRefs: StorageReference[] = [];
+      for (const prefixRef of top.prefixes) {
+        allRefs.push(...(await collectSupplyOrderPdfRefs(prefixRef)));
+      }
+      const baseList = await Promise.all(
+        allRefs.map(async (item) => {
+          const meta = await getMetadata(item);
+          const createdAt = meta.timeCreated ? new Date(meta.timeCreated) : new Date();
+          const parts = item.fullPath.split("/").filter(Boolean);
+          const office = parts.length >= 2 ? parts[1] : "";
+          const dateFolder =
+            parts.length >= 3 && /^\d{4}-\d{2}-\d{2}$/.test(parts[2]) ? parts[2] : "";
+          return {
+            id: item.fullPath,
+            path: item.fullPath,
+            filename: item.name,
+            office,
+            dateFolder,
+            createdAt,
+          };
+        })
+      );
+      baseList.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+      const list: StorageOrderPdf[] = await Promise.all(
+        baseList.map(async (entry) => {
+          const docId = supplyOrderPdfStatusDocIdFromStoragePath(entry.path);
+          const canSyncStatus = Boolean(docId);
+          let officeStatusFirestore: "requested" | "received" = "requested";
+          let managerStatusFirestore: string | null = null;
+          if (docId) {
+            const snap = await getDoc(
+              doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, docId)
+            );
+            if (snap.exists()) {
+              const data = sanitizeData(snap.data() || {}) as Record<string, unknown>;
+              officeStatusFirestore =
+                data.office_status === "received" ? "received" : "requested";
+              const ms = data.manager_status;
+              managerStatusFirestore =
+                typeof ms === "string" && ms.trim() ? ms.trim() : null;
+            }
+          }
+          return {
+            ...entry,
+            canSyncStatus,
+            officeStatusFirestore,
+            managerStatusFirestore,
+          };
+        })
+      );
+
+      setOrderRequestPdfs(list);
+      setItems([]);
+      setFilteredItems([]);
+    } catch (e) {
+      console.error(e);
+      setError("Failed to load supply order PDFs from storage.");
+      setOrderRequestPdfs([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const handleManagerSupplyPdfStatusChange = useCallback(
+    async (pdf: StorageOrderPdf, value: ManagerSupplyPdfStatus) => {
+      const docId = supplyOrderPdfStatusDocIdFromStoragePath(pdf.path);
+      if (!docId || !pdf.canSyncStatus) {
+        alert("Cannot update status for this file.");
+        return;
+      }
+
+      if (value === "delete") {
+        if (!confirm("Are you sure removing this order?")) return;
+        setManagerStatusUpdatingPath(pdf.path);
+        try {
+          const p = normalizeSupplyStoragePath(pdf.path);
+          if (!p) throw new Error("invalid path");
+          await deleteObject(ref(getStorage(), p));
+          try {
+            await deleteDoc(doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, docId));
+          } catch {
+            /* 문서 없음 */
+          }
+          setViewingStoragePdf((v) => (v?.path === pdf.path ? null : v));
+          await loadOrderRequestPdfsFromStorage();
+        } catch (err) {
+          console.error(err);
+          alert("Failed to delete the PDF.");
+        } finally {
+          setManagerStatusUpdatingPath(null);
+        }
+        return;
+      }
+
+      setManagerStatusUpdatingPath(pdf.path);
+      try {
+        const payload: Record<string, unknown> = {
+          updateAt: serverTimestamp(),
+        };
+        if (value === "received" || value === "requested") {
+          payload.office_status = value;
+          payload.manager_status = value;
+        } else {
+          payload.manager_status = value;
+        }
+
+        await setDoc(
+          doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, docId),
+          payload as { [key: string]: unknown },
+          { merge: true }
+        );
+
+        setOrderRequestPdfs((prev) =>
+          prev.map((o) => {
+            if (o.path !== pdf.path) return o;
+            if (value === "received" || value === "requested") {
+              return {
+                ...o,
+                officeStatusFirestore: value,
+                managerStatusFirestore: value,
+              };
+            }
+            return {
+              ...o,
+              managerStatusFirestore: value,
+            };
+          })
+        );
+      } catch (err) {
+        console.error(err);
+        alert("Failed to update status.");
+      } finally {
+        setManagerStatusUpdatingPath(null);
+      }
+    },
+    [loadOrderRequestPdfsFromStorage]
+  );
+
+  // 데이터 로드 (dental / office: Firestore, order-request: Storage PDF만)
+  const loadItems = useCallback(async () => {
+    if (supplyType === "order-request") {
+      await loadOrderRequestPdfsFromStorage();
+      return;
+    }
+    try {
+      setLoading(true);
+      setError(null);
+
       const querySnapshot = await getDocs(collection(db, collectionName));
       const itemsList: any[] = [];
-      
-      querySnapshot.forEach((doc: any) => {
-        const rawData = doc.data();
+
+      querySnapshot.forEach((docSnap: any) => {
+        const rawData = docSnap.data();
         const sanitizedData = sanitizeData(rawData);
-        // 임시 저장된 주문(office가 비어있거나 'temp')은 목록에서 제외
-        if (supplyType === 'order-request') {
-          const officeValue = (sanitizedData.office || '').toString().trim().toLowerCase();
-          if (!officeValue || officeValue === 'temp') {
-            return; // skip this document
-          }
-          // 이미 완료 처리된 주문은 목록에서 제외
-          if (sanitizedData.deletedByManager === true) {
-            return;
-          }
-        }
-        
-        // 새로운 구조 (items 배열) 처리
+
         if (sanitizedData.items && sanitizedData.items.length > 0) {
-          // items 배열의 각 아이템을 개별 문서로 변환
           sanitizedData.items.forEach((item: any, index: number) => {
             const quantity = sanitizedData.quantities?.[item.id] || 0;
             const perItemStatus = sanitizedData.itemStatuses?.[item.id] || sanitizedData.status;
             itemsList.push({
-              id: `${doc.id}-${index}`, // 고유 ID 생성 (doc.id-index 형태)
-              originalItemId: item.id, // 원본 아이템 ID 보존
+              id: `${docSnap.id}-${index}`,
+              originalItemId: item.id,
               ...item,
               quantity: quantity,
               orderSessionId: sanitizedData.orderSessionId,
               office: sanitizedData.office,
               orderDate: sanitizedData.orderDate,
               status: perItemStatus,
-              parentDocId: doc.id // 부모 문서 ID 보존
+              parentDocId: docSnap.id,
             });
           });
         } else {
-          // 기존 구조 (개별 문서) 처리
           itemsList.push({
-            id: doc.id,
-            ...sanitizedData
+            id: docSnap.id,
+            ...sanitizedData,
           });
         }
       });
 
-      // order 필드로 정렬 (order가 없으면 createdAt으로 정렬)
       itemsList.sort((a, b) => {
         if (a.order && b.order) {
           return a.order - b.order;
@@ -307,20 +538,19 @@ function SupplyManagerSystemContent() {
         }
       });
 
-      // displayId 추가
       const itemsWithDisplayId = itemsList.map((item, index) => ({
         ...item,
-        displayId: index + 1
+        displayId: index + 1,
       }));
 
       setItems(itemsWithDisplayId);
       setFilteredItems(itemsWithDisplayId);
     } catch (error) {
-      setError('Failed to load items');
+      setError("Failed to load items");
     } finally {
       setLoading(false);
     }
-  }, [collectionName]);
+  }, [collectionName, supplyType, loadOrderRequestPdfsFromStorage]);
 
   // Firebase 업데이트를 위한 debounce 타이머 저장
   const updateTimersRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
@@ -577,160 +807,6 @@ function SupplyManagerSystemContent() {
     }
   }, [selectedItems.size, filteredItems]);
 
-  // Order Request 그룹화 로직 (orderSessionId 기준)
-  const groupedOrders = useCallback(() => {
-    if (supplyType !== 'order-request') return {};
-    
-    const groups: any = {};
-    filteredItems.forEach(item => {
-      const key = item.orderSessionId || 'unknown';
-      if (!groups[key]) {
-        groups[key] = {
-          orderSessionId: key,
-          office: item.office,
-          orderDate: item.orderDate,
-          items: [],
-          totalQuantity: 0,
-          itemCount: 0,
-          supplyTypes: new Set()  // 여러 supply type을 추적
-        };
-      }
-      groups[key].items.push(item);
-      groups[key].totalQuantity += parseInt(item.quantity || 0);
-      groups[key].itemCount += 1;
-      groups[key].supplyTypes.add(item.supplyType);  // supply type 추가
-    });
-    
-    // supplyTypes Set을 배열로 변환
-    Object.values(groups).forEach((group: any) => {
-      group.supplyTypesArray = Array.from(group.supplyTypes);
-    });
-    
-    // 주문 날짜 기준으로 정렬 (최신순)
-    const sortedGroups = Object.entries(groups).sort(([, a]: [string, any], [, b]: [string, any]) => {
-      return new Date(b.orderDate).getTime() - new Date(a.orderDate).getTime();
-    });
-    
-    return Object.fromEntries(sortedGroups);
-  }, [filteredItems, supplyType]);
-
-  // 그룹 토글
-  const toggleGroup = useCallback((key: string) => {
-    setExpandedGroups(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(key)) {
-        newSet.delete(key);
-      } else {
-        newSet.add(key);
-      }
-      return newSet;
-    });
-  }, []);
-
-  // 주문 상태 변경
-  const updateOrderStatus = useCallback(async (itemId: string, newStatus: string) => {
-    try {
-      // 새로운 구조에서는 개별 item.id가 `${docId}-${index}` 또는 parentDocId를 가짐
-      const targetItem = items.find((it) => it.id === itemId);
-      let docId = itemId;
-      if (targetItem?.parentDocId) {
-        docId = targetItem.parentDocId;
-      } else if (itemId.includes('-')) {
-        docId = itemId.split('-')[0];
-      }
-
-      const itemRef = doc(db, 'order-requests', docId);
-      
-      if (targetItem?.originalItemId) {
-        // 새로운 구조: itemStatuses 객체 업데이트
-        const docSnap = await getDoc(itemRef);
-        if (docSnap.exists()) {
-          const currentData = docSnap.data();
-          const currentItemStatuses = currentData.itemStatuses || {};
-          currentItemStatuses[targetItem.originalItemId] = newStatus;
-          
-          const statusData = {
-            itemStatuses: currentItemStatuses,
-            lastUpdated: new Date().toISOString()
-          };
-          const sanitizedStatusData = sanitizeData(statusData);
-          await updateDoc(itemRef, sanitizedStatusData);
-        }
-      } else {
-        // 기존 구조 호환
-        const statusData = {
-          status: newStatus,
-          lastUpdated: new Date().toISOString()
-        };
-        const sanitizedStatusData = sanitizeData(statusData);
-        await updateDoc(itemRef, sanitizedStatusData);
-      }
-
-      // 로컬 상태 업데이트: 해당 아이템만 변경
-      setItems(prevItems => 
-        prevItems.map(item => 
-          item.id === itemId 
-            ? { ...item, status: newStatus, lastUpdated: new Date().toISOString() }
-            : item
-        )
-      );
-      
-    } catch (error) {
-      alert('❌ Failed to update status. Please try again.');
-    }
-  }, [items]);
-
-  // 주문 그룹 완료 처리 (soft-delete: Firestore에서 삭제하지 않고 완료 표시)
-  const deleteOrderGroup = useCallback(async (orderSessionId: string, itemCount: number) => {
-    if (!confirm(`Are you sure you want to mark the order as completed?`)) {
-      return;
-    }
-
-    try {
-      setLoading(true);
-      
-      // 해당 orderSessionId의 모든 아이템 찾기
-      const itemsToUpdate = items.filter(item => item.orderSessionId === orderSessionId);
-      
-      // 새로운 구조와 기존 구조 모두 처리
-      const documentsToUpdate = new Set<string>();
-      
-      itemsToUpdate.forEach(item => {
-        if (item.parentDocId) {
-          documentsToUpdate.add(item.parentDocId);
-        } else if (item.id.includes('-')) {
-          const parts = item.id.split('-');
-          const docId = parts[0];
-          documentsToUpdate.add(docId);
-        } else {
-          documentsToUpdate.add(item.id);
-        }
-      });
-      
-      // 배치 업데이트 (삭제 대신 완료 표시)
-      const batch = writeBatch(db);
-      documentsToUpdate.forEach(docId => {
-        const itemRef = doc(db, 'order-requests', docId);
-        batch.update(itemRef, {
-          deletedByManager: true,
-          status: 'completed',
-          lastUpdated: new Date().toISOString()
-        });
-      });
-      
-      await batch.commit();
-      
-      // 로컬 상태 업데이트 (목록에서 제거)
-      setItems(prevItems => prevItems.filter(item => item.orderSessionId !== orderSessionId));
-      
-      alert('✅ Order marked as completed!');
-    } catch (error) {
-      alert('❌ Failed to complete order. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  }, [items]);
-
   // 필터링 로직
   useEffect(() => {
     let filtered = [...items];
@@ -761,6 +837,87 @@ function SupplyManagerSystemContent() {
 
     setFilteredItems(filteredWithDisplayId);
   }, [items, categoryFilter, sellerFilter, searchInput]);
+
+  useEffect(() => {
+    if (supplyType !== "order-request") return;
+    let f = [...orderRequestPdfs];
+    if (searchInput.trim()) {
+      const q = searchInput.trim().toLowerCase();
+      f = f.filter(
+        (p) =>
+          p.filename.toLowerCase().includes(q) ||
+          p.office.toLowerCase().includes(q) ||
+          (p.dateFolder && p.dateFolder.toLowerCase().includes(q))
+      );
+    }
+    setFilteredOrderPdfs(f);
+  }, [supplyType, orderRequestPdfs, searchInput]);
+
+  useEffect(() => {
+    const revokeBlob = () => {
+      if (storagePdfBlobUrlRef.current) {
+        URL.revokeObjectURL(storagePdfBlobUrlRef.current);
+        storagePdfBlobUrlRef.current = null;
+      }
+    };
+
+    if (!viewingStoragePdf?.path) {
+      revokeBlob();
+      setStoragePdfViewerUrl(null);
+      setStoragePdfViewerLoading(false);
+      setStoragePdfViewerError(false);
+      return;
+    }
+    const p = normalizeSupplyStoragePath(viewingStoragePdf.path);
+    if (!p) {
+      revokeBlob();
+      setStoragePdfViewerError(true);
+      setStoragePdfViewerLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setStoragePdfViewerLoading(true);
+    setStoragePdfViewerError(false);
+    setStoragePdfViewerUrl(null);
+    revokeBlob();
+
+    const storageRef = ref(getStorage(), p);
+    getDownloadURL(storageRef)
+      .then(async (url) => {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
+        const blob = await res.blob();
+        if (cancelled) return;
+        revokeBlob();
+        const blobUrl = URL.createObjectURL(blob);
+        storagePdfBlobUrlRef.current = blobUrl;
+        setStoragePdfViewerUrl(blobUrl);
+        setStoragePdfViewerLoading(false);
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) {
+          setStoragePdfViewerError(true);
+          setStoragePdfViewerLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+      revokeBlob();
+    };
+  }, [viewingStoragePdf]);
+
+  useEffect(() => {
+    if (!viewingStoragePdf) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setViewingStoragePdf(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [viewingStoragePdf]);
 
   // supply type 변경 시 데이터 리로드
   useEffect(() => {
@@ -802,10 +959,7 @@ function SupplyManagerSystemContent() {
           return;
         }
 
-        const userData = userDoc.data();
-
-        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
-          alert('You do not have access to this page.');
+        if (userDoc.id !== 'eV4AQK6V6yZQgFPNOfVeRrtz5Eu1' && userDoc.id !== 'rVMFu186CNf6ebSdSsnOg7EUrh63') {
           setIsAuthorized(false);
           if (typeof window !== 'undefined') {
             window.location.href = '/';
@@ -933,7 +1087,6 @@ function SupplyManagerSystemContent() {
         fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
       }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
           <div style={{ fontSize: '18px', color: '#2c3e50' }}>Verifying authentication...</div>
         </div>
       </div>
@@ -952,9 +1105,7 @@ function SupplyManagerSystemContent() {
         fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
       }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
           <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
-          <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
         </div>
       </div>
     );
@@ -1269,205 +1420,204 @@ function SupplyManagerSystemContent() {
             </div>
           </>
           )}
+
+          {supplyType === "order-request" && (
+            <div style={{ marginBottom: "20px" }}>
+              <div
+                style={{
+                  display: "flex",
+                  gap: "20px",
+                  flexWrap: "wrap",
+                  marginBottom: "12px",
+                  alignItems: "end",
+                }}
+              >
+                <div style={{ flex: "1", minWidth: "220px" }}>
+                  <label
+                    style={{ display: "block", marginBottom: "5px", fontWeight: "bold" }}
+                  >
+                    Search:
+                  </label>
+                  <input
+                    type="text"
+                    value={searchInput}
+                    onChange={(e) => setSearchInput(e.target.value)}
+                    placeholder="Office, file name, or date folder..."
+                    style={inputStyle}
+                  />
+                </div>
+                <div style={{ minWidth: "160px" }}>
+                  <button
+                    type="button"
+                    onClick={() => loadOrderRequestPdfsFromStorage()}
+                    disabled={loading}
+                    style={{
+                      ...buttonStyle,
+                      backgroundColor: "#28a745",
+                      width: "100%",
+                    }}
+                  >
+                    {loading ? "Loading..." : "🔄 Refresh PDFs"}
+                  </button>
+                </div>
+              </div>
+              <div
+                style={{
+                  fontSize: "14px",
+                  color: "#666",
+                  textAlign: "right",
+                }}
+              >
+                {filteredOrderPdfs.length} PDF
+                {filteredOrderPdfs.length !== 1 ? "s" : ""} (all offices)
+              </div>
+            </div>
+          )}
           
           {loading ? (
             <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
-              Loading items...
+              {supplyType === "order-request"
+                ? "Loading PDFs from storage..."
+                : "Loading items..."}
             </div>
-          ) : filteredItems.length === 0 ? (
+          ) : supplyType === "order-request" && filteredOrderPdfs.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
+              No supply orders found.
+            </div>
+          ) : supplyType !== "order-request" && filteredItems.length === 0 ? (
             <div style={{ textAlign: 'center', padding: '40px', color: '#666' }}>
               No items found.
             </div>
           ) : supplyType === 'order-request' ? (
             <div style={{ overflowX: 'auto' }}>
-              {/* 그룹화된 주문 요약 테이블 */}
               <table style={tableStyle}>
                 <thead>
                   <tr style={{ backgroundColor: '#2c3e50', color: 'white' }}>
-                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '60px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Expand</th>
-                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '180px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Order Date</th>
-                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '150px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Office</th>
-                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '150px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Supply Type</th>
-                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '120px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Total Items</th>
-                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '120px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Total Quantity</th>
-                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '100px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Action</th>
+                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '200px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Submitted</th>
+                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '120px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Office</th>
+                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '140px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>View PDF</th>
+                    <th style={{ padding: '12px', textAlign: 'center', minWidth: '160px', border: '1px solid #d0d0d0', fontWeight: 'bold' }}>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {Object.entries(groupedOrders()).map(([key, group]: [string, any]) => {
-                    const isExpanded = expandedGroups.has(key);
+                  {filteredOrderPdfs.map((pdf, rowIndex) => {
+                    const rowStatus = getDisplayStatusForPdf(pdf);
                     return (
-                      <React.Fragment key={key}>
-                        {/* 그룹 요약 행 */}
-                        <tr 
-                          onClick={() => toggleGroup(key)}
-                          style={{ 
-                            backgroundColor: '#f0f8ff',
-                            borderBottom: '2px solid #0077B6',
-                            cursor: 'pointer',
-                            transition: 'background-color 0.2s'
+                    <tr
+                      key={pdf.id}
+                      style={{
+                        backgroundColor: rowIndex % 2 === 0 ? '#ffffff' : '#f9f9f9',
+                        borderBottom: '1px solid #e0e0e0',
+                      }}
+                    >
+                      <td style={{ padding: '12px', textAlign: 'center', fontSize: '14px', color: '#495057' }}>
+                        {pdf.createdAt
+                          ? pdf.createdAt.toLocaleString('en-US', {
+                              timeZone: 'America/Los_Angeles',
+                              dateStyle: 'medium',
+                              timeStyle: 'short',
+                            })
+                          : '—'}
+                      </td>
+                      <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', fontSize: '16px', color: '#0077B6' }}>
+                        {pdf.office || '—'}
+                      </td>
+                      <td style={{ padding: '12px', textAlign: 'center' }}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!normalizeSupplyStoragePath(pdf.path)) {
+                              alert('Cannot open the file.');
+                              return;
+                            }
+                            setViewingStoragePdf(pdf);
                           }}
-                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#e3f2fd'}
-                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#f0f8ff'}
+                          style={{
+                            backgroundColor: '#0077B6',
+                            color: 'white',
+                            border: 'none',
+                            padding: '8px 18px',
+                            borderRadius: '6px',
+                            fontSize: '14px',
+                            fontWeight: 'bold',
+                            cursor: 'pointer',
+                            whiteSpace: 'nowrap',
+                          }}
                         >
-                          <td style={{ padding: '12px', textAlign: 'center', fontSize: '20px' }}>
-                            {isExpanded ? '▼' : '▶'}
-                          </td>
-                          <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', fontSize: '14px', color: '#495057' }}>
-                            {group.orderDate ? new Date(group.orderDate).toLocaleString('en-US', {
-                              year: 'numeric',
-                              month: '2-digit',
-                              day: '2-digit',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            }) : '-'}
-                          </td>
-                          <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', fontSize: '16px', color: '#0077B6' }}>
-                            {group.office}
-                          </td>
-                          <td style={{ padding: '12px', textAlign: 'center' }}>
-                            <div style={{ display: 'flex', gap: '8px', justifyContent: 'center', flexWrap: 'wrap' }}>
-                              {group.supplyTypesArray && group.supplyTypesArray.map((type: string, typeIndex: number) => (
-                                <span 
-                                  key={`${key}-supply-type-${typeIndex}-${type}`}
-                                  style={{
-                                    padding: '6px 12px',
-                                    borderRadius: '4px',
-                                    fontSize: '14px',
-                                    fontWeight: 'bold',
-                                    backgroundColor: type === 'dental' ? '#e7f3ff' : '#f0f8ff',
-                                    color: type === 'dental' ? '#0077B6' : '#495057'
-                                  }}
-                                >
-                                  {type === 'dental' ? 'Dental' : 'Office'}
-                                </span>
-                              ))}
-                            </div>
-                          </td>
-                          <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', fontSize: '16px' }}>
-                            {group.itemCount} items
-                          </td>
-                          <td style={{ padding: '12px', textAlign: 'center', fontWeight: 'bold', fontSize: '16px', color: '#28a745' }}>
-                            {group.totalQuantity}
-                          </td>
-                          <td style={{ padding: '12px', textAlign: 'center' }}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteOrderGroup(group.orderSessionId, group.itemCount);
-                              }}
-                              style={{
-                                backgroundColor: '#28a745',
-                                color: 'white',
-                                border: 'none',
-                                padding: '7px 14px',
-                                borderRadius: '4px',
-                                fontSize: '14px',
-                                fontWeight: 'bold',
-                                cursor: 'pointer',
-                                transition: 'background-color 0.2s'
-                              }}
-                              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = '#218838'}
-                              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = '#28a745'}
-                            >
-                              ✅ Complete
-                            </button>
-                          </td>
-                        </tr>
-                        
-                        {/* 상세 주문 항목들 (확장 시) */}
-                        {isExpanded && group.items.map((item: any, itemIndex: number) => (
-                          <tr 
-                            key={item.id}
-                            style={{ 
-                              backgroundColor: itemIndex % 2 === 0 ? 'white' : '#f9f9f9',
-                              borderBottom: '1px solid #e0e0e0'
+                          📄 View PDF
+                        </button>
+                      </td>
+                      <td style={{ padding: '12px', textAlign: 'center' }}>
+                        {!pdf.canSyncStatus ? (
+                          <span style={{ color: '#94a3b8', fontSize: '13px' }}>—</span>
+                        ) : (
+                          <select
+                            value={rowStatus}
+                            disabled={managerStatusUpdatingPath === pdf.path}
+                            onChange={(e) => {
+                              void handleManagerSupplyPdfStatusChange(
+                                pdf,
+                                e.target.value as ManagerSupplyPdfStatus
+                              );
+                            }}
+                            style={{
+                              padding: '7px 12px',
+                              borderRadius: '4px',
+                              fontSize: '14px',
+                              fontWeight: 'bold',
+                              cursor:
+                                managerStatusUpdatingPath === pdf.path
+                                  ? 'wait'
+                                  : 'pointer',
+                              border: '2px solid',
+                              maxWidth: '100%',
+                              backgroundColor:
+                                rowStatus === 'requested'
+                                  ? '#fff3cd'
+                                  : rowStatus === 'processing'
+                                    ? '#cfe2ff'
+                                    : rowStatus === 'completed'
+                                      ? '#d4edda'
+                                      : rowStatus === 'received'
+                                        ? '#e7f3ff'
+                                        : rowStatus === 'delete'
+                                          ? '#f8d7da'
+                                          : '#e9ecef',
+                              color:
+                                rowStatus === 'requested'
+                                  ? '#856404'
+                                  : rowStatus === 'processing'
+                                    ? '#084298'
+                                    : rowStatus === 'completed'
+                                      ? '#155724'
+                                      : rowStatus === 'received'
+                                        ? '#0d6efd'
+                                        : rowStatus === 'delete'
+                                          ? '#721c24'
+                                          : '#495057',
+                              borderColor:
+                                rowStatus === 'requested'
+                                  ? '#ffc107'
+                                  : rowStatus === 'processing'
+                                    ? '#0d6efd'
+                                    : rowStatus === 'completed'
+                                      ? '#28a745'
+                                      : rowStatus === 'received'
+                                        ? '#0d6efd'
+                                        : rowStatus === 'delete'
+                                          ? '#dc3545'
+                                          : '#6c757d',
                             }}
                           >
-                            <td style={{ padding: '8px', textAlign: 'center', color: '#999' }}>•</td>
-                            <td colSpan={6} style={{ padding: '0' }}>
-                              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                                <tbody>
-                                  <tr>
-                                    <td style={{ padding: '8px', width: '5%', textAlign: 'center', color: '#999', fontSize: '14px' }}>
-                                      #{itemIndex + 1}
-                                    </td>
-                                    <td style={{ padding: '8px', width: '12%', fontSize: '15px' }}>
-                                      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                        <div><strong>Category:</strong> {item.category || '-'}</div>
-                                        <span style={{
-                                          padding: '3px 8px',
-                                          borderRadius: '3px',
-                                          fontSize: '13px',
-                                          fontWeight: 'bold',
-                                          backgroundColor: item.supplyType === 'dental' ? '#e7f3ff' : '#f0f8ff',
-                                          color: item.supplyType === 'dental' ? '#0077B6' : '#495057',
-                                          alignSelf: 'flex-start'
-                                        }}>
-                                          {item.supplyType === 'dental' ? 'Dental' : 'Office'}
-                                        </span>
-                                      </div>
-                                    </td>
-                                    <td style={{ padding: '8px', width: '30%', fontSize: '15px' }}>
-                                      <strong>Item:</strong> {item.item}
-                                    </td>
-                                    <td style={{ padding: '8px', width: '18%', fontSize: '15px' }}>
-                                      <strong>Extra Info:</strong> {item.extraInfo || '-'}
-                                    </td>
-                                    <td style={{ padding: '8px', width: '12%', fontSize: '15px' }}>
-                                      <strong>Code:</strong> {item.code || '-'}
-                                    </td>
-                                    <td style={{ padding: '8px', width: '12%', textAlign: 'center' }}>
-                                      <span style={{ 
-                                        fontWeight: 'bold', 
-                                        fontSize: '15px', 
-                                        color: '#28a745',
-                                        backgroundColor: '#d4edda',
-                                        padding: '4px 10px',
-                                        borderRadius: '4px'
-                                      }}>
-                                        Qty: {item.quantity}
-                                      </span>
-                                    </td>
-                                    <td style={{ padding: '8px', width: '11%', textAlign: 'center' }}>
-                                      <select
-                                        value={item.status || 'pending'}
-                                        onChange={(e) => updateOrderStatus(item.id, e.target.value)}
-                                        onClick={(e) => e.stopPropagation()}
-                                        style={{
-                                          padding: '7px 12px',
-                                          borderRadius: '4px',
-                                          fontSize: '14px',
-                                          fontWeight: 'bold',
-                                          cursor: 'pointer',
-                                          border: '2px solid',
-                                          backgroundColor: item.status === 'pending' ? '#fff3cd' : 
-                                                         item.status === 'processing' ? '#cfe2ff' :
-                                                         item.status === 'completed' ? '#d4edda' : 
-                                                         item.status === 'cancelled' ? '#f8d7da' : '#e9ecef',
-                                          color: item.status === 'pending' ? '#856404' : 
-                                                item.status === 'processing' ? '#084298' :
-                                                item.status === 'completed' ? '#155724' : 
-                                                item.status === 'cancelled' ? '#721c24' : '#495057',
-                                          borderColor: item.status === 'pending' ? '#ffc107' : 
-                                                      item.status === 'processing' ? '#0d6efd' :
-                                                      item.status === 'completed' ? '#28a745' : 
-                                                      item.status === 'cancelled' ? '#dc3545' : '#6c757d'
-                                        }}
-                                      >
-                                        <option value="pending">Requested</option>
-                                        <option value="processing">Processing</option>
-                                        <option value="completed">Completed</option>
-                                        <option value="cancelled">Cancelled</option>
-                                      </select>
-                                    </td>
-                                  </tr>
-                                </tbody>
-                              </table>
-                            </td>
-                          </tr>
-                        ))}
-                      </React.Fragment>
+                            <option value="requested">Requested</option>
+                            <option value="processing">Processing</option>
+                            <option value="completed">Completed</option>
+                            <option value="received">Received</option>
+                            <option value="delete">Delete</option>
+                          </select>
+                        )}
+                      </td>
+                    </tr>
                     );
                   })}
                 </tbody>
@@ -1513,6 +1663,127 @@ function SupplyManagerSystemContent() {
           )}
         </div>
       </div>
+
+      {viewingStoragePdf && (
+        <div
+          style={{
+            position: "fixed",
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: "rgba(0, 0, 0, 0.9)",
+            zIndex: 1000,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setViewingStoragePdf(null);
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={(e) => {
+              e.stopPropagation();
+              setViewingStoragePdf(null);
+            }}
+            style={{
+              position: "absolute",
+              top: "20px",
+              right: "20px",
+              background: "#ff6b6b",
+              color: "white",
+              border: "none",
+              borderRadius: "50%",
+              width: "40px",
+              height: "40px",
+              fontSize: "20px",
+              cursor: "pointer",
+              zIndex: 1001,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: "bold",
+            }}
+          >
+            ×
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setViewingStoragePdf(null);
+            }}
+            style={{
+              position: "absolute",
+              top: "20px",
+              right: "72px",
+              background: "rgba(255,255,255,0.95)",
+              color: "#023047",
+              border: "1px solid #ccc",
+              borderRadius: "8px",
+              padding: "8px 16px",
+              fontSize: "14px",
+              fontWeight: "600",
+              cursor: "pointer",
+              zIndex: 1001,
+            }}
+          >
+            Close
+          </button>
+          {storagePdfViewerLoading ? (
+            <div
+              style={{
+                width: "90%",
+                height: "90%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "white",
+                fontSize: "18px",
+              }}
+            >
+              Loading PDF…
+            </div>
+          ) : storagePdfViewerError ? (
+            <div
+              style={{
+                width: "90%",
+                height: "90%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#ffcccc",
+                fontSize: "16px",
+                padding: "24px",
+                textAlign: "center",
+              }}
+            >
+              Could not load PDF.
+            </div>
+          ) : storagePdfViewerUrl ? (
+            <object
+              data={storagePdfViewerUrl}
+              type="application/pdf"
+              style={{
+                width: "90%",
+                height: "90%",
+                border: "none",
+                borderRadius: "8px",
+                background: "white",
+              }}
+              title={viewingStoragePdf.filename}
+            >
+              <p style={{ padding: "20px", color: "#333" }}>
+                Your browser does not support viewing PDFs.
+              </p>
+            </object>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
