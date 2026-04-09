@@ -668,7 +668,7 @@ function SupplyViewSystemContent() {
 
         const userData = sanitizeData(userDoc.data() || {});
 
-        if (userData?.role !== 'Manager') {
+        if (userData?.role !== 'Manager' && userData?.role !== 'HR') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           if (typeof window !== 'undefined') {
@@ -988,15 +988,15 @@ function SupplyViewSystemContent() {
   }, [selectedOffice, dentalItems, officeItems, orderQuantitiesByOffice, editingQuantitiesByOffice]);
 
   useEffect(() => {
-    const revokeBlob = () => {
-      if (pdfViewerBlobUrlRef.current) {
+    const clearViewerUrlRef = () => {
+      if (pdfViewerBlobUrlRef.current?.startsWith('blob:')) {
         URL.revokeObjectURL(pdfViewerBlobUrlRef.current);
-        pdfViewerBlobUrlRef.current = null;
       }
+      pdfViewerBlobUrlRef.current = null;
     };
 
     if (!viewingOrderPdf?.path) {
-      revokeBlob();
+      clearViewerUrlRef();
       setProcessingPdfViewerUrl(null);
       setProcessingPdfViewerLoading(false);
       setProcessingPdfViewerError(false);
@@ -1004,7 +1004,7 @@ function SupplyViewSystemContent() {
     }
     const p = normalizeSupplyStoragePath(viewingOrderPdf.path);
     if (!p) {
-      revokeBlob();
+      clearViewerUrlRef();
       setProcessingPdfViewerError(true);
       setProcessingPdfViewerLoading(false);
       return;
@@ -1013,31 +1013,46 @@ function SupplyViewSystemContent() {
     setProcessingPdfViewerLoading(true);
     setProcessingPdfViewerError(false);
     setProcessingPdfViewerUrl(null);
-    revokeBlob();
+    clearViewerUrlRef();
+
+    const setViewerSource = (sourceUrl: string, revokePreviousBlob = true) => {
+      if (cancelled || !sourceUrl) return;
+      if (pdfViewerBlobUrlRef.current) {
+        if (
+          revokePreviousBlob &&
+          pdfViewerBlobUrlRef.current.startsWith('blob:')
+        ) {
+          URL.revokeObjectURL(pdfViewerBlobUrlRef.current);
+        }
+        pdfViewerBlobUrlRef.current = null;
+      }
+      pdfViewerBlobUrlRef.current = sourceUrl;
+      setProcessingPdfViewerUrl(sourceUrl);
+      setProcessingPdfViewerLoading(false);
+    };
+
+    const onError = (error?: unknown) => {
+      if (!cancelled) {
+        if (error) {
+          console.error('Failed to open PDF:', error);
+        }
+        setProcessingPdfViewerError(true);
+        setProcessingPdfViewerLoading(false);
+      }
+    };
 
     const storageRef = ref(getStorage(), p);
     getDownloadURL(storageRef)
-      .then(async (url) => {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
-        const blob = await res.blob();
-        if (cancelled) return;
-        revokeBlob();
-        const blobUrl = URL.createObjectURL(blob);
-        pdfViewerBlobUrlRef.current = blobUrl;
-        setProcessingPdfViewerUrl(blobUrl);
-        setProcessingPdfViewerLoading(false);
-      })
-      .catch((err) => {
-        console.error(err);
-        if (!cancelled) {
-          setProcessingPdfViewerError(true);
-          setProcessingPdfViewerLoading(false);
-        }
+      .then((downloadUrl) => setViewerSource(downloadUrl, false))
+      .catch((urlError) => {
+        console.error('Failed to get download URL:', urlError);
+        onError(urlError);
       });
+
     return () => {
       cancelled = true;
-      revokeBlob();
+      clearViewerUrlRef();
+      setProcessingPdfViewerUrl(null);
     };
   }, [viewingOrderPdf]);
 
