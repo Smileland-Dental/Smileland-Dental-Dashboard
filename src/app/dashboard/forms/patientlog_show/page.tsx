@@ -343,7 +343,6 @@ export default function ShowCheckSystem() {
     };
   }, [pdfLoading]);
 
-  // show-noshow 컬렉션에서 제출된 Patient Log 불러오기 (날짜별 문서)
   const loadAppointments = async () => {
     try {
       const now = Date.now();
@@ -372,7 +371,7 @@ export default function ShowCheckSystem() {
           data.patients.forEach((p: any, index: number) => {
             const name = typeof p.name === 'string' ? p.name.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '';
             const office = typeof p.office === 'string' ? p.office.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '';
-            const showStatus = (p.showStatus === 'show' || p.showStatus === 'no-show' || p.showStatus === 'pending') ? p.showStatus : 'pending';
+            const showStatus = (p.showStatus === 'show' || p.showStatus === 'no-show' || p.showStatus === 'pending' || p.showStatus === 'reschedule') ? p.showStatus : 'pending';
             allAppointments.push({
               name,
               office,
@@ -394,7 +393,7 @@ export default function ShowCheckSystem() {
           patients.forEach((p: any, index: number) => {
             const name = typeof p.name === 'string' ? p.name.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 100) : '';
             const office = typeof p.office === 'string' ? p.office.replace(/[\x00-\x1F\x7F-\x9F]/g, '').slice(0, 50) : '';
-            const showStatus = (p.showStatus === 'show' || p.showStatus === 'no-show' || p.showStatus === 'pending') ? p.showStatus : 'pending';
+            const showStatus = (p.showStatus === 'show' || p.showStatus === 'no-show' || p.showStatus === 'pending' || p.showStatus === 'reschedule') ? p.showStatus : 'pending';
             allAppointments.push({
               name,
               office,
@@ -472,8 +471,8 @@ export default function ShowCheckSystem() {
       }
       lastUpdateStatusCall.current = now;
 
-      // 상태 값 whitelist 검증 (show, no-show, pending만 허용)
-      const validStatuses = ['show', 'no-show', 'pending'];
+      // 상태 값 whitelist 검증 (show, no-show, pending, reschedule 허용)
+      const validStatuses = ['show', 'no-show', 'pending', 'reschedule'];
       if (!validStatuses.includes(newStatus)) {
         alert('⚠️ Invalid value.');
         return;
@@ -589,13 +588,11 @@ export default function ShowCheckSystem() {
       return;
     }
 
-    // pending 상태가 있는지 체크 (actions 또는 showStatus)
-    const hasPendingStatus = filteredAppointments.some(apt => 
-      apt.actions === 'pending' || 
-      apt.showStatus === 'pending' || 
-      (!apt.actions && !apt.showStatus) ||
-      (apt.actions !== 'show' && apt.actions !== 'no-show' && apt.showStatus !== 'show' && apt.showStatus !== 'no-show')
-    );
+    // 미처리(pending) 상태가 있는지 체크 — reschedule은 Show Rate에만 제외되며 제출은 가능
+    const hasPendingStatus = filteredAppointments.some(apt => {
+      const s = apt.showStatus ?? apt.actions;
+      return s !== 'show' && s !== 'no-show' && s !== 'reschedule';
+    });
     
     if (hasPendingStatus) {
       alert('⚠️ Please select Show or No Show for all appointments before submitting.');
@@ -650,14 +647,16 @@ export default function ShowCheckSystem() {
       if (selectedOffice && selectedOffice !== 'All') {
         pdfFilteredAppointments = pdfFilteredAppointments.filter(apt => apt.office === selectedOffice);
       }
-      
-      // pending 상태의 appointment는 PDF에서 제외
-      pdfFilteredAppointments = pdfFilteredAppointments.filter(apt => 
-        apt.showStatus === 'show' || apt.showStatus === 'no-show'
+
+      // 제출 후 DB에서 제거할 행: show / no-show / reschedule (pending은 유지)
+      const appointmentsToDeleteFromDb = pdfFilteredAppointments.filter(apt =>
+        apt.showStatus === 'show' || apt.showStatus === 'no-show' || apt.showStatus === 'reschedule'
       );
       
-      // PDF 생성에 사용할 데이터 저장 (삭제 시 사용)
-      const appointmentsForPdf = pdfFilteredAppointments;
+      // PDF에는 show·no-show만 포함 (reschedule 제외)
+      const appointmentsForPdf = pdfFilteredAppointments.filter(apt => 
+        apt.showStatus === 'show' || apt.showStatus === 'no-show'
+      );
       
       // PDF 생성 전에 데이터가 있는지 확인
       if (appointmentsForPdf.length === 0) {
@@ -671,7 +670,8 @@ export default function ShowCheckSystem() {
       // 통계 계산
       const showCount = appointmentsForPdf.filter(apt => apt.showStatus === 'show').length;
       const noShowCount = appointmentsForPdf.filter(apt => apt.showStatus === 'no-show').length;
-      const showRate = appointmentsForPdf.length > 0 ? ((showCount / (showCount + noShowCount)) * 100).toFixed(1) : '0';
+      const denom = showCount + noShowCount;
+      const showRate = denom > 0 ? ((showCount / denom) * 100).toFixed(1) : '0';
 
       // 생성 날짜 포맷팅
       const currentDate = new Date();
@@ -752,7 +752,7 @@ export default function ShowCheckSystem() {
           setProgress(90);
           
           try {
-            await deleteProcessedAppointments(appointmentsForPdf);
+            await deleteProcessedAppointments(appointmentsToDeleteFromDb);
           } catch (deleteError) {
             // 로그 제거 (보안 강화)
           }
@@ -921,6 +921,12 @@ export default function ShowCheckSystem() {
     color: 'white'
   };
 
+  const rescheduleButtonStyle = {
+    ...buttonStyle,
+    backgroundColor: '#6f42c1',
+    color: 'white'
+  };
+
   const pendingButtonStyle = {
     ...buttonStyle,
     backgroundColor: '#ffc107',
@@ -941,6 +947,7 @@ export default function ShowCheckSystem() {
     switch (status) {
       case 'show': return '#d4edda'; // 초록색 배경
       case 'no-show': return '#f8d7da'; // 빨간색 배경
+      case 'reschedule': return '#e7d5f5'; // 보라 톤 배경
       case 'pending': return '#fff3cd'; // 노란색 배경
       default: return index % 2 === 0 ? '#f9f9f9' : 'white'; // 기본 교대로 배경색
     }
@@ -950,6 +957,7 @@ export default function ShowCheckSystem() {
     switch (status) {
       case 'show': return 'Show ✅';
       case 'no-show': return 'No Show ❌';
+      case 'reschedule': return 'Reschedule 📅';
       default: return 'Pending ⏳';
     }
   };
@@ -1233,13 +1241,20 @@ export default function ShowCheckSystem() {
                           >
                             No Show
                           </button>
-                        <button
+                          <button
+                            onClick={() => updateShowStatus(appointment, 'reschedule')}
+                            style={rescheduleButtonStyle}
+                            disabled={appointment.showStatus === 'reschedule'}
+                          >
+                            Reschedule
+                          </button>
+                          <button
                             onClick={() => updateShowStatus(appointment, 'pending')}
                             style={pendingButtonStyle}
                             disabled={appointment.showStatus === 'pending'}
                           >
                             Pending
-                        </button>
+                          </button>
                         </div>
                     </td>
                   </tr>
@@ -1257,8 +1272,10 @@ export default function ShowCheckSystem() {
               {(() => {
                 const showCount = filteredAppointments.filter(apt => apt.showStatus === 'show').length;
                 const noShowCount = filteredAppointments.filter(apt => apt.showStatus === 'no-show').length;
+                const rescheduleCount = filteredAppointments.filter(apt => apt.showStatus === 'reschedule').length;
                 const pendingCount = filteredAppointments.filter(apt => apt.showStatus === 'pending').length;
-                const showRate = filteredAppointments.length > 0 ? ((showCount / (showCount + noShowCount)) * 100).toFixed(1) : 0;
+                const rateDenom = showCount + noShowCount;
+                const showRate = rateDenom > 0 ? ((showCount / rateDenom) * 100).toFixed(1) : '0';
                 
                 return (
                   <>
@@ -1283,6 +1300,17 @@ export default function ShowCheckSystem() {
                     }}>
                       <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#721c24' }}>{noShowCount}</div>
                       <div style={{ color: '#721c24' }}>No Show</div>
+                    </div>
+                    <div style={{ 
+                      flex: '1', 
+                      minWidth: '150px', 
+                      padding: '15px', 
+                      backgroundColor: '#e7d5f5', 
+                      borderRadius: '8px',
+                      textAlign: 'center'
+                    }}>
+                      <div style={{ fontSize: '24px', fontWeight: 'bold', color: '#4a148c' }}>{rescheduleCount}</div>
+                      <div style={{ color: '#4a148c' }}>Reschedule</div>
                     </div>
                     <div style={{ 
                       flex: '1', 
@@ -1317,12 +1345,10 @@ export default function ShowCheckSystem() {
         {filteredAppointments.length > 0 && (
           <div style={{textAlign: 'center', margin: '30px 0'}}>
           {(() => {
-            const hasPendingStatus = filteredAppointments.some(apt => 
-              apt.actions === 'pending' || 
-              apt.showStatus === 'pending' || 
-              (!apt.actions && !apt.showStatus) ||
-              (apt.actions !== 'show' && apt.actions !== 'no-show' && apt.showStatus !== 'show' && apt.showStatus !== 'no-show')
-            );
+            const hasPendingStatus = filteredAppointments.some(apt => {
+              const s = apt.showStatus ?? apt.actions;
+              return s !== 'show' && s !== 'no-show' && s !== 'reschedule';
+            });
             const nameEmpty = !name || !name.trim();
             const canSubmit = !pdfLoading && !hasPendingStatus && !nameEmpty;
             const titleMsg = nameEmpty
@@ -1360,5 +1386,3 @@ export default function ShowCheckSystem() {
     </>
   );
 }
-
-

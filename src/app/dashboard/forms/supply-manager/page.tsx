@@ -854,15 +854,15 @@ function SupplyManagerSystemContent() {
   }, [supplyType, orderRequestPdfs, searchInput]);
 
   useEffect(() => {
-    const revokeBlob = () => {
-      if (storagePdfBlobUrlRef.current) {
+    const clearViewerUrlRef = () => {
+      if (storagePdfBlobUrlRef.current?.startsWith("blob:")) {
         URL.revokeObjectURL(storagePdfBlobUrlRef.current);
-        storagePdfBlobUrlRef.current = null;
       }
+      storagePdfBlobUrlRef.current = null;
     };
 
     if (!viewingStoragePdf?.path) {
-      revokeBlob();
+      clearViewerUrlRef();
       setStoragePdfViewerUrl(null);
       setStoragePdfViewerLoading(false);
       setStoragePdfViewerError(false);
@@ -870,7 +870,7 @@ function SupplyManagerSystemContent() {
     }
     const p = normalizeSupplyStoragePath(viewingStoragePdf.path);
     if (!p) {
-      revokeBlob();
+      clearViewerUrlRef();
       setStoragePdfViewerError(true);
       setStoragePdfViewerLoading(false);
       return;
@@ -879,31 +879,46 @@ function SupplyManagerSystemContent() {
     setStoragePdfViewerLoading(true);
     setStoragePdfViewerError(false);
     setStoragePdfViewerUrl(null);
-    revokeBlob();
+    clearViewerUrlRef();
+
+    const setViewerSource = (sourceUrl: string, revokePreviousBlob = true) => {
+      if (cancelled || !sourceUrl) return;
+      if (storagePdfBlobUrlRef.current) {
+        if (
+          revokePreviousBlob &&
+          storagePdfBlobUrlRef.current.startsWith("blob:")
+        ) {
+          URL.revokeObjectURL(storagePdfBlobUrlRef.current);
+        }
+        storagePdfBlobUrlRef.current = null;
+      }
+      storagePdfBlobUrlRef.current = sourceUrl;
+      setStoragePdfViewerUrl(sourceUrl);
+      setStoragePdfViewerLoading(false);
+    };
+
+    const onError = (error?: unknown) => {
+      if (!cancelled) {
+        if (error) {
+          console.error("Failed to open PDF:", error);
+        }
+        setStoragePdfViewerError(true);
+        setStoragePdfViewerLoading(false);
+      }
+    };
 
     const storageRef = ref(getStorage(), p);
     getDownloadURL(storageRef)
-      .then(async (url) => {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`PDF fetch failed: ${res.status}`);
-        const blob = await res.blob();
-        if (cancelled) return;
-        revokeBlob();
-        const blobUrl = URL.createObjectURL(blob);
-        storagePdfBlobUrlRef.current = blobUrl;
-        setStoragePdfViewerUrl(blobUrl);
-        setStoragePdfViewerLoading(false);
-      })
-      .catch((err) => {
-        console.error(err);
-        if (!cancelled) {
-          setStoragePdfViewerError(true);
-          setStoragePdfViewerLoading(false);
-        }
+      .then((downloadUrl) => setViewerSource(downloadUrl, false))
+      .catch((urlError) => {
+        console.error("Failed to get download URL:", urlError);
+        onError(urlError);
       });
+
     return () => {
       cancelled = true;
-      revokeBlob();
+      clearViewerUrlRef();
+      setStoragePdfViewerUrl(null);
     };
   }, [viewingStoragePdf]);
 
