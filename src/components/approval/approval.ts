@@ -1,6 +1,7 @@
 import { db } from '@/lib/firebase.config'; 
 import { collection, query, where, getDocs, DocumentData, QuerySnapshot } from "firebase/firestore";
 import { AbsenceRequest, User } from '@/lib/types';
+import { Timestamp } from 'firebase/firestore';
 
 /**
  * Splits an array into smaller chunks to satisfy Firestore's 30-item 'in' limit.
@@ -16,7 +17,7 @@ const chunkArray = (arr: string[], size: number): string[][] => {
  * - HR/Director: See all requests in their assigned offices.
  * - Manager: See ONLY requests from employees in their managedEmployeeIds list.
  */
-export async function getAbsenceRequestsByUser(user: User): Promise<AbsenceRequest[]> {
+export async function getAbsenceRequestsByUser(user: User, startDateString: string, endDateString: string): Promise<AbsenceRequest[]> {
 
   const userRole = user.role || "";
   const managedEmployeeIds: string[] = user.managedEmployeeIds || [];
@@ -26,6 +27,8 @@ export async function getAbsenceRequestsByUser(user: User): Promise<AbsenceReque
   //console.log("User Role:", userRole);
   //console.log("Managed Employee IDs:", managedEmployeeIds);
   //console.log("Offices:", offices);
+const start = Timestamp.fromDate(new Date(`${startDateString}T00:00:00`));
+const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
 
 // 1. Basic Permission Guard
   if (!["HR", "Director", "Manager"].includes(userRole)) return [];
@@ -36,7 +39,7 @@ export async function getAbsenceRequestsByUser(user: User): Promise<AbsenceReque
     // 2. Logic: If no specific employees are managed, fetch EVERYTHING (Global Access)
     // This applies to HR/Directors who don't have a specific team assigned.
     if (managedEmployeeIds.length === 0 && ["HR", "Director"].includes(userRole)) {
-      const globalQuery = query(absencesRef);
+      const globalQuery = query(absencesRef, where("createdAt", ">=", start), where("createdAt", "<=", end));
       const snap = await getDocs(globalQuery);
       allRequests = snap.docs.map(doc => ({ 
         id: doc.id, 
@@ -51,7 +54,7 @@ export async function getAbsenceRequestsByUser(user: User): Promise<AbsenceReque
       
       // Execute all queries in parallel
       const queryPromises = chunks.map(chunk => {
-        const q = query(absencesRef, where("employeeFirestoreID", "in", chunk));
+        const q = query(absencesRef, where("employeeFirestoreID", "in", chunk), where("createdAt", ">=", start), where("createdAt", "<=", end), where("skipManagerApproval", "==", false));
         return getDocs(q); 
       });
 

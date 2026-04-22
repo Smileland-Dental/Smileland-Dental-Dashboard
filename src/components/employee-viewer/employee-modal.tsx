@@ -233,7 +233,9 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
                     <button 
                       onClick={handleSave} 
                       disabled={isSaving}
-                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-400"
+                      className={`flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-400 transition-all ${
+                      hasUnsavedChanges && !isSaving ? 'animate-pulse-save shadow-lg' : ''
+                    }`}
                     >
                       {isSaving ? 'Saving...' : <><Save size={16}/> Save Changes</>}
                     </button>
@@ -436,7 +438,9 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
                     <button 
                       onClick={handleSave} 
                       disabled={isSaving}
-                      className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-400"
+                      className={`flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-400 transition-all ${
+                      hasUnsavedChanges && !isSaving ? 'animate-pulse-save shadow-lg' : ''
+                    }`}
                     >
                       {isSaving ? 'Saving...' : <><Save size={16}/> Save Changes</>}
                     </button>
@@ -522,6 +526,26 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
                     <label className="text-xs font-semibold text-gray-500">Other Job Titles</label>
                     <input name="otherJobTitles" value={formData.otherJobTitles || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
                  </div>
+
+                                   <div className="space-y-1 md:col-span-2 mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200 flex items-center justify-between">
+  <div className="space-y-0.5">
+    <label className="text-sm font-bold text-gray-700">Skip Manager Approval</label>
+    <p className="text-xs text-gray-500">Enable to Bypass Manager Review for Absence Requests.</p>
+  </div>
+  <button
+    type="button"
+    onClick={() => setFormData(prev => ({ ...prev, skipManagerApproval: !prev.skipManagerApproval }))}
+    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+      formData.skipManagerApproval ? 'bg-blue-600' : 'bg-gray-300'
+    }`}
+  >
+    <span
+      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+        formData.skipManagerApproval ? 'translate-x-6' : 'translate-x-1'
+      }`}
+    />
+  </button>
+</div>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-y-4 text-gray-700">
@@ -545,6 +569,20 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
                   <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Employee SSN:</span> {formData.employeeSSN || 'N/A'}</p>
                   <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Birth:</span> {formData.dateOfBirth || 'N/A'}</p>
                   <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Other Job Titles:</span> {formData.otherJobTitles || 'N/A'}</p>
+                                    <p className="flex items-center min-h-[32px]">
+                    <span className="font-semibold w-42 shrink-0 text-gray-900">Manager Approval:</span> 
+                    <span className="flex-grow">
+                      {formData.skipManagerApproval ? (
+                        <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200 inline-block leading-none">
+                          Skipped (Auto-Approve)
+                        </span>
+                      ) : (
+                        <span className="text-xs font-bold text-green-700 bg-green-50 px-2 py-1 rounded border border-green-200 inline-block leading-none">
+                          Required
+                        </span>
+                      )}
+                    </span>
+                  </p>
                 </div>
               </div>
             )}
@@ -655,7 +693,11 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
                   if (isEditing && hasUnsavedChanges) {
                     const confirmLeave = window.confirm("You have unsaved changes. Are you sure you want to switch tabs? Your progress will be kept, but not saved to the database.");
                     if (!confirmLeave) return;
+
                   }
+
+                  handleCancelEdit();
+                  
                   setActiveTab(tab.id as TabCategory);}}
                   className={`flex items-center gap-3 p-3 rounded-md text-sm font-medium transition-colors duration-200 flex-shrink-0 lg:w-full ${
                     activeTab === tab.id ? 'bg-blue-100 text-blue-700' : 'text-gray-600 hover:bg-gray-100'

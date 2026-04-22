@@ -1,7 +1,8 @@
-'use client'; // Add this if using Next.js App Router and the component has client-side interactions
+'use client';
 
-import React from 'react';
-import { AbsenceRequest } from '@/lib/types'; // Import the type from our new central file
+import React, { useState, useMemo, useEffect } from 'react';
+import { AbsenceRequest } from '@/lib/types';
+import { ChevronRight, Calendar, FileText, ArrowUp, ArrowDown, Filter } from 'lucide-react';
 
 type RequestTableProps = {
   requests: AbsenceRequest[];
@@ -10,63 +11,247 @@ type RequestTableProps = {
 };
 
 export const AbsenceTable: React.FC<RequestTableProps> = ({ requests, status, onViewDetails }) => {
-  if (requests.length !== 0) {
-    return (
-      <div className="overflow-x-auto">
-        {(status === 'needed') && (
-          <h3 className='text-sm font-semibold'>EXCUSE NOTE PENDING:</h3>
-        )}
-        <table className="min-w-full bg-white divide-y divide-gray-200 mt-4">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dates</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Request Type</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Incident Type</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Office</th>
-              <th className="px-3 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Excuse Note</th>
-              <th className="px-3 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Action</th>
-            </tr>
-          </thead>
-          <tbody className="bg-white divide-y divide-gray-200">
-            {requests.map((req) => (
-              <tr key={req.id} className="hover:bg-gray-100">
-                <td className="px-3 py-4 whitespace-nowrap">{req.incident_start} to {req.incident_end}</td>
-                <td className="px-3 py-4 whitespace-nowrap">{req.type_of_request}</td>
-                <td className="px-3 py-4 whitespace-nowrap">{req.type_of_incident}</td>
-                <td className="px-3 py-4 whitespace-nowrap">{req.office}</td>
-                <td className="px-3 py-4 whitespace-nowrap capitalize">
-                  {(req.excuse_note_submitted === 'pending') && (
-                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-yellow-100 text-yellow-800">
-                      Pending
-                    </span>
-                  )}
-                  {(req.excuse_note_submitted === 'not_provided') && (
-                  <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-red-100 text-red-800">
-                    No Note
-                  </span>
-                  )}
-                  {(req.excuse_note_submitted === 'submitted') && (
-                    <span className="px-2 inline-flex text-xs leading-5 font-semibold rounded-full bg-green-100 text-green-800">
-                      Submitted
-                    </span>
-                  )}
+  // --- Date Filter State (Default to last 30 days) ---
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30);
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
 
-                </td>
-                <td className="px-3 py-4 whitespace-nowrap text-right text-sm font-medium">
-                  <button
-                    onClick={() => onViewDetails(req)}
-                    className="text-indigo-500 hover:text-indigo-900 font-medium cursor-pointer"
-                  >
-                    View Details
-                  </button>
-                </td>
-              </tr>
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 5;
+
+  // Unique types for the dropdown
+  const uniqueTypes = useMemo(() => {
+    const types = new Set(requests.map(r => r.type_of_incident));
+    return Array.from(types).sort();
+  }, [requests]);
+
+  // Reset pagination on filter change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [typeFilter, sortOrder, startDate, endDate]);
+
+  const processedRequests = useMemo(() => {
+    let result = requests.filter((req) => {
+      // 1. Type Filter
+      const matchesType = typeFilter === 'all' || req.type_of_incident === typeFilter;
+      
+      // 2. Date Range Filter (Check if incident_start falls within range)
+      const reqDate = req.incident_start; // Assuming YYYY-MM-DD string format
+      const isWithinDate = reqDate >= startDate && reqDate <= endDate;
+
+      return matchesType && isWithinDate;
+    });
+
+    // 3. Sort Logic
+    result.sort((a, b) => {
+      const dateA = new Date(a.incident_start).getTime();
+      const dateB = new Date(b.incident_start).getTime();
+      return sortOrder === 'desc' ? dateB - dateA : dateA - dateB;
+    });
+
+    return result;
+  }, [requests, typeFilter, sortOrder, startDate, endDate]);
+
+  const paginatedRequests = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return processedRequests.slice(startIndex, startIndex + itemsPerPage);
+  }, [processedRequests, currentPage]);
+
+  const totalPages = Math.ceil(processedRequests.length / itemsPerPage) || 1;
+
+  return (
+    <div className="space-y-4">
+      {/* Control Bar: Date Pickers + Incident Filter */}
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 bg-white p-4 rounded-2xl border border-gray-100 shadow-sm">
+        
+        {/* Date From */}
+        <div className="flex flex-col bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
+          <span className="text-[9px] font-black text-slate-400 uppercase">From</span>
+          <input 
+            type="date" 
+            value={startDate} 
+            onChange={e => setStartDate(e.target.value)} 
+            className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0 text-slate-900" 
+          />
+        </div>
+
+        {/* Date To */}
+        <div className="flex flex-col bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
+          <span className="text-[9px] font-black text-slate-400 uppercase">To</span>
+          <input 
+            type="date" 
+            value={endDate} 
+            onChange={e => setEndDate(e.target.value)} 
+            className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0 text-slate-900" 
+          />
+        </div>
+
+        {/* Incident Type Filter */}
+        <div className="flex flex-col bg-slate-50 px-3 py-1.5 rounded-xl border border-slate-100">
+          <span className="text-[9px] font-black text-slate-400 uppercase">Incident Type</span>
+          <select
+            className="bg-transparent border-none focus:ring-0 p-0 text-xs font-bold text-slate-900 cursor-pointer"
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+          >
+            <option value="all">All Categories</option>
+            {uniqueTypes.map(t => (
+              <option key={t} value={t}>{t}</option>
             ))}
-          </tbody>
-        </table>
-      </div>
-    )
-  }
+          </select>
+        </div>
 
-  return <div className="p-4 text-center text-gray-500">No Request to Display</div>;
+        {/* Pending Note Indicator */}
+        {status === 'needed' && (
+          <div className="flex items-center justify-center gap-2 bg-amber-50 rounded-xl border border-amber-100">
+            <FileText className="h-4 w-4 text-amber-600" />
+            <span className="text-[10px] font-black text-amber-800 uppercase">Note Needed</span>
+          </div>
+        )}
+      </div>
+
+      {/* Main Table */}
+      <div className="bg-white rounded-[2rem] shadow-xl overflow-hidden border border-slate-200">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-slate-100">
+            <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
+              <tr>
+                <th className="px-6 py-4 text-left tracking-wider">
+                  <button 
+                    onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                    className="flex items-center gap-1 hover:text-slate-900 transition-colors"
+                  >
+                    Incident Date
+                    {sortOrder === 'desc' ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />}
+                  </button>
+                </th>
+                <th className="px-6 py-4 text-left tracking-wider">Type</th>
+                <th className="px-6 py-4 text-left tracking-wider">Excuse Note</th>
+                <th className="px-6 py-4 text-left tracking-wider">Status</th>
+                <th className="px-6 py-4 text-right tracking-wider">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-50 bg-white">
+              {paginatedRequests.length > 0 ? (
+                paginatedRequests.map((req) => (
+                  <tr key={req.id} className="group hover:bg-slate-50/50 transition-colors">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
+                        <Calendar className="h-3.5 w-3.5 text-slate-400" />
+                        {req.incident_start === req.incident_end 
+                          ? req.incident_start 
+                          : `${req.incident_start} - ${req.incident_end}`}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className="text-[11px] font-bold text-slate-600 bg-slate-100 px-2 py-1 rounded-lg uppercase">
+                        {req.type_of_incident}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <NoteBadge status={req.excuse_note_submitted} />
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <StatusBadge req={req} />
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-right">
+                      <button
+                        onClick={() => onViewDetails(req)}
+                        className="inline-flex items-center gap-1 text-[11px] font-black text-indigo-600 hover:text-indigo-800 uppercase tracking-tighter"
+                      >
+                        Details
+                        <ChevronRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={5} className="px-6 py-16 text-center text-slate-400 font-bold uppercase text-xs italic">
+                    No records found in this date range
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Pagination */}
+        <div className="px-8 py-5 bg-slate-50/50 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <p className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                            Showing <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> to{' '}
+                <span className="font-medium">
+                  {Math.min(currentPage * itemsPerPage, processedRequests.length)}
+                </span> of{' '}
+                <span className="font-medium">{processedRequests.length}</span> results
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={currentPage === 1}
+              className="px-4 py-2 text-[11px] font-black uppercase tracking-tighter bg-white border border-slate-200 rounded-xl shadow-sm disabled:opacity-50 hover:bg-slate-50 transition-all"
+            >
+              Prev
+            </button>
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={currentPage === totalPages}
+              className="px-4 py-2 text-[11px] font-black uppercase tracking-tighter bg-white border border-slate-200 rounded-xl shadow-sm disabled:opacity-50 hover:bg-slate-50 transition-all"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ... (NoteBadge, StatusBadge, and Badge components remain the same as previously defined)
+
+// Sub-component for the Excuse Note Status
+const NoteBadge = ({ status }: { status: string }) => {
+  const configs: Record<string, { bg: string, text: string, label: string }> = {
+    pending: { bg: 'bg-yellow-50', text: 'text-yellow-700', label: 'Pending' },
+    not_provided: { bg: 'bg-rose-50', text: 'text-rose-700', label: 'No Note' },
+    submitted: { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Submitted' },
+  };
+
+  const config = configs[status] || configs.not_provided;
+
+  return (
+    <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wide border shadow-sm ${config.bg} ${config.text} border-current/10`}>
+      {config.label}
+    </span>
+  );
+};
+
+// Logic-heavy Status Badge (Manager + Final)
+const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
+  if (req.manager_approval === 'denied' || req.final_approval === 'denied') {
+    return <Badge color="red" text={req.manager_approval === 'denied' && req.final_approval === 'pending' ? "Manager Denied" : "Denied"} />;
+  }
+  if (req.final_approval === 'approved') return <Badge color="green" text="Fully Approved" />;
+  if (req.manager_approval === 'approved') return <Badge color="yellow" text="Manager Approved" />;
+  if (req.manager_approval === 'not_required' && req.final_approval === 'pending') return <Badge color="yellow" text="Pending Final" />;
+  return <Badge color="gray" text="Pending" />;
+};
+
+const Badge = ({ color, text }: { color: string; text: string }) => {
+  const styles: Record<string, string> = {
+    green: 'bg-emerald-100 text-emerald-700 ring-emerald-600/20',
+    red: 'bg-rose-100 text-rose-700 ring-rose-600/20',
+    yellow: 'bg-amber-100 text-amber-700 ring-amber-600/20',
+    gray: 'bg-slate-100 text-slate-600 ring-slate-600/10',
+  };
+  return (
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-black uppercase ring-1 ring-inset ${styles[color]}`}>
+      {text}
+    </span>
+  );
 };

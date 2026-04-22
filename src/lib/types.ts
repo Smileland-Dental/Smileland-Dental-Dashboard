@@ -14,15 +14,17 @@ export type AbsenceRequest = {
   excuse_note_submitted: 'pending' | 'submitted' | 'not_provided';
   final_approval: 'pending' | 'approved' | 'denied';
   final_approval_name: string;
-  incident_end: string;
   incident_start: string;
-  manager_approval: 'pending' | 'approved' | 'denied';
+  incident_end: string;
+  manager_approval: 'pending' | 'approved' | 'denied' | 'not_required';
   manager_approval_name: string;
   manager_notes?: string;
-  office: string;
-  type_of_incident: string;
-  type_of_request: string;
+  office: string; // Office location associated with the employee making request
+  type_of_incident: string; // "Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"
+  type_of_request: string; // Either "Time Off Request" or "Incident Notice" for the User // "HR Call In" for HR created requests
   updatedAt?: Timestamp;
+  skipManagerApproval: boolean; // Field to indicate if manager approval is skipped (true/false)
+  DOAPoints: number; // Points assigned for the DOA system based on the hours missed
 };
 
 export interface User {
@@ -33,6 +35,7 @@ export interface User {
   username: string | null;
   managedEmployeeIds: string[]; // Array of Firestore document IDs for employees managed by this user
   offices: string[] | null;
+  linkedEmployeeId?: string; // Firestore document ID for the linked employee, if applicable
 }
 
 export interface Employee {
@@ -50,6 +53,7 @@ export interface Employee {
   jobStatus: 'Full-Time' | 'Part-Time';
   employmentStatus: 'Exempt' | 'Non-Exempt' | 'Contracted';
   imageURL: string;
+  skipManagerApproval: boolean; 
 
   // Input boxes for edit details after adding the employee
   // General Tab
