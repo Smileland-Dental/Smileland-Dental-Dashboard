@@ -6,11 +6,16 @@ import { doc, updateDoc, deleteDoc } from "firebase/firestore";
 import { db, storage } from '@/lib/firebase.config';
 import { ref, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
 import FeedbackModal from '@/components/ui/FeedbackModal';
+import { AlertCircle, Lock } from 'lucide-react'; // Added icons for visual feedback
 
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"];
 const officeLocations = ["Corporate", "Ming", "Bernard", "California", "Ortho", "Delano", "Tulare", "Visalia", "Fresno"];
 
 export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: { absence: any, onFormSubmit: () => void, onClose: () => void }) {
+  // --- 1. DEFINE DENIED STATE ---
+  const isDenied = absence.manager_approval === 'denied' || absence.final_approval === 'denied';
+  const isHRCallIn = absence.type_of_request === "HR Call In";
+
   const [formData, setFormData] = useState({
     type_of_request: absence.type_of_request || '',
     type_of_incident: absence.type_of_incident || '',
@@ -33,8 +38,9 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
     message: '',
   });
 
-  // Helper to determine if the form is different from the original database record
   const isDataChanged = () => {
+    if (isDenied) return false; // Force false if denied
+    // ... (rest of field changes logic remains same)
     const hasFieldChanges = 
       formData.type_of_request !== (absence.type_of_request || '') ||
       formData.type_of_incident !== (absence.type_of_incident || '') ||
@@ -47,22 +53,16 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
       formData.excuse_note_submitted !== (absence.excuse_note_submitted || 'not_provided');
 
     const hasFileChanges = newExcuseNotes.length > 0 || notesToRemove.length > 0;
-
     return hasFieldChanges || hasFileChanges;
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    if (isDenied) return; // Prevent state updates if denied
     const { name, value } = e.target;
-
+    // ... (rest of change logic remains same)
     if (name === "type_of_incident") {
-      // Restore original times if switching back to original type
       if (value === absence.type_of_incident) {
-        setFormData(prev => ({
-          ...prev,
-          [name]: value,
-          eta: absence.eta || '',
-          etd: absence.etd || ''
-        }));
+        setFormData(prev => ({ ...prev, [name]: value, eta: absence.eta || '', etd: absence.etd || '' }));
       } else {
         setFormData(prev => ({ ...prev, [name]: value, eta: '', etd: '' }));
       }
@@ -147,11 +147,13 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
       const remainingExistingNotes = existingNotes.filter((url: string) => !notesToRemove.includes(url));
       const finalNotes = [...remainingExistingNotes, ...newNoteUrls];
 
+      const managerApprovalStatus = isHRCallIn ? 'not_required' : 'pending';
+
       // --- 4. UPDATE FIRESTORE ---
       await updateDoc(doc(db, "absences", absence.id), {
         ...submissionData,
         excuse_note: finalNotes,
-        manager_approval: 'pending',
+        manager_approval: managerApprovalStatus,
         manager_approval_name: '',
         final_approval: 'pending',
         final_approval_name: '', 
@@ -177,21 +179,47 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
         <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
           
           <div className="flex justify-between items-center mb-6">
-            <h2 className="text-2xl font-bold text-gray-800">Edit Absence Request</h2>
-            <button type="button" onClick={handleDelete} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1 rounded border border-red-200 uppercase tracking-tighter">
-              Delete Request
-            </button>
+            <h2 className="text-2xl font-bold text-gray-800">
+              {isDenied ? 'View Absence Request' : 'Edit Absence Request'}
+            </h2>
+            
+            
+            {/* 2. HIDE DELETE IF DENIED */}
+            {!isDenied && (
+              <button type="button" onClick={handleDelete} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1 rounded border border-red-200 uppercase tracking-tighter">
+                Delete Request
+              </button>
+            )}
           </div>
+
+          {/* 3. DENIED STATUS BANNER */}
+          {isDenied && (
+            <div className="mb-6 p-4 bg-rose-50 border border-rose-200 rounded-xl flex items-center gap-3">
+              <Lock className="h-5 w-5 text-rose-500" />
+              <div>
+                <p className="text-sm font-bold text-rose-800">Request Locked</p>
+                <p className="text-xs text-rose-600">This request has been denied and can no longer be edited.</p>
+              </div>
+            </div>
+          )}
           
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Request Type */}
             <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
-              <label className="block text-sm font-semibold text-amber-900 mb-2">Type Of Request *</label>
+              <label className="block text-sm font-semibold text-amber-900 mb-2">Type Of Request</label>
               <div className="flex gap-6 text-sm">
-                {["Incident Notice", "Time Off Request"].map(val => (
+                {["Incident Notice", "Time Off Request", "HR Call In"].map(val => (
                   <label key={val} className="flex items-center gap-2 cursor-pointer">
-                    <input type="radio" name="type_of_request" value={val} checked={formData.type_of_request === val} onChange={handleChange} className="accent-amber-600" />
-                    <span className="text-amber-800">{val}</span>
+                    <input 
+                      type="radio" 
+                      name="type_of_request" 
+                      value={val} 
+                      checked={formData.type_of_request === val} 
+                      onChange={handleChange} 
+                      disabled={isDenied || isHRCallIn} // Disable
+                      className="accent-amber-600 disabled:opacity-50" 
+                    />
+                    <span className={`text-amber-800 ${isDenied ? 'opacity-70' : ''}`}>{val}</span>
                   </label>
                 ))}
               </div>
@@ -201,13 +229,13 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Incident Type</label>
-                <select name="type_of_incident" value={formData.type_of_incident} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md outline-none" required>
+                <select name="type_of_incident" value={formData.type_of_incident} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required>
                   {incidentTypes.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Office Location</label>
-                <select name="office" value={formData.office} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md outline-none" required>
+                <select name="office" value={formData.office} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required>
                   {officeLocations.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
@@ -217,11 +245,11 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Start Date</label>
-                <input name="incident_start" type="date" value={formData.incident_start} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md outline-none" required />
+                <input name="incident_start" type="date" value={formData.incident_start} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">End Date</label>
-                <input name="incident_end" type="date" value={formData.incident_end} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md outline-none" required />
+                <input name="incident_end" type="date" value={formData.incident_end} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
               </div>
             </div>
 
@@ -230,13 +258,13 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
               {["Late In", "Leave and Come Back"].includes(formData.type_of_incident) && (
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">ETA (Arrival)</label>
-                  <input name="eta" type="time" value={formData.eta} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md outline-none" required />
+                  <input name="eta" type="time" value={formData.eta} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
                 </div>
               )}
               {["Early Out", "Leave and Come Back"].includes(formData.type_of_incident) && (
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">ETD (Departure)</label>
-                  <input name="etd" type="time" value={formData.etd} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md outline-none" required />
+                  <input name="etd" type="time" value={formData.etd} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
                 </div>
               )}
             </div>
@@ -244,103 +272,82 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
             {/* Comments */}
             <div className="space-y-1">
               <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Comments</label>
-              <textarea name="employee_comments" value={formData.employee_comments} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md outline-none" rows={2} />
+              <textarea name="employee_comments" value={formData.employee_comments} onChange={handleChange} disabled={isDenied} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" rows={2} />
             </div>
 
             {/* File Management */}
-            <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-3 mt-1">
-              <p className="text-xs font-bold text-blue-800 uppercase">Notes & Files</p>
+            <div className={`p-4 rounded-lg space-y-3 mt-1 ${isDenied ? 'bg-slate-50 border border-slate-200' : 'bg-blue-50 border border-blue-200'}`}>
+              <p className={`text-xs font-bold uppercase ${isDenied ? 'text-slate-500' : 'text-blue-800'}`}>Notes & Files</p>
         
-              {/* List Existing Files from Database */}
               {absence.excuse_note?.map((url: string, i: number) => {
-                // Extract filename from Firebase URL
-                // 1. Get everything between /o/ and ?alt=media
-                // 2. Decode the URI (converts %20 back to spaces, etc)
-                // 3. Take the last part after the last "/"
                 const decodedPath = decodeURIComponent(url.split('/o/')[1].split('?')[0]);
                 const fileName = decodedPath.split('/').pop();
 
                 return (
-                  <div key={i} className="flex justify-between items-center bg-white p-2 rounded border border-blue-100">
-                    <a 
-                      href={url} 
-                      target="_blank" 
-                      rel="noreferrer" 
-                      className={`text-xs truncate max-w-[250px] font-medium ${
-                        notesToRemove.includes(url) ? 'line-through text-red-400' : 'text-blue-600 hover:underline'
-                      }`}
-                    >
+                  <div key={i} className="flex justify-between items-center bg-white p-2 rounded border border-slate-100">
+                    <a href={url} target="_blank" rel="noreferrer" className="text-xs truncate max-w-[250px] font-medium text-blue-600 hover:underline">
                       {fileName}
                     </a>
-                    <button 
-                      type="button" 
-                      onClick={() => handleToggleRemoveExistingNote(url)} 
-                      className="text-[10px] font-bold text-red-500 uppercase ml-2 hover:bg-red-50 px-2 py-1 rounded"
-                    >
-                      {notesToRemove.includes(url) ? 'Undo' : 'Remove'}
-                    </button>
+                    {/* Hide Remove button if Denied */}
+                    {!isDenied && (
+                      <button type="button" onClick={() => handleToggleRemoveExistingNote(url)} className="text-[10px] font-bold text-red-500 uppercase ml-2 hover:bg-red-50 px-2 py-1 rounded">
+                        {notesToRemove.includes(url) ? 'Undo' : 'Remove'}
+                      </button>
+                    )}
                   </div>
                 );
               })}
 
-              {/* Show names of NEW files selected but not yet uploaded */}
-              {newExcuseNotes.length > 0 && (
-                <div className="space-y-1">
-                  <p className="text-[10px] font-bold text-gray-500 uppercase">Pending Upload:</p>
-                  {newExcuseNotes.map((file, idx) => (
-                    <div key={idx} className="text-xs text-green-600 flex items-center justify-between bg-green-50 p-1 px-2 rounded">
-                      <span className="truncate max-w-[200px]">{file.name}</span>
-                      <button 
-                        type="button" 
-                        onClick={() => setNewExcuseNotes(prev => prev.filter((_, i) => i !== idx))}
-                        className="text-red-500 text-[10px]"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
+              {/* Hide File Upload if Denied */}
+              {!isDenied && (
+                <input type="file" multiple onChange={(e) => { if (e.target.files) setNewExcuseNotes(prev => [...prev, ...Array.from(e.target.files!)]); }} className="text-xs w-full file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer" />
               )}
-
-              <input 
-                type="file" 
-                multiple 
-                onChange={handleFileChange} 
-                className="text-xs w-full file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer" 
-              />
             </div>
 
-            {/* Confirmation Section */}
-            {changed && (
-              <div className="flex items-start gap-2 pt-2 animate-in fade-in duration-300">
-                <input 
-                  type="checkbox" 
-                  id="confirm" 
-                  checked={isChecked} 
-                  onChange={(e) => setIsChecked(e.target.checked)} 
-                  className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300" 
-                  required 
-                />
-                <label htmlFor="confirm" className="text-xs text-gray-600 leading-tight">
-                  I confirm these updates are accurate. This will restart the approval process.
-                </label>
-              </div>
-            )}
+            {changed && !isDenied && (
+  <div className="flex items-start gap-2 px-1 pt-2 animate-in fade-in slide-in-from-top-1 duration-300">
+    <input 
+      type="checkbox" 
+      id="confirm-update" 
+      checked={isChecked} 
+      onChange={(e) => setIsChecked(e.target.checked)} 
+      className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer" 
+    />
+    <label htmlFor="confirm-update" className="text-xs text-gray-600 leading-tight cursor-pointer">
+      I confirm these updates are accurate. <span className="font-bold text-gray-800">Note: This will reset the approval status to pending.</span>
+    </label>
+  </div>
+)}
 
             {/* Footer Buttons */}
-            <div className="flex justify-end gap-3 mt-6 border-t pt-5">
-              <button type="button" onClick={onClose} className="px-5 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-md transition">
-                Cancel
-              </button>
-              <button 
-                type="submit" 
-                // Button is disabled if: nothing changed, OR if changed but not checked, OR currently submitting
-                disabled={!changed || (changed && !isChecked) || isSubmitting} 
-                className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition"
-              >
-                {isSubmitting ? 'Saving...' : 'Save Changes'}
-              </button>
-            </div>
+<div className="flex items-center justify-between mt-6 border-t pt-5">
+  {/* ID on the left */}
+  <div className="text-[10px] font-mono text-gray-400 uppercase tracking-widest">
+    ID: <span className="select-all font-bold text-gray-500">{absence.id}</span>
+  </div>
+
+  {/* Buttons on the right */}
+  <div className="flex gap-3">
+    <button 
+      type="button" 
+      onClick={onClose} 
+      className="px-5 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-md transition"
+    >
+      {isDenied ? 'Close' : 'Cancel'}
+    </button>
+    
+    {!isDenied && (
+      <button 
+        type="submit" 
+        // Logic: Button is enabled ONLY if data changed AND user checked the box
+        disabled={!changed || !isChecked || isSubmitting} 
+        className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition shadow-sm"
+      >
+        {isSubmitting ? 'Saving...' : 'Save Changes'}
+      </button>
+    )}
+  </div>
+</div>
           </form>
         </div>
       </div>

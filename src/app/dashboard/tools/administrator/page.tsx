@@ -111,6 +111,7 @@ export default function AdministratorUsersPage() {
           <UserModal
             user={selectedUser} 
             allEmployees={allEmployees}
+            allUsers={allUsers}
             loggedInUserRole={loggedInUser?.role || 'User'} 
             onClose={() => setSelectedUser(null)}
             onUpdate={() => {}} 

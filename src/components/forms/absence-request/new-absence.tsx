@@ -16,11 +16,12 @@ interface NewAbsenceFormProps {
   employeeID: string;
   employeeTitle: string;
   employeeName: string;
+  employeeSkipManagerApproval: boolean;
   onFormSubmit: () => void;
   onClose: () => void;
 }
 
-export default function NewAbsenceForm({employeeFirestore, employeeID, employeeTitle, employeeName, onFormSubmit, onClose }: NewAbsenceFormProps) {
+export default function NewAbsenceForm({employeeFirestore, employeeID, employeeTitle, employeeName, employeeSkipManagerApproval, onFormSubmit, onClose }: NewAbsenceFormProps) {
   const [formData, setFormData] = useState({
     employeeFirestoreID: employeeFirestore || '',
     employee_id: employeeID || '',
@@ -35,10 +36,12 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
     eta: '',
     etd: '',
     excuse_note_submitted: 'not_provided',
-    manager_approval: 'pending',
+    manager_approval: employeeSkipManagerApproval ? 'not_required' : 'pending',
     manager_approval_name: '',
     final_approval: 'pending',
     final_approval_name: '', 
+    skipManagerApproval: employeeSkipManagerApproval || false,
+    DOAPoints: 0,
   });
 
   const [excuse_notes, setExcuseNotes] = useState<File[]>([]);
@@ -88,7 +91,6 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
       // 1. Create the doc
       const absenceRef = await addDoc(collection(db, "absences"), {
         ...formData,
-        manager_approval: 'pending',
         final_approval: 'pending',
         createdAt: new Date(),
         excuse_note: [], 

@@ -20,6 +20,16 @@ export default function Page() {
   const [allRequests, setAllRequests] = useState<AbsenceRequest[]>([]);
   const [activeTab, setActiveTab] = useState('all');
 
+  // --- Date Filter State ---
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 30); // Default to last 30 days
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(() => {
+    return new Date().toISOString().split('T')[0];
+  });
+
   const [selectedRequest, setSelectedRequest] = useState<AbsenceRequest | null>(null);
   const [managerNotes, setManagerNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -38,7 +48,7 @@ export default function Page() {
         setError(null);
         try {
           const requests = await getAbsenceRequestsByUser(
-          user,
+          user, startDate, endDate
         );
           setAllRequests(requests as AbsenceRequest[]);
         } catch (err: any) {
@@ -57,41 +67,52 @@ export default function Page() {
       fetchRequests();
       console.log("All Requests:", allRequests);
     }
-  }, [user, userOffices, userRole, userName, authLoading]);
+  }, [user, userOffices, userRole, userName, authLoading, startDate, endDate]);
 
   // Logic for filtering requests (remain unchanged but use derived userRole)
   const pendingRequests = useMemo(() => {
-    if (userRole === 'HR') {
-      return allRequests.filter(r => r.manager_approval === 'approved' && r.final_approval === 'pending');
-    } else if (userRole === 'Manager') {
-      return allRequests.filter(r => r.manager_approval === 'pending' && r.final_approval === 'pending');
-    } else if (userRole === 'Director') {
-      return allRequests.filter(r => r.manager_approval === 'approved' && r.final_approval === 'pending');
-    }
-    return [];
+    return allRequests.filter(r => {
+        // 1. If Manager: Show if they haven't acted yet
+        if (userRole === 'Manager') {
+          return r.manager_approval === 'pending' && r.final_approval === 'pending';
+        }
+        
+        // 2. If HR/Director: Show if it's ready for final sign-off 
+        // Show pending if manager approval is done but final approval is pending
+        if (userRole === 'HR' || userRole === 'Director') {;
+          return r.manager_approval === 'pending' && r.final_approval === 'pending';
+        }
+        return false;
+      });
   }, [allRequests, userRole]);
 
-  const pendingExemptRequests = useMemo(() => {
-    if (userRole === 'Director') {
-      return allRequests.filter(r => r.final_approval === 'pending' && ['Dentist', 'Supervisor', 'Exempt', 'EXEC'].includes(r.employee_title));
-    }
-    return [];
+  const pendingFinalApproval = useMemo(() => {
+    // Director and HR only: Show requests that are pending and marked as exempt from manager approval (skipManagerApproval = true)
+    return allRequests.filter(r => {
+      if (userRole === 'Director' || userRole === 'HR') {
+        return (r.manager_approval === 'not_required' && r.final_approval === 'pending') || (r.manager_approval === 'approved' && r.final_approval === 'pending'); // For now, show all pending requests for Directors. Adjust logic as needed for exempt filtering.
+      }
+      return false;
+    });
   }, [allRequests, userRole]);
 
   const approvedRequests = useMemo(() => {
-    if (userRole === 'HR' || userRole === 'Director') {
-      return allRequests.filter(r => r.final_approval === 'approved');
-    } else if (userRole === 'Manager') {
-      return allRequests.filter(r => r.manager_approval === 'approved');
-    }
-    return [];
+    return allRequests.filter(r => {
+      if (userRole === 'Manager') {
+        return (r.manager_approval === 'approved' && r.final_approval === 'pending') || (r.manager_approval === 'approved' && r.final_approval === 'approved');
+      }
+      if (userRole === 'HR' || userRole === 'Director') {
+        return r.final_approval === 'approved';
+      }
+      return false;
+    });
   }, [allRequests, userRole]);
 
   const deniedRequests = useMemo(() => {
     if (userRole === 'HR' || userRole === 'Director') {
       return allRequests.filter(r => r.final_approval === 'denied' || r.manager_approval === 'denied');
     } else if (userRole === 'Manager') {
-      return allRequests.filter(r => r.manager_approval === 'denied');
+      return allRequests.filter(r => r.manager_approval === 'denied' || r.final_approval === 'denied');
     }
     return [];
   }, [allRequests, userRole]);
@@ -114,18 +135,18 @@ export default function Page() {
 
     try {
       let updateData: any = {};
-      if (userRole === 'Manager') {
-        updateData = {
-          manager_approval: decision,
-          manager_notes: managerNotes,
-          manager_approval_name: userName,
-        };
-      } else {
-        updateData = {
-          final_approval: decision,
-          final_approval_name: userName, // Fixed the typo from your snippet
-          manager_notes: managerNotes,
-        };
+        if (userRole === 'Manager') {
+          updateData = {
+            manager_approval: decision,
+            manager_notes: managerNotes,
+            manager_approval_name: userName,
+          };
+        } else {
+          updateData = {
+            final_approval: decision,
+            final_approval_name: userName, // Fixed the typo from your snippet
+            manager_notes: managerNotes,
+          };
       }
 
       await updateDoc(docRef, updateData);
@@ -165,11 +186,31 @@ export default function Page() {
 
   return (
     <div className="p-2 md:p-4">
-      <h1 className="text-2xl font-bold mb-4">Approval Dashboard</h1>
-      <p className="mb-4 text-gray-600">Role: <span className="font-semibold">{userRole || 'Unassigned'}</span></p>
+      <h1 className="text-3xl font-black mb-4">Approval Dashboard</h1>
+
+      <div className="flex flex-wrap items-end gap-4 mb-6 bg-white p-4 rounded-lg shadow-sm border">
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+          <input 
+            type="date" 
+            value={startDate} 
+            onChange={(e) => setStartDate(e.target.value)}
+            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm border p-2"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">End Date</label>
+          <input 
+            type="date" 
+            value={endDate} 
+            onChange={(e) => setEndDate(e.target.value)}
+            className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm border p-2"
+          />
+        </div>
+        <p className="mb-4 text-gray-600">Role: <span className="font-semibold">{userRole || 'Unassigned'}</span></p>
+      </div>
       
       {/* Tabs */}
-      {/* Scrollable Tabs Container */}
       {/* Scrollable Tabs Container */}
       <div className="border-b border-gray-200">
         <nav 
@@ -192,15 +233,15 @@ export default function Page() {
             onClick={() => setActiveTab('pending')}
             className={`${activeTab === 'pending' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors flex-shrink-0`}
           >
-            Pending ({pendingRequests.length})
+            {userRole === 'Manager' ? 'Pending' : 'Pending Manager Approval'} ({pendingRequests.length})
           </button>
 
           {userRole === 'Director' && (
              <button
-                onClick={() => setActiveTab('pending_exempt')}
-                className={`${activeTab === 'pending_exempt' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors flex-shrink-0`}
+                onClick={() => setActiveTab('pending_final')}
+                className={`${activeTab === 'pending_final' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors flex-shrink-0`}
              >
-                Pending Exempt ({pendingExemptRequests.length})
+                Pending Final Approval ({pendingFinalApproval.length})
              </button>
           )}
 
@@ -230,8 +271,8 @@ export default function Page() {
         {activeTab === 'pending' && (
           <RequestTable requests={pendingRequests} userRole={userRole} onViewDetails={handleOpenModal} />
         )}
-        {activeTab === 'pending_exempt' && userRole === 'Director' && (
-           <RequestTable requests={pendingExemptRequests} userRole={userRole} onViewDetails={handleOpenModal} />
+        {activeTab === 'pending_final' && (userRole === 'Director' || userRole === 'HR') && (
+           <RequestTable requests={pendingFinalApproval} userRole={userRole} onViewDetails={handleOpenModal} />
         )}
         {activeTab === 'approved' && (
            <RequestTable requests={approvedRequests} userRole={userRole} onViewDetails={handleOpenModal} />

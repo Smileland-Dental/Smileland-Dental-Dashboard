@@ -24,6 +24,7 @@ export default function AddEmployeeForm({ onSuccess, onCancel }: AddEmployeeForm
     firstName: '',
     lastName: '',
     dateOfBirth: '',
+    skipManagerApproval: false,
   });
   
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -96,6 +97,7 @@ export default function AddEmployeeForm({ onSuccess, onCancel }: AddEmployeeForm
         id: firestoreId,
         employeeID: String(formData.employeeID),
         imageURL: imageURL || null,
+        skipManagerApproval: formData.skipManagerApproval, // Explicitly included
         createdAt: new Date(),
       });
 
@@ -249,6 +251,27 @@ export default function AddEmployeeForm({ onSuccess, onCancel }: AddEmployeeForm
                   ))}
                 </select>
               </div>  
+            </div>
+
+            {/* Manager Approval Override Toggle */}
+            <div className="p-3 bg-gray-50 rounded-lg border border-gray-200 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <label className="text-sm font-semibold text-gray-700">Skip Manager Approval</label>
+                <p className="text-xs text-gray-500">Enable to Bypass Manager Review for Absence Requests.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFormData(prev => ({ ...prev, skipManagerApproval: !prev.skipManagerApproval }))}
+                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
+                  formData.skipManagerApproval ? 'bg-blue-600' : 'bg-gray-300'
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                    formData.skipManagerApproval ? 'translate-x-6' : 'translate-x-1'
+                  }`}
+                />
+              </button>
             </div>
 
             <div className="flex justify-end gap-2 mt-6">

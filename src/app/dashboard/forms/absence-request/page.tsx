@@ -36,6 +36,7 @@ export default function Page() {
     try {
       // 1. Create a query to find the employee document where the 'employeeID' field matches
       const employeesRef = collection(db, "employees");
+      console.log("Attempting login for Employee ID:", employeeID);
       const q = query(employeesRef, where("employeeID", "==", employeeID));
 
       // 2. Execute the query
@@ -48,9 +49,10 @@ export default function Page() {
         const data = employeeDoc.data();
       
         // 4. Extract and validate Birth Year
-        const dob = new Date(data.dateOfBirth);
-        const employee_birthYear = String(dob.getFullYear());
-
+        const dob = data.dateOfBirth;
+        const employee_birthYear = dob.split('-')[0];
+        console.log("Employee Name from DB:", data.firstName, data.lastName);
+        console.log("Employee Birth Year from DB:", employee_birthYear);
         if (employee_birthYear === year) {
           setIsAuthenticated(true);
         
@@ -118,17 +120,11 @@ export default function Page() {
   }, [allAbsences]);
 
   const pendingAbsences = useMemo(() => {
-    if (['Dentist', 'Supervisor', 'Exempt', 'EXEC'].includes(employeeTitle)) {
-      return allAbsences.filter(absence => absence.final_approval === 'pending');
-    }
-    return allAbsences.filter(absence => absence.manager_approval === 'pending' && absence.final_approval === 'pending');
+    return allAbsences.filter(absence => absence.manager_approval === 'pending' || absence.final_approval === 'pending');
   }, [allAbsences]);
 
   const approvedAbsences = useMemo(() => {
-    if (['Dentist', 'Supervisor', 'Exempt', 'EXEC'].includes(employeeTitle)) {
-      return allAbsences.filter(absence => absence.final_approval === 'approved');
-    }
-    return allAbsences.filter(absence => absence.manager_approval === 'approved' && absence.final_approval === 'approved');
+    return allAbsences.filter(absence => (absence.manager_approval === 'approved' && absence.final_approval === 'approved') || (absence.manager_approval === 'not_required' && absence.final_approval === 'approved'));
   }, [allAbsences]);
 
   const deniedAbsences = useMemo(() => {
@@ -171,8 +167,8 @@ export default function Page() {
         <div>
           <div className="flex flex-row gap-5">
             <h2 className="text-2xl font-bold mb-4">{employeeInfo.firstName} {employeeInfo.lastName} Absences</h2> 
-            <Button onClick={() => setNewAbsence(true)}  className="bg-green-500 hover:bg-green-700 text-white p-2 rounded cursor-pointer">New Incident Report</Button>
-            <Button onClick={handleLogout} className="hover:bg-red-700 rounded cursor-pointer" variant="destructive">Sign Out</Button>
+            <Button onClick={() => setNewAbsence(true)}  className="bg-green-500 hover:bg-green-700 text-white p-2 rounded cursor-pointer shadow-sm">New Incident Report</Button>
+            <Button onClick={handleLogout} className="hover:bg-red-700 rounded cursor-pointer shadow-sm" variant="destructive">Sign Out</Button>
           </div>
 
           <div className="border-b border-gray-200 mb-2">
@@ -235,6 +231,7 @@ export default function Page() {
             employeeID={employeeID} 
             employeeTitle={employeeTitle} 
             employeeName={employeeName} 
+            employeeSkipManagerApproval={employeeInfo.skipManagerApproval}
             onFormSubmit={handleFormSubmit} 
             onClose={() => setNewAbsence(false)}
             />
@@ -247,38 +244,6 @@ export default function Page() {
               onClose={() => setSelectedAbsence(null)}
             />
           )}
-
-          {/*}
-          {absences.length > 0 ? (
-            <ul className="space-y-4">
-               {[...absences]
-                .sort((a, b) => new Date(a.incident_start).getTime() - new Date(b.incident_start).getTime())
-                .map(absence => {
-                  const submittedColor = absence.incident_submitted ? 'bg-green-100' : 'bg-red-100';
-                  return (
-                    <li 
-                      key={absence.id} 
-                      onClick={() => setSelectedAbsence(absence)} 
-                      className={`p-4 ${submittedColor} sm:w-2/3 rounded-lg cursor-pointer hover:bg-gray-200`}
-                    >
-                      <div className="columns-2">
-                        <p><strong>Incident Start:</strong> {absence.incident_start}</p>
-                        <p><strong>Type Of Incident:</strong> {absence.type_of_incident}</p>
-                        <p><strong>Office:</strong> {absence.office}</p>
-                        <p><strong>Note Provided:</strong> {absence.excuse_note_submitted}</p>
-                      </div>
-                      <p className='col-span-2'><strong>Comments:</strong> {absence.comments}</p>
-                    </li>
-                  );
-                })
-              }
-            </ul>
-          ) : (
-            <p>No pending absences to report.</p>
-          )} 8*/}
-
-
-          {/* Create a sorted copy before mapping */}
         </div>
       )}
     </main>

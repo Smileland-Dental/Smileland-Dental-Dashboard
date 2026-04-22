@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { AbsenceRequest } from '@/lib/types';
 import { Search, Filter, ChevronRight, Calendar, User as UserIcon } from 'lucide-react';
 
@@ -13,6 +13,14 @@ type RequestTableProps = {
 export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, onViewDetails }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+
+  const [currentPage, setCurrentPage] = useState(1);
+  const itemsPerPage = 5; // Adjust this number as needed
+
+  // Reset to page 1 whenever filters or search change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, statusFilter]);
 
   const filteredRequests = useMemo(() => {
     return requests.filter((req) => {
@@ -30,6 +38,13 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
       return matchesSearch && matchesStatus;
     });
   }, [requests, searchTerm, statusFilter]);
+
+  const paginatedRequests = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    return filteredRequests.slice(startIndex, startIndex + itemsPerPage);
+  }, [filteredRequests, currentPage]);
+
+  const totalPages = Math.ceil(filteredRequests.length / itemsPerPage);
 
   return (
     <div className="space-y-4">
@@ -65,10 +80,10 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
       </div>
 
       {/* Table Section */}
-      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-[2rem] shadow-xl overflow-hidden border border-slate-200">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50/50">
+            <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
               <tr>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Employee</th>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Type</th>
@@ -78,15 +93,12 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
                 <th className="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredRequests.length > 0 ? (
-                filteredRequests.map((req) => (
+            <tbody className="divide-y divide-slate-50">
+              {paginatedRequests.length > 0 ? (
+                paginatedRequests.map((req) => (
                   <tr key={req.id} className="group hover:bg-gray-50/80 transition-all cursor-default">
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-3">
-                        <div className="h-8 w-8 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600">
-                          <UserIcon className="h-4 w-4" />
-                        </div>
                         <div className="flex flex-col">
                           <span className="text-sm font-semibold text-gray-900">{req.employee_name}</span>
                           <span className="text-xs text-gray-500 font-mono tracking-tighter">#{req.employee_id}</span>
@@ -95,13 +107,13 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="text-sm text-gray-600 bg-gray-100 px-2 py-1 rounded-md">
-                        {req.type_of_request}
+                        {req.type_of_incident}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2 text-sm text-gray-600">
                         <Calendar className="h-3.5 w-3.5 text-gray-400" />
-                        <span>{req.incident_start}</span>
+                        {(req.incident_start === req.incident_end) ? (<span>{req.incident_start}</span>) : (<span>{req.incident_start} - {req.incident_end}</span>)}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
@@ -133,6 +145,35 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
               )}
             </tbody>
           </table>
+          <div className="px-6 py-4 bg-gray-50 border-t border-gray-200 flex items-center justify-between">
+            <p className="text-sm text-gray-700">
+              {filteredRequests.length > 0 ? (
+                <>
+                Showing <span className="font-medium">{(currentPage - 1) * itemsPerPage + 1}</span> to{' '}
+                <span className="font-medium">
+                  {Math.min(currentPage * itemsPerPage, filteredRequests.length)}
+                </span> of{' '}
+                <span className="font-medium">{filteredRequests.length}</span> results
+              </>
+              ): ("Showing 0 to 0 of 0 results")}
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-1 text-sm bg-white border rounded-md disabled:opacity-50 hover:bg-gray-50"
+              >
+                Previous
+              </button>
+              <button
+                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-1 text-sm bg-white border rounded-md disabled:opacity-50 hover:bg-gray-50"
+              >
+                Next
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -141,27 +182,35 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
 
 // Refined StatusBadge Component
 const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
-  if (req.manager_approval === 'denied' || req.final_approval === 'denied') {
+  if (req.manager_approval === 'denied' && req.final_approval === 'pending') {
+    return <Badge color="red" text="Manager Denied" />;
+  }
+  else if (req.manager_approval === 'denied' || req.final_approval === 'denied') {
     return <Badge color="red" text="Denied" />;
   }
-  if (req.final_approval === 'approved') {
+  else if (req.final_approval === 'approved') {
     return <Badge color="green" text="Fully Approved" />;
   }
-  if (req.manager_approval === 'approved') {
+  else if (req.manager_approval === 'approved') {
     return <Badge color="yellow" text="Manager Approved" />;
   }
-  return <Badge color="gray" text="Pending" />;
+  else if (req.manager_approval === 'not_required' && req.final_approval === 'pending') {
+    return <Badge color="yellow" text="Pending Final Approval" />;
+  }
+  else{
+    return <Badge color="gray" text="Pending" />;
+  }
 };
 
 const Badge = ({ color, text }: { color: string; text: string }) => {
   const styles: Record<string, string> = {
-    green: 'bg-green-50 text-green-700 ring-green-600/20',
-    red: 'bg-red-50 text-red-700 ring-red-600/20',
-    yellow: 'bg-yellow-50 text-yellow-800 ring-yellow-600/20',
-    gray: 'bg-gray-50 text-gray-600 ring-gray-500/10',
+    green: 'bg-emerald-100 text-emerald-700 ring-emerald-600/20',
+    red: 'bg-rose-100 text-rose-700 ring-rose-600/20',
+    yellow: 'bg-amber-100 text-amber-700 ring-amber-600/20',
+    gray: 'bg-slate-100 text-slate-600 ring-slate-600/10',
   };
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset ${styles[color]}`}>
+    <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-black text-[10px] uppercase ring-1 ring-inset ${styles[color]}`}>
       {text}
     </span>
   );
