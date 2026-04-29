@@ -48,6 +48,10 @@ type ReasonRow = {
 type ExtraInputRow = {
   position?: string;
   name?: string;
+  /** Per-doctor row values (office-wide totals live in `locationSummary`). */
+  doctorPreventative?: string;
+  doctorRestorative?: string;
+  doctorCraProduction?: string;
   customer?: string;
   icecream?: string;
   cake?: string;
@@ -65,6 +69,23 @@ type LocationSummary = {
   rose?: string;
   total?: string;
 };
+
+/** Visits-style metrics beside Production 1 (labels in first column). */
+type ProductionSideMetrics = {
+  add?: string;
+  noShow?: string;
+  scheduled?: string;
+  seen?: string;
+  seenPercent?: string;
+};
+
+const PRODUCTION_SIDE_METRIC_ROWS: { key: keyof ProductionSideMetrics; label: string }[] = [
+  { key: 'add', label: 'Add On' },
+  { key: 'noShow', label: 'No Shows' },
+  { key: 'scheduled', label: 'Scheduled' },
+  { key: 'seen', label: 'Seen' },
+  { key: 'seenPercent', label: 'Seen %' },
+];
 
 type TableTotals = {
   sales: number;
@@ -114,6 +135,7 @@ type FormDoc = {
   reasonRows?: ReasonRow[];
   extraInputRows?: ExtraInputRow[];
   locationSummary?: LocationSummary;
+  productionSideMetrics?: ProductionSideMetrics;
   edited?: boolean;
   editedAt?: unknown;
   pdfSaved?: boolean;
@@ -123,7 +145,6 @@ type FormDoc = {
 const TABLE_HEADERS = [
   'Position',
   'Name',
-  'Production',
   'CRA (New)',
   'CRA (Return)',
   'CRA Total',
@@ -139,6 +160,28 @@ const TABLE_HEADERS = [
 
 const SUGAR_HEADERS = ['Position', 'Name', 'Sealant', 'Sealant (Billable)', 'Sealant (Redo)', 'Prophy'];
 const REASON_HEADERS = ['Reasoning', 'OE', 'Pro', 'CRA'];
+
+/** 브라우저 number 스텝 화살표 제거 — 직접 입력만 (WebKit / Firefox). */
+const D_PAGE_NUMBER_INPUT_SPINNER_RESET_CSS = `
+.d-page-main input[type="number"]::-webkit-outer-spin-button,
+.d-page-main input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.d-page-main input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+`;
+
+/** 오른쪽 상세 카드의 좌우 `padding`만큼 테이블 영역을 넓혀, 카드 안쪽 면과 표 격자 선이 이어지게 함 */
+const D_PAGE_DETAIL_CARD_PADDING_PX = 12;
+const dPageDetailTableBleedScroll: React.CSSProperties = {
+  marginLeft: -D_PAGE_DETAIL_CARD_PADDING_PX,
+  marginRight: -D_PAGE_DETAIL_CARD_PADDING_PX,
+  width: `calc(100% + ${D_PAGE_DETAIL_CARD_PADDING_PX * 2}px)`,
+  overflowX: 'auto',
+};
 
 const reportPdfStyles = StyleSheet.create({
   page: { padding: 20, fontFamily: 'Helvetica', fontSize: 8 },
@@ -224,6 +267,7 @@ function createSubmittedReportPDFDocument(props: {
     coffeeSales: string;
     total: string;
   };
+  productionSideMetrics: ProductionSideMetrics;
   sugarRows: SugarRow[];
   sugarTotals: SugarTotals | null;
   reasonRows: ReasonRow[];
@@ -251,6 +295,7 @@ function createSubmittedReportPDFDocument(props: {
     extraInputRows,
     extraInputTotals,
     locationSummary,
+    productionSideMetrics,
     sugarRows,
     sugarTotals,
     reasonRows,
@@ -267,7 +312,7 @@ function createSubmittedReportPDFDocument(props: {
       safeStr(row.timeStart, 20),
       safeStr(row.timeEnd, 20),
       safeStr(row.chartCount, 12),
-      safeStr(row.amount, 12),
+      safeStr(formatCurrencyLabel(row.amount), 12),
     ]),
     'report'
   );
@@ -275,7 +320,16 @@ function createSubmittedReportPDFDocument(props: {
   const salesPaperSummaryTable = createPdfTable(
     s,
     ['Grand Total', 'CRA Production', 'Production W/Out CRA', 'Prophy @ OE', 'Prophy @ TX', 'Just Prophy'],
-    [[grandTotal || '-', coffeeSales || '-', salesWithoutCoffee || '-', paperAtOrangeJuice || '-', paperAtTea || '-', justPaper || '-']],
+    [
+      [
+        formatCurrencyLabel(grandTotal || '-'),
+        formatCurrencyLabel(coffeeSales || '-'),
+        formatCurrencyLabel(salesWithoutCoffee || '-'),
+        paperAtOrangeJuice || '-',
+        paperAtTea || '-',
+        justPaper || '-',
+      ],
+    ],
     'sales-paper-summary'
   );
   const submissionInfoTable = createPdfTable(
@@ -288,17 +342,57 @@ function createSubmittedReportPDFDocument(props: {
   const locationSummaryTable = createPdfTable(
     s,
     ['Preventative', 'Restorative', 'CRA Production', 'Total'],
-    [[locationSummary.pineapple || '-', locationSummary.rose || '-', locationSummary.coffeeSales || '-', locationSummary.total || '-']],
+    [
+      [
+        formatCurrencyLabel(locationSummary.pineapple || '-'),
+        formatCurrencyLabel(locationSummary.rose || '-'),
+        formatCurrencyLabel(locationSummary.coffeeSales || '-'),
+        formatCurrencyLabel(locationSummary.total || '-'),
+      ],
+    ],
     'location-summary'
   );
 
+  const sideMetrics = {
+    ...createEmptyProductionSideMetrics(),
+    ...productionSideMetrics,
+  };
+  const visitsPdfHeaders = PRODUCTION_SIDE_METRIC_ROWS.map(({ label }) => label);
+  const visitsPdfValues = PRODUCTION_SIDE_METRIC_ROWS.map(({ key }) =>
+    key === 'seenPercent'
+      ? safeStr(formatSeenPercentDisplay(computeSeenPercentRounded(sideMetrics.scheduled, sideMetrics.seen)), 40) || '-'
+      : safeStr(sideMetrics[key], 40) || '-'
+  );
+  const productionSideMetricsTable = createPdfTable(s, visitsPdfHeaders, [visitsPdfValues], 'production-side-metrics');
+
+  const productionTotalForPdf = String(
+    extraInputRows.reduce((acc, row, idx) => acc + getDoctorPerformanceRowProductionValue(row, tableRows[idx]?.sales), 0)
+  );
   const additionalInputsTable = createPdfTable(
     s,
-    ['Position', 'Name', 'Patient Seen', 'Insurance', 'Cash', 'Dentical', 'Treatment', 'Primary Teeth', 'Permanent Teeth'],
     [
-      ...extraInputRows.map((row) => [
+      'Position',
+      'Name',
+      'Preventative',
+      'Restorative',
+      'CRA Production',
+      'Production',
+      'Patient Seen',
+      'Insurance',
+      'Cash',
+      'Dentical',
+      'Treatment',
+      'Primary Teeth',
+      'Permanent Teeth',
+    ],
+    [
+      ...extraInputRows.map((row, idx) => [
         safeStr(row.position, 20),
         safeStr(row.name, 24),
+        safeStr(formatCurrencyLabel(row.doctorPreventative), 12),
+        safeStr(formatCurrencyLabel(row.doctorRestorative), 12),
+        safeStr(formatCurrencyLabel(row.doctorCraProduction), 12),
+        safeStr(formatCurrencyLabel(formatDoctorPerformanceProductionCell(row, tableRows[idx]?.sales)), 12),
         safeStr(row.customer, 10),
         safeStr(row.icecream, 10),
         safeStr(row.cake, 10),
@@ -310,6 +404,10 @@ function createSubmittedReportPDFDocument(props: {
       [
         'Total',
         '-',
+        formatCurrencyLabel(String(extraInputTotals.doctorPreventative)),
+        formatCurrencyLabel(String(extraInputTotals.doctorRestorative)),
+        formatCurrencyLabel(String(extraInputTotals.doctorCraProduction)),
+        formatCurrencyLabel(productionTotalForPdf),
         String(extraInputTotals.customer),
         String(extraInputTotals.icecream),
         String(extraInputTotals.cake),
@@ -329,7 +427,6 @@ function createSubmittedReportPDFDocument(props: {
       ...tableRows.map((row) => [
         safeStr(row.position, 16),
         safeStr(row.name, 20),
-        safeStr(row.sales, 12),
         safeStr(row.coffeeNew, 12),
         safeStr(row.coffeeReturn, 12),
         safeStr(row.coffeeTotal, 12),
@@ -345,7 +442,6 @@ function createSubmittedReportPDFDocument(props: {
       [
         'Total',
         '-',
-        String(tableTotals?.sales ?? 0),
         String(tableTotals?.coffeeNew ?? 0),
         String(tableTotals?.coffeeReturn ?? 0),
         String(tableTotals?.coffeeTotal ?? 0),
@@ -411,23 +507,29 @@ function createSubmittedReportPDFDocument(props: {
     React.createElement(
       Page,
       { size: 'A4', orientation: 'landscape', style: s.page },
-      React.createElement(Text, { style: s.title }, 'Submitted Report'),
+      React.createElement(Text, { style: s.title }, `${location || '-'} Finalized Production - ${date || '/'} `),
       React.createElement(
         Text,
         { style: s.subtitle },
-        `Production Date: ${date || '-'} | Office: ${location || '-'} | Generated: ${sanitizedGeneratedDate || '-'}`
+        `Generated: ${sanitizedGeneratedDate || '-'}`
       ),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Submission Info'), submissionInfoTable),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Billers'), reportTable),
       React.createElement(
         View,
         { style: s.section },
-        React.createElement(Text, { style: s.sectionTitle }, 'Production 2'),
+        React.createElement(Text, { style: s.sectionTitle }, 'Production'),
         salesPaperSummaryTable
       ),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Production 1'), locationSummaryTable),
+      React.createElement(
+        View,
+        { style: s.section },
+        locationSummaryTable,
+        React.createElement(Text, { style: { ...s.sectionTitle, marginTop: 10 } }, 'Visits'),
+        productionSideMetricsTable
+      ),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Doctors Performance'), additionalInputsTable),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'CRA'), coffeeTable),
+      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'CRA / OE'), coffeeTable),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Sealant'), sugarTable),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Short Procedures'), reasonTable),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Notes'), notesTable)
@@ -438,6 +540,65 @@ function createSubmittedReportPDFDocument(props: {
 function parseNumber(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+/** Read-only UI/PDF: leading $ when a value is present; '-' unchanged. */
+function formatCurrencyLabel(value: unknown): string {
+  const s = String(value ?? '').trim();
+  if (!s || s === '-') return '-';
+  const core = s.startsWith('$') ? s.slice(1).trim() : s;
+  if (!core) return '-';
+  return `$${core}`;
+}
+
+/** Append % for Seen % display; '-' stays '-'. */
+function formatSeenPercentDisplay(computed: string): string {
+  const t = String(computed ?? '').trim();
+  if (!t || t === '-') return '-';
+  const n = t.replace(/%$/, '').trim();
+  return `${n}%`;
+}
+
+/** Seen % = round(Seen ÷ Scheduled × 100); '-' when Scheduled is 0. */
+function computeSeenPercentRounded(scheduledRaw: unknown, seenRaw: unknown): string {
+  const sch = parseNumber(scheduledRaw);
+  if (sch === 0) return '-';
+  const seen = parseNumber(seenRaw);
+  return String(Math.round((seen / sch) * 100));
+}
+
+function seenPercentReadOnlyInputValueFromMetrics(m: ProductionSideMetrics | undefined): string {
+  const s = computeSeenPercentRounded(m?.scheduled, m?.seen);
+  return s === '-' ? '' : `${s}%`;
+}
+
+function getDoctorPerformanceProductionSum(row: ExtraInputRow | undefined): number {
+  if (!row) return 0;
+  return parseNumber(row.doctorPreventative) + parseNumber(row.doctorRestorative) + parseNumber(row.doctorCraProduction);
+}
+
+function doctorPerformanceProductionRowHasInput(row: ExtraInputRow | undefined): boolean {
+  if (!row) return false;
+  return [row.doctorPreventative, row.doctorRestorative, row.doctorCraProduction].some((v) => String(v ?? '').trim() !== '');
+}
+
+/** Sum of Preventative + Restorative + CRA Production; if all three empty, keep saved Production (`sales`). */
+function getDoctorPerformanceRowProductionValue(row: ExtraInputRow | undefined, fallbackSales?: string): number {
+  const sum = getDoctorPerformanceProductionSum(row);
+  if (sum !== 0 || doctorPerformanceProductionRowHasInput(row)) return sum;
+  return parseNumber(fallbackSales);
+}
+
+function formatDoctorPerformanceProductionCell(row: ExtraInputRow | undefined, fallbackSales?: string): string {
+  const v = getDoctorPerformanceRowProductionValue(row, fallbackSales);
+  if (v === 0 && !doctorPerformanceProductionRowHasInput(row) && String(fallbackSales ?? '').trim() === '') return '-';
+  return String(v);
+}
+
+/** Value for read-only number input (matches Dentical); empty string when the cell shows '-'. */
+function doctorPerformanceProductionReadOnlyInputValue(row: ExtraInputRow | undefined, fallbackSales?: string): string {
+  const s = formatDoctorPerformanceProductionCell(row, fallbackSales);
+  return s === '-' ? '' : s;
 }
 
 function getMonthKey(dateValue: string | undefined): string {
@@ -525,6 +686,9 @@ function createEmptyExtraInputRow(): ExtraInputRow {
   return {
     position: '',
     name: '',
+    doctorPreventative: '',
+    doctorRestorative: '',
+    doctorCraProduction: '',
     customer: '',
     icecream: '',
     cake: '',
@@ -543,6 +707,16 @@ function createEmptyLocationSummary(): LocationSummary {
     pineapple: '',
     rose: '',
     total: '',
+  };
+}
+
+function createEmptyProductionSideMetrics(): ProductionSideMetrics {
+  return {
+    add: '',
+    noShow: '',
+    scheduled: '',
+    seen: '',
+    seenPercent: '',
   };
 }
 
@@ -593,12 +767,28 @@ function computeTableRows(rows: TableRow[]): TableRow[] {
     const coffeeHasInput = String(row.coffeeNew ?? '').trim() !== '' || String(row.coffeeReturn ?? '').trim() !== '';
     const orangeHasInput =
       String(row.orangeJuiceNew ?? '').trim() !== '' || String(row.orangeJuiceReturn ?? '').trim() !== '';
+    const coffeeTotal = coffeeHasInput ? String(parseNumber(row.coffeeNew) + parseNumber(row.coffeeReturn)) : '';
+    const orangeJuiceTotal = orangeHasInput ? String(parseNumber(row.orangeJuiceNew) + parseNumber(row.orangeJuiceReturn)) : '';
+    /** CRA (Billable) = CRA Total − CRA (Not Billable); CRA Total은 New+Return 합. */
+    const coffeeYes = coffeeTotal !== '' ? String(parseNumber(coffeeTotal) - parseNumber(row.coffeeNo)) : '';
     return {
       ...row,
-      coffeeTotal: coffeeHasInput ? String(parseNumber(row.coffeeNew) + parseNumber(row.coffeeReturn)) : '',
-      orangeJuiceTotal: orangeHasInput ? String(parseNumber(row.orangeJuiceNew) + parseNumber(row.orangeJuiceReturn)) : '',
+      coffeeTotal,
+      orangeJuiceTotal,
+      coffeeYes,
     };
   });
+}
+
+/** Sealant (Billable) = Sealant − Sealant (Redo). */
+function computeSugarRow(row: SugarRow): SugarRow {
+  const sealantHasBasis = String(row.sugar ?? '').trim() !== '' || String(row.sugarBad ?? '').trim() !== '';
+  const sugarGood = sealantHasBasis ? String(parseNumber(row.sugar) - parseNumber(row.sugarBad)) : '';
+  return { ...row, sugarGood };
+}
+
+function computeSugarRows(rows: SugarRow[]): SugarRow[] {
+  return rows.map((row) => computeSugarRow(row));
 }
 
 function getSugarTotalsFromRows(rows: SugarRow[]): SugarTotals {
@@ -612,6 +802,9 @@ function getSugarTotalsFromRows(rows: SugarRow[]): SugarTotals {
 
 function getExtraInputTotals(rows: ExtraInputRow[]) {
   return {
+    doctorPreventative: rows.reduce((sum, row) => sum + parseNumber(row.doctorPreventative), 0),
+    doctorRestorative: rows.reduce((sum, row) => sum + parseNumber(row.doctorRestorative), 0),
+    doctorCraProduction: rows.reduce((sum, row) => sum + parseNumber(row.doctorCraProduction), 0),
     customer: rows.reduce((sum, row) => sum + parseNumber(row.customer), 0),
     icecream: rows.reduce((sum, row) => sum + parseNumber(row.icecream), 0),
     cake: rows.reduce((sum, row) => sum + parseNumber(row.cake), 0),
@@ -674,6 +867,7 @@ export default function ViewPage() {
         const snap = await getDocs(collection(db, 'simple-forms'));
         const loaded = snap.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<FormDoc, 'id'>) }))
+          .filter((doc) => String(doc.submittedDateTime ?? '').trim() !== '')
           .sort((a, b) => `${b.date ?? ''}_${b.location ?? ''}`.localeCompare(`${a.date ?? ''}_${a.location ?? ''}`));
         setDocs(loaded);
         if (loaded.length > 0) {
@@ -691,6 +885,7 @@ export default function ViewPage() {
 
   const filteredDocs = useMemo(() => {
     return docs.filter((doc) => {
+      if (String(doc.submittedDateTime ?? '').trim() === '') return false;
       const dateValue = String(doc.date ?? '');
       const locationValue = String(doc.location ?? '');
       const dateMatched = dateFilter.length === 0 || dateFilter.includes(dateValue);
@@ -769,6 +964,10 @@ export default function ViewPage() {
       ...createEmptyLocationSummary(),
       ...(selectedDoc.locationSummary || getLegacyLocationSummaryFromExtraRows(selectedDoc.extraInputRows)),
     };
+    const normalizedProductionSideMetrics = {
+      ...createEmptyProductionSideMetrics(),
+      ...(selectedDoc.productionSideMetrics || {}),
+    };
     setDraft({
       ...selectedDoc,
       reportRows: normalizedReportRows,
@@ -778,6 +977,7 @@ export default function ViewPage() {
       reasonRows: (selectedDoc.reasonRows || []).map((row) => ({ ...createEmptyReasonRow(), ...row })),
       extraInputRows: normalizedExtraInputRows,
       locationSummary: normalizedLocationSummary,
+      productionSideMetrics: normalizedProductionSideMetrics,
     });
     setIsEditing(false);
     setSaveMessage('');
@@ -840,6 +1040,32 @@ export default function ViewPage() {
     });
   };
 
+  const updateDoctorPerformanceProductionField = (
+    rowIndex: number,
+    field: 'doctorPreventative' | 'doctorRestorative' | 'doctorCraProduction',
+    value: string
+  ) => {
+    setDraft((prev) => {
+      if (!prev) return prev;
+      const tableLen = (prev.tableRows || []).length;
+      const normalized = normalizeExtraInputRows(prev.extraInputRows, tableLen);
+      const nextRow = { ...normalized[rowIndex], [field]: value };
+      const nextNormalized = normalized.map((r, i) => (i === rowIndex ? nextRow : r));
+      const extraInputRows = computeExtraInputRows(nextNormalized);
+
+      const table = (prev.tableRows || []).map((r) => ({ ...createEmptyTableRow(), ...r }));
+      const prevTr = { ...createEmptyTableRow(), ...table[rowIndex] };
+      const newSales = String(getDoctorPerformanceRowProductionValue(extraInputRows[rowIndex], prevTr.sales));
+      table[rowIndex] = { ...prevTr, sales: newSales };
+
+      return {
+        ...prev,
+        extraInputRows,
+        tableRows: computeTableRows(table),
+      };
+    });
+  };
+
   const updateLocationSummaryField = (field: 'pineapple' | 'rose', value: string) => {
     setDraft((prev) => {
       if (!prev) return prev;
@@ -848,6 +1074,21 @@ export default function ViewPage() {
         locationSummary: {
           ...createEmptyLocationSummary(),
           ...(prev.locationSummary || {}),
+          [field]: value,
+        },
+      };
+    });
+  };
+
+  const updateProductionSideMetricField = (field: keyof ProductionSideMetrics, value: string) => {
+    if (field === 'seenPercent') return;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        productionSideMetrics: {
+          ...createEmptyProductionSideMetrics(),
+          ...(prev.productionSideMetrics || {}),
           [field]: value,
         },
       };
@@ -863,10 +1104,12 @@ export default function ViewPage() {
           ...row,
         }))
       );
-      const sugarRows = (draft.sugarRows || []).map((row) => ({
-        ...createEmptySugarRow(),
-        ...row,
-      }));
+      const sugarRows = computeSugarRows(
+        (draft.sugarRows || []).map((row) => ({
+          ...createEmptySugarRow(),
+          ...row,
+        }))
+      );
       const reportRowsToSave = (draft.reportRows || []).map((row) => ({
         ...createEmptyReportRow(),
         ...row,
@@ -883,10 +1126,17 @@ export default function ViewPage() {
         rose: '',
       }));
 
-      const tableTotals = getTableTotalsFromRows(tableRows);
+      const tableRowsWithSyncedSales = computeTableRows(
+        tableRows.map((tr, idx) => ({
+          ...tr,
+          sales: String(getDoctorPerformanceRowProductionValue(extraInputRows[idx], tr.sales)),
+        }))
+      );
+
+      const tableTotals = getTableTotalsFromRows(tableRowsWithSyncedSales);
       const sugarTotals = getSugarTotalsFromRows(sugarRows);
-      const hasCoffeeYesInput = tableRows.some((row) => String(row.coffeeYes ?? '').trim() !== '');
-      const coffeeSales = hasCoffeeYesInput ? String(tableTotals.coffeeYes * 100) : '';
+      const hasCoffeeYesInput = tableRowsWithSyncedSales.some((row) => String(row.coffeeYes ?? '').trim() !== '');
+      const coffeeSales = hasCoffeeYesInput ? String(tableTotals.coffeeYes * 61) : '';
       const draftLocationSummary = {
         ...createEmptyLocationSummary(),
         ...(draft.locationSummary || {}),
@@ -895,6 +1145,18 @@ export default function ViewPage() {
         pineapple: String(draftLocationSummary.pineapple ?? ''),
         rose: String(draftLocationSummary.rose ?? ''),
         total: String(parseNumber(draftLocationSummary.pineapple) + parseNumber(draftLocationSummary.rose) + parseNumber(coffeeSales)),
+      };
+      const draftSideMetrics = {
+        ...createEmptyProductionSideMetrics(),
+        ...(draft.productionSideMetrics || {}),
+      };
+      const seenPercentComputed = computeSeenPercentRounded(draftSideMetrics.scheduled, draftSideMetrics.seen);
+      const productionSideMetrics = {
+        add: String(draftSideMetrics.add ?? ''),
+        noShow: String(draftSideMetrics.noShow ?? ''),
+        scheduled: String(draftSideMetrics.scheduled ?? ''),
+        seen: String(draftSideMetrics.seen ?? ''),
+        seenPercent: seenPercentComputed === '-' ? '' : seenPercentComputed,
       };
       const grandTotal = String(draft.grandTotal ?? '');
       const bothEmpty = grandTotal.trim() === '' && coffeeSales.trim() === '';
@@ -907,7 +1169,7 @@ export default function ViewPage() {
         edited: true,
         editedAt: serverTimestamp(),
         reportRows: reportRowsToSave,
-        tableRows,
+        tableRows: tableRowsWithSyncedSales,
         tableTotals,
         coffeeActualTotals,
         sugarRows,
@@ -915,6 +1177,7 @@ export default function ViewPage() {
         reasonRows,
         extraInputRows,
         locationSummary,
+        productionSideMetrics,
         name: firstReport.name ?? '',
         timeStart: firstReport.timeStart ?? '',
         timeEnd: firstReport.timeEnd ?? '',
@@ -965,7 +1228,14 @@ export default function ViewPage() {
   }, [selectedDoc]);
   const visibleReportRows = isEditing ? draft?.reportRows || [] : reportRows;
   const visibleTableRows = isEditing ? computeTableRows(draft?.tableRows || []) : selectedDoc?.tableRows || [];
-  const visibleSugarRows = isEditing ? draft?.sugarRows || [] : selectedDoc?.sugarRows || [];
+  const visibleSugarRows = isEditing
+    ? computeSugarRows(
+        (draft?.sugarRows || []).map((row) => ({
+          ...createEmptySugarRow(),
+          ...row,
+        }))
+      )
+    : selectedDoc?.sugarRows || [];
   const visibleReasonRows = isEditing ? draft?.reasonRows || [] : selectedDoc?.reasonRows || [];
   const visibleExtraInputRows = isEditing
     ? computeExtraInputRows(normalizeExtraInputRows(draft?.extraInputRows, visibleTableRows.length))
@@ -986,7 +1256,7 @@ export default function ViewPage() {
   };
   const hasCoffeeYesInputVisible = visibleTableRows.some((row) => String(row.coffeeYes ?? '').trim() !== '');
   const visibleCoffeeSales = hasCoffeeYesInputVisible
-    ? String((visibleTableTotals?.coffeeYes ?? 0) * 100)
+    ? String((visibleTableTotals?.coffeeYes ?? 0) * 61)
     : selectedDoc?.coffeeSales || '';
   const visiblePineappleValue = String(visibleLocationSummary.pineapple ?? '');
   const visibleRoseValue = String(visibleLocationSummary.rose ?? '');
@@ -1002,6 +1272,10 @@ export default function ViewPage() {
   const visiblePaperAtOrangeJuice = isEditing ? String(draft?.paperAtOrangeJuice ?? '') : selectedDoc?.paperAtOrangeJuice || '';
   const visiblePaperAtTea = isEditing ? String(draft?.paperAtTea ?? '') : selectedDoc?.paperAtTea || '';
   const visibleJustPaper = isEditing ? String(draft?.justPaper ?? '') : selectedDoc?.justPaper || '';
+  const visibleProductionSideMetrics = {
+    ...createEmptyProductionSideMetrics(),
+    ...(isEditing ? draft?.productionSideMetrics || {} : selectedDoc?.productionSideMetrics || {}),
+  };
 
   const handleAddReportRow = () => {
     setDraft((prev) => (prev ? { ...prev, reportRows: [...(prev.reportRows || []), createEmptyReportRow()] } : prev));
@@ -1054,6 +1328,7 @@ export default function ViewPage() {
           coffeeSales: visibleCoffeeSales,
           total: visibleLocationTotal,
         },
+        productionSideMetrics: visibleProductionSideMetrics,
         sugarRows: visibleSugarRows,
         sugarTotals: visibleSugarTotals,
         reasonRows: visibleReasonRows,
@@ -1061,7 +1336,7 @@ export default function ViewPage() {
         notDue: isEditing ? String(draft?.notDue ?? '') : selectedDoc.notDue || '',
       });
       const blob = await pdf(pdfDoc).toBlob();
-      const filename = sanitizeFilename(`${selectedDoc.date || 'no-date'}_${selectedDoc.location || 'no-location'}_submitted-report.pdf`);
+      const filename = sanitizeFilename(`${selectedDoc.date || 'no-date'}_${selectedDoc.location || 'no-location'}_daily production.pdf`);
       const safeLocation = sanitizeFilename(selectedDoc.location || 'no-location');
       const safeDate = sanitizeFilename(selectedDoc.date || 'no-date');
       const storage = getStorage();
@@ -1126,7 +1401,7 @@ export default function ViewPage() {
             : item
         )
       );
-      setSaveMessage('PDF가 Firebase Storage(Coffee)에 저장되었습니다.');
+      setSaveMessage('PDF가 저장되었습니다.');
     } catch (e: any) {
       setSaveMessage(`PDF 저장 실패: ${e?.message || '알 수 없는 오류'}`);
     } finally {
@@ -1135,7 +1410,8 @@ export default function ViewPage() {
   };
 
   return (
-    <main style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>
+    <main className="d-page-main" style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>
+      <style>{D_PAGE_NUMBER_INPUT_SPINNER_RESET_CSS}</style>
       <section
         style={{
           maxWidth: 2600,
@@ -1147,7 +1423,7 @@ export default function ViewPage() {
         }}
       >
         <div style={{ marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-          <h2 style={{ margin: 0, fontSize: 20 }}>Submitted Finalized Production</h2>
+          <h2 style={{ margin: '0 0 8px', fontSize: 28, fontWeight: 800, color: '#111827' }}>Submitted Finalized Production</h2>
           {selectedDoc && (
             <div style={{ display: 'flex', gap: 8 }}>
               {isEditing ? (
@@ -1286,12 +1562,13 @@ export default function ViewPage() {
               {filteredDocs.length === 0 ? (
                 <div style={{ padding: 12, color: '#6b7280' }}>저장된 데이터가 없습니다.</div>
               ) : (
-                filteredDocs.map((d) => {
+                filteredDocs.map((d, docIdx) => {
                   const active = d.id === selectedId;
                   const statusLabel = d.pdfSaved ? 'Completed' : d.edited ? 'Editing' : '';
                   const statusStyle = d.pdfSaved
                     ? { background: '#dcfce7', color: '#166534', border: '1px solid #86efac' }
                     : { background: '#dbeafe', color: '#1d4ed8', border: '1px solid #93c5fd' };
+                  const isLastDocRow = docIdx === filteredDocs.length - 1;
                   return (
                     <button
                       key={d.id}
@@ -1302,7 +1579,7 @@ export default function ViewPage() {
                         textAlign: 'left',
                         padding: '10px 12px',
                         border: 0,
-                        borderBottom: '1px solid #f1f5f9',
+                        borderBottom: isLastDocRow ? 'none' : '1px solid #e5e7eb',
                         background: active ? '#eef2ff' : '#fff',
                         cursor: 'pointer',
                       }}
@@ -1330,7 +1607,14 @@ export default function ViewPage() {
               )}
             </div>
 
-            <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 12 }}>
+            <div
+              style={{
+                border: '1px solid #e5e7eb',
+                borderRadius: 10,
+                padding: D_PAGE_DETAIL_CARD_PADDING_PX,
+                boxSizing: 'border-box',
+              }}
+            >
               {!selectedDoc ? (
                 <p style={{ margin: 0, color: '#6b7280' }}>왼쪽에서 항목을 선택해 주세요.</p>
               ) : (
@@ -1361,7 +1645,7 @@ export default function ViewPage() {
                   </div>
 
                   <h3 style={{ margin: '10px 0' }}>Billers</h3>
-                  <div style={{ overflowX: 'auto' }}>
+                  <div style={dPageDetailTableBleedScroll}>
                     <table style={{ width: '100%', minWidth: 920, borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
                         <tr style={{ background: '#f3f4f6' }}>
@@ -1435,7 +1719,7 @@ export default function ViewPage() {
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
-                                r.amount || '-'
+                                formatCurrencyLabel(r.amount || '-')
                               )}
                             </td>
                           </tr>
@@ -1459,7 +1743,7 @@ export default function ViewPage() {
                           cursor: 'pointer',
                         }}
                       >
-                        Add Reporting Row
+                        Add Row
                       </button>
                     </div>
                   )}
@@ -1475,14 +1759,14 @@ export default function ViewPage() {
                           style={{ width: 140, height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        selectedDoc.grandTotal || '-'
+                        formatCurrencyLabel(selectedDoc.grandTotal || '-')
                       )}
                     </div>
                     <div>
-                      <strong>CRA Production:</strong> {visibleCoffeeSales || '-'}
+                      <strong>CRA Production:</strong> {formatCurrencyLabel(visibleCoffeeSales || '-')}
                     </div>
                     <div>
-                      <strong>Production W/Out CRA:</strong> {visibleSalesWithoutCoffee || '-'}
+                      <strong>Production W/Out CRA:</strong> {formatCurrencyLabel(visibleSalesWithoutCoffee || '-')}
                     </div>
                   </div>
 
@@ -1528,61 +1812,128 @@ export default function ViewPage() {
                     </div>
                   </div>
 
-                  <h3 style={{ margin: '16px 0 10px' }}>Production 1</h3>
-                  <div style={{ overflowX: 'auto' }}>
-                    <table style={{ width: '100%', maxWidth: 480, borderCollapse: 'collapse', fontSize: 14 }}>
-                      <tbody>
-                        <tr>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>Preventative</td>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
-                            {isEditing ? (
-                              <input
-                                type="number"
+                  <h3 style={{ margin: '16px 0 10px' }}>Production</h3>
+                  <div
+                    style={{
+                      ...dPageDetailTableBleedScroll,
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 16,
+                      alignItems: 'flex-start',
+                    }}
+                  >
+                    <div>
+                      <table style={{ width: '100%', maxWidth: 480, borderCollapse: 'collapse', fontSize: 14 }}>
+                        <tbody>
+                          <tr>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>Preventative</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                              {isEditing ? (
+                                <input
+                                  type="number"
                                   value={String(draft?.locationSummary?.pineapple ?? '')}
-                                onChange={(e) => updateLocationSummaryField('pineapple', e.target.value)}
-                                style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
-                              />
-                            ) : (
-                              visiblePineappleValue || '-'
-                            )}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>Restorative</td>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
-                            {isEditing ? (
-                              <input
-                                type="number"
+                                  onChange={(e) => updateLocationSummaryField('pineapple', e.target.value)}
+                                  style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                />
+                              ) : (
+                                formatCurrencyLabel(visiblePineappleValue || '-')
+                              )}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>Restorative</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                              {isEditing ? (
+                                <input
+                                  type="number"
                                   value={String(draft?.locationSummary?.rose ?? '')}
-                                onChange={(e) => updateLocationSummaryField('rose', e.target.value)}
-                                style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
-                              />
-                            ) : (
-                              visibleRoseValue || '-'
-                            )}
-                          </td>
-                        </tr>
-                        <tr>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>CRA Production</td>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleCoffeeSales || '-'}</td>
-                        </tr>
-                        <tr>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f3f4f6', fontWeight: 800 }}>Total</td>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8, fontWeight: 800 }}>{visibleLocationTotal || '-'}</td>
-                        </tr>
-                      </tbody>
-                    </table>
+                                  onChange={(e) => updateLocationSummaryField('rose', e.target.value)}
+                                  style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                />
+                              ) : (
+                                formatCurrencyLabel(visibleRoseValue || '-')
+                              )}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>CRA Production</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{formatCurrencyLabel(visibleCoffeeSales || '-')}</td>
+                          </tr>
+                          <tr>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f3f4f6', fontWeight: 800 }}>Total</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, fontWeight: 800 }}>{formatCurrencyLabel(visibleLocationTotal || '-')}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                    <div>
+                      <table style={{ width: '100%', minWidth: 220, maxWidth: 320, borderCollapse: 'collapse', fontSize: 14 }}>
+                        <tbody>
+                          {(() => {
+                            const draftSideMetricsMerged = {
+                              ...createEmptyProductionSideMetrics(),
+                              ...(draft?.productionSideMetrics || {}),
+                            };
+                            return PRODUCTION_SIDE_METRIC_ROWS.map(({ key, label }) => (
+                              <tr key={key}>
+                                <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                                  {label}
+                                </td>
+                                <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                  {key === 'seenPercent' ? (
+                                    isEditing ? (
+                                      <input
+                                        type="text"
+                                        readOnly
+                                        value={seenPercentReadOnlyInputValueFromMetrics(draftSideMetricsMerged)}
+                                        style={{
+                                          width: '100%',
+                                          minWidth: 100,
+                                          height: 30,
+                                          border: '1px solid #d1d5db',
+                                          borderRadius: 6,
+                                          padding: '0 8px',
+                                          background: '#f3f4f6',
+                                          color: '#6b7280',
+                                        }}
+                                      />
+                                    ) : (
+                                      formatSeenPercentDisplay(
+                                        computeSeenPercentRounded(visibleProductionSideMetrics.scheduled, visibleProductionSideMetrics.seen)
+                                      )
+                                    )
+                                  ) : isEditing ? (
+                                    <input
+                                      type="text"
+                                      value={String(draft?.productionSideMetrics?.[key] ?? '')}
+                                      onChange={(e) => updateProductionSideMetricField(key, e.target.value)}
+                                      style={{ width: '100%', minWidth: 100, height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                    />
+                                  ) : (
+                                    String(visibleProductionSideMetrics[key] ?? '').trim() || '-'
+                                  )}
+                                </td>
+                              </tr>
+                            ));
+                          })()}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
 
                   <>
                     <h3 style={{ margin: '16px 0 10px' }}>Doctors Performance</h3>
-                      <div style={{ overflowX: 'auto' }}>
-                        <table style={{ width: '100%', minWidth: 1100, borderCollapse: 'collapse', fontSize: 14 }}>
+                      <div style={dPageDetailTableBleedScroll}>
+                        <table style={{ width: '100%', minWidth: 1400, borderCollapse: 'collapse', fontSize: 14 }}>
                           <thead>
                             <tr style={{ background: '#f3f4f6' }}>
                               {[
                                 'Position',
                                 'Name',
+                                'Preventative',
+                                'Restorative',
+                                'CRA Production',
+                                'Production',
                                 'Patient Seen',
                                 'Insurance',
                                 'Cash',
@@ -1622,6 +1973,65 @@ export default function ViewPage() {
                                     />
                                   ) : (
                                     row.name || '-'
+                                  )}
+                                </td>
+                                <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                  {isEditing ? (
+                                    <input
+                                      type="number"
+                                      value={row.doctorPreventative || ''}
+                                      onChange={(e) => updateDoctorPerformanceProductionField(idx, 'doctorPreventative', e.target.value)}
+                                      style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                    />
+                                  ) : (
+                                    formatCurrencyLabel(row.doctorPreventative || '-')
+                                  )}
+                                </td>
+                                <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                  {isEditing ? (
+                                    <input
+                                      type="number"
+                                      value={row.doctorRestorative || ''}
+                                      onChange={(e) => updateDoctorPerformanceProductionField(idx, 'doctorRestorative', e.target.value)}
+                                      style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                    />
+                                  ) : (
+                                    formatCurrencyLabel(row.doctorRestorative || '-')
+                                  )}
+                                </td>
+                                <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                  {isEditing ? (
+                                    <input
+                                      type="number"
+                                      value={row.doctorCraProduction || ''}
+                                      onChange={(e) => updateDoctorPerformanceProductionField(idx, 'doctorCraProduction', e.target.value)}
+                                      style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                    />
+                                  ) : (
+                                    formatCurrencyLabel(row.doctorCraProduction || '-')
+                                  )}
+                                </td>
+                                <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                  {isEditing ? (
+                                    <input
+                                      type="text"
+                                      readOnly
+                                      value={(() => {
+                                        const v = doctorPerformanceProductionReadOnlyInputValue(row, visibleTableRows[idx]?.sales);
+                                        return v === '' ? '' : formatCurrencyLabel(v);
+                                      })()}
+                                      style={{
+                                        width: '100%',
+                                        height: 30,
+                                        border: '1px solid #d1d5db',
+                                        borderRadius: 6,
+                                        padding: '0 8px',
+                                        background: '#f3f4f6',
+                                        color: '#6b7280',
+                                      }}
+                                    />
+                                  ) : (
+                                    formatCurrencyLabel(formatDoctorPerformanceProductionCell(row, visibleTableRows[idx]?.sales))
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -1723,6 +2133,25 @@ export default function ViewPage() {
                             <tr style={{ background: '#f9fafb', fontWeight: 700 }}>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>Total</td>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>-</td>
+                              <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                {formatCurrencyLabel(String(visibleExtraInputTotals.doctorPreventative))}
+                              </td>
+                              <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                {formatCurrencyLabel(String(visibleExtraInputTotals.doctorRestorative))}
+                              </td>
+                              <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                {formatCurrencyLabel(String(visibleExtraInputTotals.doctorCraProduction))}
+                              </td>
+                              <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                                {formatCurrencyLabel(
+                                  String(
+                                    visibleExtraInputRowsWithIdentity.reduce(
+                                      (acc, r, i) => acc + getDoctorPerformanceRowProductionValue(r, visibleTableRows[i]?.sales),
+                                      0
+                                    )
+                                  )
+                                )}
+                              </td>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleExtraInputTotals.customer}</td>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleExtraInputTotals.icecream}</td>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleExtraInputTotals.cake}</td>
@@ -1735,8 +2164,8 @@ export default function ViewPage() {
                         </table>
                       </div>
                     </>
-                  <h3 style={{ margin: '16px 0 10px' }}>CRA</h3>
-                  <div style={{ overflowX: 'auto' }}>
+                  <h3 style={{ margin: '16px 0 10px' }}>CRA / OE</h3>
+                  <div style={dPageDetailTableBleedScroll}>
                     <table style={{ width: '100%', minWidth: 1500, borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
                         <tr style={{ background: '#f3f4f6' }}>
@@ -1764,13 +2193,12 @@ export default function ViewPage() {
                                 r.name || '-'
                               )}
                             </td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.sales || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'sales', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sales || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeNew || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeNew', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeNew || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeReturn || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeReturn', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeReturn || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{r.coffeeTotal || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeNo || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeNo', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeNo || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.renderedCoffee || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'renderedCoffee', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.renderedCoffee || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeYes || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeYes', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeYes || '-'}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: isEditing ? '#6b7280' : undefined }}>{r.coffeeYes || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.orangeJuiceNew || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'orangeJuiceNew', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.orangeJuiceNew || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.orangeJuiceReturn || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'orangeJuiceReturn', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.orangeJuiceReturn || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{r.orangeJuiceTotal || '-'}</td>
@@ -1783,7 +2211,6 @@ export default function ViewPage() {
                         <tr style={{ background: '#f9fafb', fontWeight: 700 }}>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>Total</td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>-</td>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleTableTotals ? visibleTableTotals.sales : 0}</td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleTableTotals ? visibleTableTotals.coffeeNew : 0}</td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleTableTotals ? visibleTableTotals.coffeeReturn : 0}</td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleTableTotals ? visibleTableTotals.coffeeTotal : 0}</td>
@@ -1829,12 +2256,12 @@ export default function ViewPage() {
                           cursor: 'pointer',
                         }}
                       >
-                        Add Coffee Row
+                        Add Row
                       </button>
                     </div>
                   )}
                   <h3 style={{ margin: '16px 0 10px' }}>Sealant</h3>
-                  <div style={{ overflowX: 'auto' }}>
+                  <div style={dPageDetailTableBleedScroll}>
                     <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
                         <tr style={{ background: '#f3f4f6' }}>
@@ -1851,7 +2278,7 @@ export default function ViewPage() {
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.position || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'position', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.position || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.name || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'name', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.name || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.sugar || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'sugar', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sugar || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.sugarGood || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'sugarGood', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sugarGood || '-'}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: isEditing ? '#6b7280' : undefined }}>{r.sugarGood || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.sugarBad || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'sugarBad', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sugarBad || '-'}</td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.paper || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'paper', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.paper || '-'}</td>
                           </tr>
@@ -1885,12 +2312,12 @@ export default function ViewPage() {
                           cursor: 'pointer',
                         }}
                       >
-                        Add Sugar Row
+                        Add Row
                       </button>
                     </div>
                   )}
                   <h3 style={{ margin: '16px 0 10px' }}>Short Procedures</h3>
-                  <div style={{ overflowX: 'auto' }}>
+                  <div style={dPageDetailTableBleedScroll}>
                     <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
                         <tr style={{ background: '#f3f4f6' }}>
@@ -1929,7 +2356,7 @@ export default function ViewPage() {
                           cursor: 'pointer',
                         }}
                       >
-                        Add Reason Row
+                        Add Row
                       </button>
                     </div>
                   )}
@@ -1971,5 +2398,4 @@ export default function ViewPage() {
     </main>
   );
 }
-
 
