@@ -97,6 +97,7 @@ export default function AddEmployeeForm({ onSuccess, onCancel }: AddEmployeeForm
         id: firestoreId,
         employeeID: String(formData.employeeID),
         imageURL: imageURL || null,
+        status: 'Current', // Default status for new employees
         skipManagerApproval: formData.skipManagerApproval, // Explicitly included
         createdAt: new Date(),
       });

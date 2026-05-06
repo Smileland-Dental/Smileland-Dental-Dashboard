@@ -1,7 +1,7 @@
 'use client'; 
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { collection, getDocs, getDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, getDoc, doc, where } from 'firebase/firestore';
 import { db, auth } from '@/lib/firebase.config';
 import { Employee, GroupedEmployees } from '@/lib/types';
 import EmployeeCard from '@/components/employee-viewer/EmployeeCard';
@@ -19,6 +19,9 @@ export default function DirectoryPage() {
 
   const [employees, setEmployees] = useState<Employee[]>([]);
 
+  // Inside DirectoryPage component
+  const [statusFilter, setStatusFilter] = useState<'Current' | 'Terminated' | 'On Leave' | 'All'>('Current');
+
   // Filter States
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedOffice, setSelectedOffice] = useState('All');
@@ -34,10 +37,7 @@ export default function DirectoryPage() {
     setLoading(true);
     try {
       const querySnapshot = await getDocs(collection(db, 'employees'));
-      const employeesData = querySnapshot.docs.map((doc) => ({
-        id: doc.id,
-        ...doc.data(),
-      })) as Employee[];
+      const employeesData = querySnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })) as Employee[];
       setEmployees(employeesData);
     } catch (err) {
       setError('Failed to fetch employee data.');
@@ -54,6 +54,17 @@ export default function DirectoryPage() {
   // Memoize filters (Kept your existing logic)
   const groupedAndSortedEmployees = useMemo(() => {
     let filteredEmployees = employees;
+
+    // 1. Status Filter
+    if (statusFilter === 'Current') {
+      filteredEmployees = filteredEmployees.filter(emp => emp.status === 'Current');
+    } 
+    else if (statusFilter === 'Terminated') {
+      filteredEmployees = filteredEmployees.filter(emp => emp.status === 'Terminated');
+    }
+    else if (statusFilter === 'On Leave') {
+      filteredEmployees = filteredEmployees.filter(emp => emp.status === 'On Leave');
+    }
 
     if (searchQuery) {
       filteredEmployees = filteredEmployees.filter(
@@ -82,7 +93,7 @@ export default function DirectoryPage() {
     }
 
     return grouped;
-  }, [employees, searchQuery, selectedOffice, selectedTitle]);
+  }, [employees, searchQuery, selectedOffice, selectedTitle, statusFilter]);
   
   const uniqueOffices = useMemo(() => ['All', ...new Set(employees.map(e => e.office))], [employees]);
   const uniqueTitles = useMemo(() => ['All',...new Set(employees.map(e => e.jobTitle))], [employees]);
@@ -91,7 +102,7 @@ export default function DirectoryPage() {
 
   return (
     <ProtectedRoute allowedRoles={['HR', 'Director']}>
-    <div className="container mx-auto px-4 py-8">
+    <div className="w-full px-6 py-8">
       <div className="flex justify-between items-center mb-8">
          <h1 className="text-4xl font-bold">Company Directory</h1>
          {/*user?.role*/}
@@ -107,7 +118,7 @@ export default function DirectoryPage() {
       </div>
 
       {/* Filter Controls (Kept your existing code) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8 p-4 bg-gray-100 rounded-lg">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 p-4 bg-gray-100 rounded-lg">
         <input
           type="text"
           placeholder="Search by name or ID..."
@@ -129,6 +140,16 @@ export default function DirectoryPage() {
         >
           {uniqueTitles.map(title => <option key={title} value={title}>{title}</option>)}
         </select>
+        <select
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as 'Current' | 'Terminated' | 'On Leave' | 'All')}
+          className="p-2 border border-gray-300 rounded-md w-full font-bold"
+        >
+          <option value="Current">Current</option>
+          <option value="Terminated">Terminated</option>
+          <option value="On Leave">On Leave</option>
+          <option value="All">All</option>
+        </select>
       </div>
 
       {/* Loading & Error States */}
@@ -144,7 +165,10 @@ export default function DirectoryPage() {
                   <h2 className="text-3xl font-semibold border-b-2 border-blue-500 pb-2 mb-6">
                     {office}
                   </h2>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+                  <div 
+                    className="grid gap-6" 
+                    style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))' }}
+                  >
                     {groupedAndSortedEmployees[office].map((employee) => (
                       <EmployeeCard
                         key={employee.id}
