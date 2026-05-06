@@ -186,7 +186,9 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             
             {/* 2. HIDE DELETE IF DENIED */}
             {!isDenied && (
-              <button type="button" onClick={handleDelete} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1 rounded border border-red-200 uppercase tracking-tighter">
+              <button type="button" onClick={handleDelete} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1 rounded border border-red-200 uppercase tracking-tighter disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
+                disabled={absence.type_of_request === "HR Call In" || absence.final_approval === "approved" || absence.final_approval === "denied" || isSubmitting}
+              >
                 Delete Request
               </button>
             )}

@@ -23,6 +23,9 @@ import {
   Tag
 } from 'lucide-react';
 
+import { GeneralTab } from '@/components/employee-viewer/tabs/general-tab';
+import { EmployeeInfoTab } from '@/components/employee-viewer/tabs/employee-information-tab';
+import { IncidentNoticesTab } from '@/components/employee-viewer/tabs/incident-notices-tab';
 // 2. UPDATED: Restored the full list of types
 type TabCategory = 'general' | 'employee_information' | 'license_certificates' | 'incident_notices' | 'review' | 'leave_of_absence' | 'workers_comp' | 'edd_claims' | 'temp'; // Added more tabs to demonstrate scrolling
 
@@ -197,6 +200,43 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
     }
   };
 
+  const handleArchiveEmployee = async () => {
+    const idToArchive = employee?.id;
+
+    if (!idToArchive) {
+      alert("Error: Could not find the database record ID.");
+      return;
+    }
+
+    const confirmArchive = window.confirm(
+      `Are you sure you want to ARCHIVE ${formData.firstName} ${formData.lastName}? They will be hidden from active lists.`
+    );
+
+    if (!confirmArchive) return;
+
+    setIsSaving(true);
+    try {
+      const employeeRef = doc(db, 'employees', idToArchive);
+      
+      // Update status to 'Archived' (or add a dedicated boolean field 'isArchived: true')
+      await updateDoc(employeeRef, {
+        status: 'Terminated', 
+        archivedAt: new Date(),
+      });
+
+      alert("Employee archived successfully.");
+      
+      if (onUpdate) onUpdate();
+      onClose();
+
+    } catch (error) {
+      console.error("Error archiving employee:", error);
+      alert("Failed to archive employee record.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleCancelEdit = () => {
     setFormData(employee);
     setNewImageFile(null);
@@ -214,404 +254,29 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
   // --- RENDER HELPERS ---
 
   const renderContent = () => {
+    const commonProps = { formData, handleInputChange, isEditing, setIsEditing, handleCancelEdit, handleSave, isSaving, hasUnsavedChanges };
+
     switch (activeTab) {
       case 'general':
-        return (
-          <div className="relative">
-            <div className="sticky top-0 z-10 bg-white pb-4 border-b mb-4 flex justify-between items-center">
-               <h3 className="text-2xl font-bold text-gray-800">General</h3>
-               {!isEditing ? (
-                 <button 
-                   onClick={() => setIsEditing(true)} 
-                   className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 font-semibold"
-                 >
-                   <Pencil size={16} /> Edit Details
-                 </button>
-               ) : (
-                <div className="col-span-2 flex justify-end gap-3 mt-4">
-                    <button onClick={handleCancelEdit} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
-                    <button 
-                      onClick={handleSave} 
-                      disabled={isSaving}
-                      className={`flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-400 transition-all ${
-                      hasUnsavedChanges && !isSaving ? 'animate-pulse-save shadow-lg' : ''
-                    }`}
-                    >
-                      {isSaving ? 'Saving...' : <><Save size={16}/> Save Changes</>}
-                    </button>
-                 </div>
-                )
-                }
-            </div>
-
-            {isEditing ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">First Name</label>
-                    <input name="firstName" value={formData.firstName || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Last Name</label>
-                    <input name="lastName" value={formData.lastName || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Email</label>
-                    <input name="email" value={formData.email || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Employee ID</label>
-                    <input name="employeeID" value={formData.employeeID || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Address</label>
-                    <input name="address" value={formData.address || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">City</label>
-                    <input name="city" value={formData.city || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">State</label>
-                    <input name="state" value={formData.state || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Zip Code</label>
-                    <input name="zipCode" value={formData.zipCode || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Primary Phone</label>
-                    <input name="phone" value={formData.phone || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Secondary Phone</label>
-                    <input name="secondaryPhone" value={formData.secondaryPhone || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Emergency Contact 1</label>
-                    <input name="emergencyContact1Name" value={formData.emergencyContact1Name || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Emergency Contact 2</label>
-                    <input name="emergencyContact2Name" value={formData.emergencyContact2Name || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Emergency Contact 1 Phone</label>
-                    <input name="emergencyContact1Phone" value={formData.emergencyContact1Phone || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Emergency Contact 2 Phone</label>
-                    <input name="emergencyContact2Phone" value={formData.emergencyContact2Phone || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Emergency Contact 1 Relationship</label>
-                    <input name="emergencyContact1Relation" value={formData.emergencyContact1Relation || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Emergency Contact 2 Relationship</label>
-                    <input name="emergencyContact2Relation" value={formData.emergencyContact2Relation || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 
-                <div className="space-y-1 md:col-span-2"> {/* Added col-span-2 to make it full width */}
-                  <label className="text-xs font-semibold text-gray-500">Comments</label>
-                  <textarea 
-                    name="comments" 
-                    value={formData.comments || ''} 
-                    onChange={handleInputChange} 
-                    rows={4} // Sets the initial height
-                    placeholder="Enter any additional notes here..."
-                    className="w-full border p-2 rounded resize-y focus:ring-2 focus:ring-blue-500 outline-none" 
-                  />
-                </div>
-
-                <div className="space-y-1 md:col-span-2">
-                  <label className="text-xs font-semibold text-gray-500">Permission To Release Check</label>
-                  <input name="permissionToReleaseCheck" value={formData.permissionToReleaseCheck || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                </div>
-                
-              </div>
-            ) : (
-              <div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-y-4 text-gray-700">
-             
-             {/* Column 1: Identity */}
-             <div className="space-y-3">
-               <p className="flex">
-                 {/* Changed w-32 to w-42 and added whitespace-nowrap */}
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">First Name:</span> 
-                 <span>{formData.firstName || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Last Name:</span> 
-                 <span>{formData.lastName || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Email:</span> 
-                 {/* Added truncate to prevent long emails from breaking layout */}
-                 <span className="truncate hover:text-clip hover:whitespace-normal">{formData.email || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Employee ID:</span> 
-                 <span>{formData.employeeID || 'N/A'}</span>
-               </p>
-                <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Address:</span> 
-                 <span>{formData.address || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">City:</span> 
-                 <span>{formData.city || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">State:</span> 
-                 <span>{formData.state || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Zip Code:</span> 
-                 <span>{formData.zipCode || 'N/A'}</span>
-               </p>
-             </div>
-
-             {/* Column 2: Contact & Location */}
-             <div className="space-y-3">
-               <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Primary Phone:</span> 
-                 <span>{formData.phone || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                  <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Secondary Phone:</span> 
-                  <span>{formData.secondaryPhone || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                  <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Emergency Contact 1:</span> 
-                  <span>{formData.emergencyContact1Name || 'N/A'}</span>
-               </p>
-                <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Phone:</span> 
-                 <span>{formData.emergencyContact1Phone || 'N/A'}</span>
-               </p>
-                <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Relationship:</span> 
-                 <span>{formData.emergencyContact1Relation || 'N/A'}</span>
-               </p>
-                <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Emergency Contact 2:</span> 
-                 <span>{formData.emergencyContact2Name || 'N/A'}</span>
-               </p>
-                <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Phone:</span> 
-                 <span>{formData.emergencyContact2Phone || 'N/A'}</span>
-               </p>
-               <p className="flex">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Relationship:</span> 
-                 <span>{formData.emergencyContact2Relation || 'N/A'}</span>
-               </p>
-             </div>
-           </div>
-            <p className="flex padding-top-4 text-gray-700 border-t border-gray-200 mt-4 pt-2">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900 whitespace-nowrap">Comments:</span> 
-                 <span className="truncate">{formData.comments || 'N/A'}</span>
-            </p>
-            <p className="flex padding-top-4 text-gray-700 border-t border-gray-200 mt-4 pt-2">
-                 <span className="font-semibold w-42 shrink-0 text-gray-900">Permission To Release Check:</span> 
-                 <span className="truncate">{formData.permissionToReleaseCheck || 'N/A'}</span>
-            </p>
-            
-            </div>
-            )}
-          </div>
-        );
+        return <GeneralTab {...commonProps} />;
       case 'employee_information':
         return (
-          <div className="relative">
-            <div className="sticky top-0 z-10 bg-white pb-4 border-b mb-4 flex justify-between items-center">
-               <h3 className="text-2xl font-bold text-gray-800">Employee Information</h3>
-               {!isEditing ? (
-                 <button 
-                   onClick={() => setIsEditing(true)} 
-                   className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 font-semibold"
-                 >
-                   <Pencil size={16} /> Edit Details
-                 </button>
-               ) : (
-                <div className="col-span-2 flex justify-end gap-3 mt-4">
-                    <button onClick={handleCancelEdit} className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded">Cancel</button>
-                    <button 
-                      onClick={handleSave} 
-                      disabled={isSaving}
-                      className={`flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:bg-blue-400 transition-all ${
-                      hasUnsavedChanges && !isSaving ? 'animate-pulse-save shadow-lg' : ''
-                    }`}
-                    >
-                      {isSaving ? 'Saving...' : <><Save size={16}/> Save Changes</>}
-                    </button>
-                 </div>
-                )
-                }
-            </div>
-
-            {isEditing ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Status</label>
-                    <select name="status" value={formData.status || ''} onChange={handleInputChange} className="w-full border p-2 rounded">
-                      <option value="" disabled hidden>Select Status</option>
-                      {statusOptions.map(status => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Date of Hire</label>
-                    <input type="date" name="dateOfHire" value={formData.dateOfHire || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Date of Termination</label>
-                    <input type="date" name="dateOfTermination" value={formData.dateOfTermination || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Department</label>
-                    <select name="department" value={formData.department || ''} onChange={handleInputChange} className="w-full border p-2 rounded">
-                      <option value="" disabled hidden>Select Department</option>
-                      {departments.map(dept => (
-                        <option key={dept} value={dept}>{dept}</option>
-                      ))}
-                    </select>
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Job Title</label>
-                    <input name="jobTitle" value={formData.jobTitle || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Job Status</label>
-                    <select name="jobStatus" value={formData.jobStatus || ''} onChange={handleInputChange} className="w-full border p-2 rounded">
-                      <option value="" disabled hidden>Select Job Status</option>
-                      {jobStatuses.map(status => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Employee Status</label>
-                    <select name="employmentStatus" value={formData.employmentStatus || ''} onChange={handleInputChange} className="w-full border p-2 rounded">
-                      <option value="" disabled hidden>Select Employment Status</option>
-                      {employmentStatuses.map(status => (
-                        <option key={status} value={status}>{status}</option>
-                      ))}
-                    </select>
-                 </div>
-                 {userRole === 'Director' && (
-                    <div className="space-y-1">
-                      <label className="text-xs font-semibold text-gray-500">Pay</label>
-                        <input name="pay" value={formData.pay || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                    </div>
-                  )}
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Office</label>
-                    <select name="office" value={formData.office || ''} onChange={handleInputChange} className="w-full border p-2 rounded">
-                      <option value="" disabled hidden>Select Office</option>
-                      {offices.map(office => (
-                        <option key={office} value={office}>{office}</option>
-                      ))}
-                    </select>
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Employee SSN</label>
-                    <input name="employeeSSN" value={formData.employeeSSN || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Date of Birth</label>
-                    <input name="dateOfBirth" value={formData.dateOfBirth || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Other Job Titles</label>
-                    <input name="otherJobTitles" value={formData.otherJobTitles || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-
-                                   <div className="space-y-1 md:col-span-2 mt-4 p-4 bg-gray-50 rounded-lg border border-gray-200 flex items-center justify-between">
-  <div className="space-y-0.5">
-    <label className="text-sm font-bold text-gray-700">Skip Manager Approval</label>
-    <p className="text-xs text-gray-500">Enable to Bypass Manager Review for Absence Requests.</p>
-  </div>
-  <button
-    type="button"
-    onClick={() => setFormData(prev => ({ ...prev, skipManagerApproval: !prev.skipManagerApproval }))}
-    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none ${
-      formData.skipManagerApproval ? 'bg-blue-600' : 'bg-gray-300'
-    }`}
-  >
-    <span
-      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-        formData.skipManagerApproval ? 'translate-x-6' : 'translate-x-1'
-      }`}
-    />
-  </button>
-</div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-y-4 text-gray-700">
-                <div className="space-y-3 text-gray-700">
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Status</span> {formData.status || 'N/A'}</p>
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Hire:</span> {formData.dateOfHire || 'N/A'}</p>
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Terminiation:</span> {formData.dateOfTermination || 'N/A'}</p>
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Department:</span> {formData.department || 'N/A'}</p>
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Job Title:</span> {formData.jobTitle || 'N/A'}</p>
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Job Status:</span> {formData.jobStatus || 'N/A'}</p>
-                </div>
-                <div className="space-y-3">
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Employee Status:</span> {formData.employmentStatus || 'N/A'}</p>
-                    {userRole === 'Director' && (
-                      <p className="flex">
-                        <span className="font-semibold w-42 whitespace-nowrap shrink-0 text-gray-900">Pay:</span> 
-                        <span className="text-blue-600 font-medium">{formData.pay || 'N/A'}</span>
-                      </p>
-                    )}
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Office:</span> {formData.office || 'N/A'}</p>
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Employee SSN:</span> {formData.employeeSSN || 'N/A'}</p>
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Birth:</span> {formData.dateOfBirth || 'N/A'}</p>
-                  <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Other Job Titles:</span> {formData.otherJobTitles || 'N/A'}</p>
-                                    <p className="flex items-center min-h-[32px]">
-                    <span className="font-semibold w-42 shrink-0 text-gray-900">Manager Approval:</span> 
-                    <span className="flex-grow">
-                      {formData.skipManagerApproval ? (
-                        <span className="text-xs font-bold text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200 inline-block leading-none">
-                          Skipped (Auto-Approve)
-                        </span>
-                      ) : (
-                        <span className="text-xs font-bold text-green-700 bg-green-50 px-2 py-1 rounded border border-green-200 inline-block leading-none">
-                          Required
-                        </span>
-                      )}
-                    </span>
-                  </p>
-                </div>
-              </div>
-            )}
-            <div className="flex justify-between items-center mb-4 pt-5">
-               <h3 className="text-xl font-bold text-gray-800">Employee Training</h3>
-            </div>
-            {isEditing ? (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">Sexual Harassment Training</label>
-                    <input name="sexualHarassmentTraining" type="date" value={formData.sexualHarassmentTraining || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-                 <div className="space-y-1">
-                    <label className="text-xs font-semibold text-gray-500">OSHA Training</label>
-                    <input name="oshaTraining" type="date" value={formData.oshaTraining || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
-                 </div>
-              </div>
-            ) : (
-              <div className="space-y-3 text-gray-700">
-                <p className="flex"><span className="font-semibold w-55 whitespace-nowrap inline-block text-gray-900">Sexual Harassment Training:</span> {formData.sexualHarassmentTraining || 'N/A'}</p>
-                <p className="flex"><span className="font-semibold w-55 whitespace-nowrap inline-block text-gray-900">OSHA Training:</span> {formData.oshaTraining || 'N/A'}</p>
-              </div>
-            )}
-          </div>
-        );
+        <EmployeeInfoTab 
+          {...commonProps}
+          setFormData={setFormData}
+          userRole={userRole} 
+          statusOptions={statusOptions}
+          offices={offices}
+          departments={departments}
+          jobStatuses={jobStatuses}
+          employmentStatuses={employmentStatuses}
+        />
+      );
       
+      case 'incident_notices':
+        return <IncidentNoticesTab employee={employee} />;
       // 3. UPDATED: Grouped all other tabs here so they don't crash
       case 'license_certificates':
-      case 'incident_notices':
       case 'review':
       case 'leave_of_absence':
       case 'workers_comp':
@@ -658,10 +323,10 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
             <div className="flex flex-col items-center text-center gap-4 mb-6 flex-shrink-0 relative">
                 {isEditing && (
                   <button
-                    onClick={handleDeleteEmployee}
+                    onClick={handleArchiveEmployee}
                     className="mt-4 flex items-center justify-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-md border border-red-200 transition-colors"
                   >
-                    <X size={16} /> Delete Employee Record
+                    <X size={16} /> Archive Employee Record
                   </button>
                 )}
 

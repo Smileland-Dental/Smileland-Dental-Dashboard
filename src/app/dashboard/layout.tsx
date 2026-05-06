@@ -16,8 +16,8 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     <div  className="relative min-h-screen">
     <SidebarProvider className="relative min-h-screen">
       <AppSidebar />
-      <SidebarTrigger/>
       <main className='w-full relative min-h-screen'>
+        <SidebarTrigger/>
         {children}
       </main>
     </SidebarProvider>
