@@ -15,6 +15,7 @@ type SimpleFormData = {
   paperAtOrangeJuice: string;
   paperAtTea: string;
   justPaper: string;
+  prophyTotal: string;
   notes: string;
   notDue: string;
 };
@@ -160,18 +161,30 @@ function parseNumber(value: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** 달러 금액: 감산·곱셈 후 부동소수점 잔여 자릿수 정리 (센트 단위). */
+function roundToCents(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/** 건수 집계: 합·차 후 부동소수점 잔여 자릿수 정리 (정수). */
+function roundToWhole(n: number): number {
+  return Math.round(n);
+}
+
 function computeRow(row: TableRow): TableRow {
   const coffeeHasInput = row.coffeeNew.trim() !== '' || row.coffeeReturn.trim() !== '';
   const orangeHasInput = row.orangeJuiceNew.trim() !== '' || row.orangeJuiceReturn.trim() !== '';
-  const coffeeTotal = coffeeHasInput
-    ? String(parseNumber(row.coffeeNew) + parseNumber(row.coffeeReturn))
-    : '';
-  const orangeJuiceTotal = orangeHasInput
-    ? String(parseNumber(row.orangeJuiceNew) + parseNumber(row.orangeJuiceReturn))
-    : '';
+  const coffeeTotalNum = coffeeHasInput
+    ? roundToWhole(parseNumber(row.coffeeNew) + parseNumber(row.coffeeReturn))
+    : NaN;
+  const coffeeTotal = coffeeHasInput ? String(coffeeTotalNum) : '';
+  const orangeJuiceTotalNum = orangeHasInput
+    ? roundToWhole(parseNumber(row.orangeJuiceNew) + parseNumber(row.orangeJuiceReturn))
+    : NaN;
+  const orangeJuiceTotal = orangeHasInput ? String(orangeJuiceTotalNum) : '';
   /** CRA (Billable) = CRA Total − CRA (Not Billable); CRA Total comes from New+Return. */
   const coffeeYes =
-    coffeeTotal !== '' ? String(parseNumber(coffeeTotal) - parseNumber(row.coffeeNo)) : '';
+    coffeeTotal !== '' ? String(roundToWhole(coffeeTotalNum - parseNumber(row.coffeeNo))) : '';
 
   return {
     ...row,
@@ -182,10 +195,17 @@ function computeRow(row: TableRow): TableRow {
 }
 
 /** Sealant (Billable) = Sealant − Sealant (Redo). */
+/** Prophy Total = Prophy @ OE + Prophy @ TX + Just Prophy (셋 다 비어 있으면 ''). */
+function computeProphyTotal(oe: string, tea: string, just: string): string {
+  const hasBasis = oe.trim() !== '' || tea.trim() !== '' || just.trim() !== '';
+  if (!hasBasis) return '';
+  return String(Math.round(parseNumber(oe) + parseNumber(tea) + parseNumber(just)));
+}
+
 function computeSugarRow(row: SugarRow): SugarRow {
   const sealantHasBasis = row.sugar.trim() !== '' || row.sugarBad.trim() !== '';
   const sugarGood = sealantHasBasis
-    ? String(parseNumber(row.sugar) - parseNumber(row.sugarBad))
+    ? String(roundToWhole(parseNumber(row.sugar) - parseNumber(row.sugarBad)))
     : '';
   return { ...row, sugarGood };
 }
@@ -232,26 +252,30 @@ function createEmptyReasonRow(index: number): ReasonRow {
 }
 
 function getTableTotals(rows: TableRow[]): TableTotals {
+  const sum = (field: keyof TableRow, round: (n: number) => number) =>
+    round(rows.reduce((acc, row) => acc + parseNumber(row[field]), 0));
   return {
-    sales: rows.reduce((sum, row) => sum + parseNumber(row.sales), 0),
-    coffeeNew: rows.reduce((sum, row) => sum + parseNumber(row.coffeeNew), 0),
-    coffeeReturn: rows.reduce((sum, row) => sum + parseNumber(row.coffeeReturn), 0),
-    coffeeTotal: rows.reduce((sum, row) => sum + parseNumber(row.coffeeTotal), 0),
-    coffeeNo: rows.reduce((sum, row) => sum + parseNumber(row.coffeeNo), 0),
-    renderedCoffee: rows.reduce((sum, row) => sum + parseNumber(row.renderedCoffee), 0),
-    coffeeYes: rows.reduce((sum, row) => sum + parseNumber(row.coffeeYes), 0),
-    orangeJuiceNew: rows.reduce((sum, row) => sum + parseNumber(row.orangeJuiceNew), 0),
-    orangeJuiceReturn: rows.reduce((sum, row) => sum + parseNumber(row.orangeJuiceReturn), 0),
-    orangeJuiceTotal: rows.reduce((sum, row) => sum + parseNumber(row.orangeJuiceTotal), 0),
+    sales: sum('sales', roundToCents),
+    coffeeNew: sum('coffeeNew', roundToWhole),
+    coffeeReturn: sum('coffeeReturn', roundToWhole),
+    coffeeTotal: sum('coffeeTotal', roundToWhole),
+    coffeeNo: sum('coffeeNo', roundToWhole),
+    renderedCoffee: sum('renderedCoffee', roundToWhole),
+    coffeeYes: sum('coffeeYes', roundToWhole),
+    orangeJuiceNew: sum('orangeJuiceNew', roundToWhole),
+    orangeJuiceReturn: sum('orangeJuiceReturn', roundToWhole),
+    orangeJuiceTotal: sum('orangeJuiceTotal', roundToWhole),
   };
 }
 
 function getSugarTotals(rows: SugarRow[]): SugarTotals {
+  const sum = (field: keyof SugarRow) =>
+    roundToWhole(rows.reduce((acc, row) => acc + parseNumber(row[field]), 0));
   return {
-    sugar: rows.reduce((sum, row) => sum + parseNumber(row.sugar), 0),
-    sugarGood: rows.reduce((sum, row) => sum + parseNumber(row.sugarGood), 0),
-    sugarBad: rows.reduce((sum, row) => sum + parseNumber(row.sugarBad), 0),
-    paper: rows.reduce((sum, row) => sum + parseNumber(row.paper), 0),
+    sugar: sum('sugar'),
+    sugarGood: sum('sugarGood'),
+    sugarBad: sum('sugarBad'),
+    paper: sum('paper'),
   };
 }
 
@@ -265,22 +289,108 @@ function createEmptyReportRow(): ReportRow {
   };
 }
 
+function formatDateTime12h(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  let hours = date.getHours();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds} ${ampm}`;
+}
+
 function getNowDateTimeString() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  const hours = String(now.getHours()).padStart(2, '0');
-  const minutes = String(now.getMinutes()).padStart(2, '0');
-  const seconds = String(now.getSeconds()).padStart(2, '0');
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  return formatDateTime12h(new Date());
+}
+
+function normalizeMultilineText(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function multilineToLines(value: string): string[] {
+  const normalized = normalizeMultilineText(value);
+  if (normalized === '') return [];
+  return normalized.split('\n');
+}
+
+function loadMultilineField(text: unknown, lines: unknown): string {
+  if (Array.isArray(lines) && lines.length > 0) {
+    return lines.map((line) => String(line)).join('\n');
+  }
+  return normalizeMultilineText(String(text ?? ''));
+}
+
+function getMultilineFirestoreFields(notes: string, notDue: string) {
+  const normalizedNotes = normalizeMultilineText(notes);
+  const normalizedNotDue = normalizeMultilineText(notDue);
+  return {
+    notes: normalizedNotes,
+    notesLines: multilineToLines(normalizedNotes),
+    notDue: normalizedNotDue,
+    notDueLines: multilineToLines(normalizedNotDue),
+  };
+}
+
+function parseDateTimeValue(value: string): Date | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Firestore(AM/PM 등) → datetime-local 입력용 YYYY-MM-DDTHH:mm */
+function toDateTimeLocalValue(stored: string): string {
+  const trimmed = stored.trim();
+  if (!trimmed) return '';
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(trimmed)) {
+    return trimmed.slice(0, 16);
+  }
+  const parsed = parseDateTimeValue(trimmed);
+  if (!parsed) return '';
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  const hours = String(parsed.getHours()).padStart(2, '0');
+  const minutes = String(parsed.getMinutes()).padStart(2, '0');
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+/** datetime-local 입력값 → Firestore 저장용 AM/PM 문자열 */
+function toStoredDateTime12h(localValue: string): string {
+  const trimmed = localValue.trim();
+  if (!trimmed) return '';
+  const parsed = parseDateTimeValue(trimmed);
+  if (!parsed) return trimmed;
+  return formatDateTime12h(parsed);
+}
+
+function normalizeReportRowsForLoad(rows: Partial<ReportRow>[]): ReportRow[] {
+  return rows.map((row) => {
+    const merged = { ...createEmptyReportRow(), ...row };
+    return {
+      ...merged,
+      timeStart: toDateTimeLocalValue(String(merged.timeStart ?? '')),
+      timeEnd: toDateTimeLocalValue(String(merged.timeEnd ?? '')),
+    };
+  });
+}
+
+function normalizeReportRowsForSave(rows: ReportRow[]): ReportRow[] {
+  return rows.map((row) => ({
+    ...row,
+    timeStart: toStoredDateTime12h(row.timeStart),
+    timeEnd: toStoredDateTime12h(row.timeEnd),
+  }));
 }
 
 function getDurationLabel(start: string, end: string): string {
   if (!start || !end) return '-';
-  const startDate = new Date(start);
-  const endDate = new Date(end);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return '-';
+  const startDate = parseDateTimeValue(start);
+  const endDate = parseDateTimeValue(end);
+  if (!startDate || !endDate) return '-';
 
   const diffMs = endDate.getTime() - startDate.getTime();
   if (diffMs < 0) return '-';
@@ -429,6 +539,7 @@ export default function Page() {
     paperAtOrangeJuice: '',
     paperAtTea: '',
     justPaper: '',
+    prophyTotal: '',
     notes: '',
     notDue: '',
   });
@@ -448,9 +559,16 @@ export default function Page() {
   const [docSubmitLock, setDocSubmitLock] = useState(false);
 
   useEffect(() => {
-    const hasCoffeeYesInput = tableRows.some((row) => computeRow(row).coffeeYes.trim() !== '');
-    const coffeeYesTotal = tableRows.reduce((sum, row) => sum + parseNumber(computeRow(row).coffeeYes), 0);
-    const calculatedCoffeeSales = hasCoffeeYesInput ? String(coffeeYesTotal * 61) : '';
+    const hasCoffeeTotalBasis = tableRows.some(
+      (row) => row.coffeeNew.trim() !== '' || row.coffeeReturn.trim() !== ''
+    );
+    const coffeeYesSum = tableRows.reduce(
+      (sum, row) => sum + parseNumber(computeRow(row).coffeeYes),
+      0
+    );
+    const calculatedCoffeeSales = hasCoffeeTotalBasis
+      ? String(roundToCents(coffeeYesSum * 61))
+      : '';
 
     setForm((prev) =>
       prev.coffeeSales === calculatedCoffeeSales ? prev : { ...prev, coffeeSales: calculatedCoffeeSales }
@@ -461,7 +579,7 @@ export default function Page() {
     const bothEmpty = form.grandTotal.trim() === '' && form.coffeeSales.trim() === '';
     const calculatedSalesWithoutCoffee = bothEmpty
       ? ''
-      : String(parseNumber(form.grandTotal) - parseNumber(form.coffeeSales));
+      : String(roundToCents(parseNumber(form.grandTotal) - parseNumber(form.coffeeSales)));
 
     setForm((prev) =>
       prev.salesWithoutCoffee === calculatedSalesWithoutCoffee
@@ -469,6 +587,17 @@ export default function Page() {
         : { ...prev, salesWithoutCoffee: calculatedSalesWithoutCoffee }
     );
   }, [form.grandTotal, form.coffeeSales]);
+
+  useEffect(() => {
+    const calculatedProphyTotal = computeProphyTotal(
+      form.paperAtOrangeJuice,
+      form.paperAtTea,
+      form.justPaper
+    );
+    setForm((prev) =>
+      prev.prophyTotal === calculatedProphyTotal ? prev : { ...prev, prophyTotal: calculatedProphyTotal }
+    );
+  }, [form.paperAtOrangeJuice, form.paperAtTea, form.justPaper]);
 
   const getDocId = () => {
     const safeLocation = form.location.trim().replace(/\s+/g, '_');
@@ -504,6 +633,7 @@ export default function Page() {
             paperAtOrangeJuice: '',
             paperAtTea: '',
             justPaper: '',
+            prophyTotal: '',
             notes: '',
             notDue: '',
           }));
@@ -529,6 +659,7 @@ export default function Page() {
             paperAtOrangeJuice: '',
             paperAtTea: '',
             justPaper: '',
+            prophyTotal: '',
             notes: '',
             notDue: '',
           }));
@@ -539,7 +670,7 @@ export default function Page() {
 
         const loadedReportRows =
           Array.isArray(data.reportRows) && data.reportRows.length > 0
-            ? data.reportRows.map((row: Partial<ReportRow>) => ({ ...createEmptyReportRow(), ...row }))
+            ? normalizeReportRowsForLoad(data.reportRows)
             : [createEmptyReportRow()];
         const loadedTableRows =
           Array.isArray(data.tableRows) && data.tableRows.length > 0
@@ -568,8 +699,9 @@ export default function Page() {
           paperAtOrangeJuice: String(data.paperAtOrangeJuice ?? ''),
           paperAtTea: String(data.paperAtTea ?? ''),
           justPaper: String(data.justPaper ?? ''),
-          notes: String(data.notes ?? ''),
-          notDue: String(data.notDue ?? ''),
+          prophyTotal: String(data.prophyTotal ?? ''),
+          notes: loadMultilineField(data.notes, data.notesLines),
+          notDue: loadMultilineField(data.notDue, data.notDueLines),
         }));
         lastSavedKeyRef.current = '';
         if (!cancelled) setDocSubmitLock(false);
@@ -619,15 +751,17 @@ export default function Page() {
           }
         }
 
-        const firstReportRow = reportRows[0] ?? createEmptyReportRow();
+        const storedReportRows = normalizeReportRowsForSave(reportRows);
+        const firstReportRow = storedReportRows[0] ?? createEmptyReportRow();
         const tableTotals = getTableTotals(normalizedRows);
         const sugarTotals = getSugarTotals(normalizedSugarRows);
-        const { submittedDateTime: _submittedDateTime, ...formWithoutSubmittedDateTime } = form;
+        const { submittedDateTime: _submittedDateTime, notes, notDue, ...formWithoutSubmittedDateTime } = form;
         await setDoc(
           docRef,
           {
             ...formWithoutSubmittedDateTime,
-            reportRows,
+            ...getMultilineFirestoreFields(notes, notDue),
+            reportRows: storedReportRows,
             name: firstReportRow.name.trim(),
             timeStart: firstReportRow.timeStart,
             timeEnd: firstReportRow.timeEnd,
@@ -682,7 +816,8 @@ export default function Page() {
   };
 
   const getColumnTotal = (field: keyof TableRow) => {
-    return tableRows.reduce((sum, row) => sum + parseNumber(computeRow(row)[field]), 0);
+    const sum = tableRows.reduce((acc, row) => acc + parseNumber(computeRow(row)[field]), 0);
+    return field === 'sales' ? roundToCents(sum) : roundToWhole(sum);
   };
 
   const handleSugarCellChange = (rowIndex: number, field: keyof SugarRow, value: string) => {
@@ -699,7 +834,8 @@ export default function Page() {
   };
 
   const getSugarColumnTotal = (field: keyof SugarRow) => {
-    return sugarRows.reduce((sum, row) => sum + parseNumber(computeSugarRow(row)[field]), 0);
+    const sum = sugarRows.reduce((acc, row) => acc + parseNumber(computeSugarRow(row)[field]), 0);
+    return roundToWhole(sum);
   };
   const handleReasonCellChange = (rowIndex: number, field: keyof ReasonRow, value: string) => {
     if (field === 'reason') return;
@@ -738,15 +874,18 @@ export default function Page() {
 
       const normalizedRows = tableRows.map(computeRow).filter(hasAnyTableRowValue);
       const normalizedSugarRows = sugarRows.map(computeSugarRow).filter(hasAnySugarRowValue);
-      const firstReportRow = reportRows[0] ?? createEmptyReportRow();
+      const storedReportRows = normalizeReportRowsForSave(reportRows);
+      const firstReportRow = storedReportRows[0] ?? createEmptyReportRow();
       const tableTotals = getTableTotals(normalizedRows);
       const sugarTotals = getSugarTotals(normalizedSugarRows);
       const submittedDateTime = getNowDateTimeString();
 
+      const { notes, notDue, ...formWithoutMultiline } = form;
       await setDoc(doc(db, 'simple-forms', docId), {
-        ...form,
+        ...formWithoutMultiline,
+        ...getMultilineFirestoreFields(notes, notDue),
         submittedDateTime,
-        reportRows,
+        reportRows: storedReportRows,
         name: firstReportRow.name.trim(),
         timeStart: firstReportRow.timeStart,
         timeEnd: firstReportRow.timeEnd,
@@ -772,6 +911,7 @@ export default function Page() {
         paperAtOrangeJuice: '',
         paperAtTea: '',
         justPaper: '',
+        prophyTotal: '',
         notes: '',
         notDue: '',
       });
@@ -1048,7 +1188,7 @@ export default function Page() {
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(3, minmax(180px, 1fr))',
+            gridTemplateColumns: 'repeat(4, minmax(160px, 1fr))',
             gap: 12,
             marginBottom: 8,
           }}
@@ -1101,6 +1241,24 @@ export default function Page() {
                 padding: '0 10px',
                 border: '1px solid #d1d5db',
                 borderRadius: 8,
+              }}
+            />
+          </div>
+          <div>
+            <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Prophy Total</label>
+            <input
+              type="number"
+              readOnly
+              className={NO_NUMBER_SPINNER_CLASS}
+              value={form.prophyTotal}
+              style={{
+                width: '100%',
+                height: 40,
+                padding: '0 10px',
+                border: '1px solid #d1d5db',
+                borderRadius: 8,
+                background: '#f3f4f6',
+                color: '#6b7280',
               }}
             />
           </div>
@@ -1426,7 +1584,13 @@ export default function Page() {
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Notes</label>
             <textarea
               value={form.notes}
-              onChange={(e) => setForm((prev) => ({ ...prev, notes: e.target.value }))}
+              maxLength={300}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  notes: normalizeMultilineText(e.target.value).slice(0, 300),
+                }))
+              }
               rows={4}
               style={{
                 width: '100%',
@@ -1436,6 +1600,7 @@ export default function Page() {
                 borderRadius: 8,
                 fontFamily: 'inherit',
                 fontSize: 14,
+                whiteSpace: 'pre-wrap',
               }}
             />
           </div>
@@ -1443,7 +1608,13 @@ export default function Page() {
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Not Due</label>
             <textarea
               value={form.notDue}
-              onChange={(e) => setForm((prev) => ({ ...prev, notDue: e.target.value }))}
+              maxLength={300}
+              onChange={(e) =>
+                setForm((prev) => ({
+                  ...prev,
+                  notDue: normalizeMultilineText(e.target.value).slice(0, 300),
+                }))
+              }
               rows={4}
               style={{
                 width: '100%',
@@ -1453,6 +1624,7 @@ export default function Page() {
                 borderRadius: 8,
                 fontFamily: 'inherit',
                 fontSize: 14,
+                whiteSpace: 'pre-wrap',
               }}
             />
           </div>
