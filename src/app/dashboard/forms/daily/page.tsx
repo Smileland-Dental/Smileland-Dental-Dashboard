@@ -3,7 +3,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { db } from '@/lib/firebase.config';
 import { collection, doc, getDocs, increment, serverTimestamp, setDoc } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 type ReportRow = {
@@ -112,6 +111,10 @@ type FormDoc = {
   date?: string;
   location?: string;
   reasonIfLate?: string;
+  checkIn?: string;
+  checkOut?: string;
+  hoursOpen?: string;
+  closer?: string;
   submittedDateTime?: string;
   grandTotal?: string;
   coffeeSales?: string;
@@ -119,8 +122,11 @@ type FormDoc = {
   paperAtOrangeJuice?: string;
   paperAtTea?: string;
   justPaper?: string;
+  prophyTotal?: string;
   notes?: string;
   notDue?: string;
+  notesLines?: string[];
+  notDueLines?: string[];
   name?: string;
   timeStart?: string;
   timeEnd?: string;
@@ -161,6 +167,13 @@ const TABLE_HEADERS = [
 const SUGAR_HEADERS = ['Position', 'Name', 'Sealant', 'Sealant (Billable)', 'Sealant (Redo)', 'Prophy'];
 const REASON_HEADERS = ['Reasoning', 'OE', 'Pro', 'CRA'];
 
+const NOTES_MAX_LENGTH = 300;
+
+/** A4 가로 PDF 본문 너비(pt) — page padding 20×2 기준. */
+const PDF_LANDSCAPE_CONTENT_WIDTH_PT = 841.89 - 40;
+const PDF_NOTES_COLUMN_WIDTH_PT = Math.floor(PDF_LANDSCAPE_CONTENT_WIDTH_PT / 2) - 1;
+const PDF_NOTES_TEXT_WIDTH_PT = PDF_NOTES_COLUMN_WIDTH_PT - 10;
+
 /** 브라우저 number 스텝 화살표 제거 — 직접 입력만 (WebKit / Firefox). */
 const D_PAGE_NUMBER_INPUT_SPINNER_RESET_CSS = `
 .d-page-main input[type="number"]::-webkit-outer-spin-button,
@@ -195,6 +208,27 @@ const reportPdfStyles = StyleSheet.create({
   tableHeaderCell: { backgroundColor: '#f3f4f6' },
   tableHeaderText: { fontSize: 7, fontWeight: 'bold' },
   tableCellText: { fontSize: 7 },
+  notesTableCell: {
+    width: PDF_NOTES_COLUMN_WIDTH_PT,
+    maxWidth: PDF_NOTES_COLUMN_WIDTH_PT,
+    flexGrow: 0,
+    flexShrink: 0,
+    paddingVertical: 6,
+    paddingHorizontal: 5,
+    borderRightWidth: 0.5,
+    borderColor: '#e5e7eb',
+    overflow: 'hidden',
+  },
+  notesTableCellLast: {
+    width: PDF_NOTES_COLUMN_WIDTH_PT,
+    maxWidth: PDF_NOTES_COLUMN_WIDTH_PT,
+    flexGrow: 0,
+    flexShrink: 0,
+    paddingVertical: 6,
+    paddingHorizontal: 5,
+    overflow: 'hidden',
+  },
+  notesTableText: { fontSize: 7, lineHeight: 1.35, width: PDF_NOTES_TEXT_WIDTH_PT },
 });
 
 function safeStr(value: unknown, maxLength = 80): string {
@@ -204,6 +238,125 @@ function safeStr(value: unknown, maxLength = 80): string {
 
 function sanitizeFilename(filename: string): string {
   return filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 255);
+}
+
+/** Notes / Not Due — 줄바꿈 유지, 칸 너비 안에서 줄 wrap (전체 trim 하지 않음). */
+function safeNotesPdfText(value: unknown, maxLength = NOTES_MAX_LENGTH): string {
+  if (value == null) return '';
+  return String(value).slice(0, maxLength).replace(/[<>]/g, '');
+}
+
+function normalizeMultilineText(value: string): string {
+  return value.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+}
+
+function loadMultilineField(text: unknown, lines: unknown): string {
+  if (Array.isArray(lines) && lines.length > 0) {
+    return lines.map((line) => String(line)).join('\n');
+  }
+  return normalizeMultilineText(String(text ?? ''));
+}
+
+function multilineToLines(value: string): string[] {
+  const normalized = normalizeMultilineText(value);
+  if (normalized === '') return [];
+  return normalized.split('\n');
+}
+
+function getMultilineFirestoreFields(notes: string, notDue: string) {
+  const normalizedNotes = normalizeMultilineText(notes).slice(0, NOTES_MAX_LENGTH);
+  const normalizedNotDue = normalizeMultilineText(notDue).slice(0, NOTES_MAX_LENGTH);
+  return {
+    notes: normalizedNotes,
+    notesLines: multilineToLines(normalizedNotes),
+    notDue: normalizedNotDue,
+    notDueLines: multilineToLines(normalizedNotDue),
+  };
+}
+
+/** react-pdf에서 긴 한 줄이 옆 칸으로 넘칠 때를 대비해 폭에 맞게 줄 분할. */
+function wrapNotesLineForPdf(line: string, maxCharsPerLine = 72): string[] {
+  if (line.length <= maxCharsPerLine) return [line];
+  const chunks: string[] = [];
+  let rest = line;
+  while (rest.length > maxCharsPerLine) {
+    let breakAt = rest.lastIndexOf(' ', maxCharsPerLine);
+    if (breakAt <= 0) breakAt = maxCharsPerLine;
+    chunks.push(rest.slice(0, breakAt));
+    rest = rest.slice(breakAt).trimStart();
+  }
+  if (rest.length > 0) chunks.push(rest);
+  return chunks;
+}
+
+function expandNotesTextToPdfLines(text: string): string[] {
+  return text.split(/\r?\n/).flatMap((line) => wrapNotesLineForPdf(line));
+}
+
+function createPdfMultilineCellContent(
+  styles: ReturnType<typeof StyleSheet.create>,
+  raw: string
+): React.ReactElement {
+  const text = safeNotesPdfText(raw);
+  if (text.trim() === '') {
+    return React.createElement(Text, { style: styles.notesTableText }, '-');
+  }
+  const lines = expandNotesTextToPdfLines(text);
+  return React.createElement(
+    View,
+    { style: { width: PDF_NOTES_TEXT_WIDTH_PT } },
+    ...lines.map((line, i) =>
+      React.createElement(
+        Text,
+        { key: `line-${i}`, style: styles.notesTableText },
+        line === '' ? ' ' : line
+      )
+    )
+  );
+}
+
+function createPdfNotesColumn(
+  styles: ReturnType<typeof StyleSheet.create>,
+  title: string,
+  body: string,
+  options: { isLast?: boolean }
+) {
+  const columnStyle = options.isLast ? styles.notesTableCellLast : styles.notesTableCell;
+  return React.createElement(
+    View,
+    { style: columnStyle },
+    React.createElement(
+      View,
+      { style: [styles.tableHeaderCell, { paddingVertical: 4, paddingHorizontal: 5 }] },
+      React.createElement(Text, { style: styles.tableHeaderText }, title)
+    ),
+    React.createElement(
+      View,
+      { style: { paddingVertical: 6, paddingHorizontal: 5, width: PDF_NOTES_COLUMN_WIDTH_PT } },
+      createPdfMultilineCellContent(styles, body)
+    )
+  );
+}
+
+function createPdfNotesTable(
+  styles: ReturnType<typeof StyleSheet.create>,
+  notDue: string,
+  notes: string
+) {
+  return React.createElement(
+    View,
+    {
+      style: {
+        flexDirection: 'row',
+        flexWrap: 'nowrap',
+        width: PDF_LANDSCAPE_CONTENT_WIDTH_PT,
+        borderWidth: 0.6,
+        borderColor: '#d1d5db',
+      },
+    },
+    createPdfNotesColumn(styles, 'Not Due', notDue, { isLast: false }),
+    createPdfNotesColumn(styles, 'Notes', notes, { isLast: true })
+  );
 }
 
 function createPdfTable(
@@ -247,6 +400,10 @@ function createSubmittedReportPDFDocument(props: {
   location: string;
   generatedDate: string;
   reasonIfLate: string;
+  checkIn: string;
+  checkOut: string;
+  hoursOpen: string;
+  closer: string;
   submittedAt: string;
   grandTotal: string;
   coffeeSales: string;
@@ -254,6 +411,7 @@ function createSubmittedReportPDFDocument(props: {
   paperAtOrangeJuice: string;
   paperAtTea: string;
   justPaper: string;
+  prophyTotal: string;
   reportRows: ReportRow[];
   tableRows: TableRow[];
   tableTotals: TableTotals | null;
@@ -280,6 +438,10 @@ function createSubmittedReportPDFDocument(props: {
     location,
     generatedDate,
     reasonIfLate,
+    checkIn,
+    checkOut,
+    hoursOpen,
+    closer,
     submittedAt,
     grandTotal,
     coffeeSales,
@@ -287,6 +449,7 @@ function createSubmittedReportPDFDocument(props: {
     paperAtOrangeJuice,
     paperAtTea,
     justPaper,
+    prophyTotal,
     reportRows,
     tableRows,
     tableTotals,
@@ -319,7 +482,15 @@ function createSubmittedReportPDFDocument(props: {
 
   const salesPaperSummaryTable = createPdfTable(
     s,
-    ['Grand Total', 'CRA Production', 'Production W/Out CRA', 'Prophy @ OE', 'Prophy @ TX', 'Just Prophy'],
+    [
+      'Grand Total',
+      'CRA Production',
+      'Production W/Out CRA',
+      'Prophy @ OE',
+      'Prophy @ TX',
+      'Just Prophy',
+      'Prophy Total',
+    ],
     [
       [
         formatCurrencyLabel(grandTotal || '-'),
@@ -328,6 +499,7 @@ function createSubmittedReportPDFDocument(props: {
         paperAtOrangeJuice || '-',
         paperAtTea || '-',
         justPaper || '-',
+        prophyTotal || '-',
       ],
     ],
     'sales-paper-summary'
@@ -337,6 +509,13 @@ function createSubmittedReportPDFDocument(props: {
     ['Reason if Late', 'Submitted by office at:'],
     [[reasonIfLate || '-', submittedAt || '-']],
     'submission-info'
+  );
+
+  const officeHoursTable = createPdfTable(
+    s,
+    ['Check In', 'Check Out', 'Hours Open', 'Closer'],
+    [[checkIn || '-', checkOut || '-', formatHoursOpenLabel(hoursOpen), closer || '-']],
+    'office-hours'
   );
 
   const locationSummaryTable = createPdfTable(
@@ -366,7 +545,9 @@ function createSubmittedReportPDFDocument(props: {
   const productionSideMetricsTable = createPdfTable(s, visitsPdfHeaders, [visitsPdfValues], 'production-side-metrics');
 
   const productionTotalForPdf = String(
-    extraInputRows.reduce((acc, row, idx) => acc + getDoctorPerformanceRowProductionValue(row, tableRows[idx]?.sales), 0)
+    roundToCents(
+      extraInputRows.reduce((acc, row, idx) => acc + getDoctorPerformanceRowProductionValue(row, tableRows[idx]?.sales), 0)
+    )
   );
   const additionalInputsTable = createPdfTable(
     s,
@@ -494,12 +675,7 @@ function createSubmittedReportPDFDocument(props: {
     'reason-table'
   );
 
-  const notesTable = createPdfTable(
-    s,
-    ['Not Due', 'Notes'],
-    [[safeStr(notDue, 300) || '-', safeStr(notes, 300) || '-']],
-    'notes-table'
-  );
+  const notesTable = createPdfNotesTable(s, notDue, notes);
 
   return React.createElement(
     Document,
@@ -514,6 +690,7 @@ function createSubmittedReportPDFDocument(props: {
         `Generated: ${sanitizedGeneratedDate || '-'}`
       ),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Submission Info'), submissionInfoTable),
+      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Office Hours'), officeHoursTable),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Billers'), reportTable),
       React.createElement(
         View,
@@ -528,9 +705,9 @@ function createSubmittedReportPDFDocument(props: {
         React.createElement(Text, { style: { ...s.sectionTitle, marginTop: 10 } }, 'Visits'),
         productionSideMetricsTable
       ),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Doctors Performance'), additionalInputsTable),
+      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Doctors'), additionalInputsTable),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'CRA / OE'), coffeeTable),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Sealant'), sugarTable),
+      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Sealant / Prophy'), sugarTable),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Short Procedures'), reasonTable),
       React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Notes'), notesTable)
     )
@@ -540,6 +717,112 @@ function createSubmittedReportPDFDocument(props: {
 function parseNumber(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
+}
+
+/** 달러 입력: 쉼표·$·공백 제거 후 숫자. */
+function parseMoney(value: unknown): number {
+  const s = String(value ?? '')
+    .trim()
+    .replace(/^\$/, '')
+    .replace(/,/g, '')
+    .trim();
+  const n = Number(s);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function roundToCents(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function formatTime12h(hours24: number, minutes: number): string {
+  let hours = hours24 % 24;
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12;
+  if (hours === 0) hours = 12;
+  return `${hours}:${String(minutes).padStart(2, '0')} ${ampm}`;
+}
+
+function parseTimeToMinutes(timeStr: unknown): number | null {
+  const t = String(timeStr ?? '').trim();
+  if (!t) return null;
+
+  const ampmMatch = t.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)$/i);
+  if (ampmMatch) {
+    let hours = Number(ampmMatch[1]);
+    const minutes = Number(ampmMatch[2]);
+    const ampm = ampmMatch[3].toUpperCase();
+    if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours < 1 || hours > 12 || minutes > 59) {
+      return null;
+    }
+    if (ampm === 'AM') {
+      if (hours === 12) hours = 0;
+    } else if (hours !== 12) {
+      hours += 12;
+    }
+    return hours * 60 + minutes;
+  }
+
+  const match = t.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes) || hours > 23 || minutes > 59) return null;
+  return hours * 60 + minutes;
+}
+
+/** Firestore(AM/PM 등) → type="time" 입력용 HH:mm */
+function toTimeInputValue(stored: unknown): string {
+  const minutes = parseTimeToMinutes(stored);
+  if (minutes == null) return '';
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** type="time" 입력값 → Firestore 저장용 AM/PM */
+function toStoredCheckTime12h(localValue: string): string {
+  const trimmed = localValue.trim();
+  if (!trimmed) return '';
+  const minutes = parseTimeToMinutes(trimmed);
+  if (minutes == null) return trimmed;
+  return formatTime12h(Math.floor(minutes / 60), minutes % 60);
+}
+
+function formatMinutesAsHoursLabel(totalMinutes: number): string {
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  const parts: string[] = [];
+  if (hours > 0) parts.push(`${hours} hour${hours !== 1 ? 's' : ''}`);
+  if (minutes > 0) parts.push(`${minutes} minute${minutes !== 1 ? 's' : ''}`);
+  return parts.length > 0 ? parts.join(' ') : '0 minutes';
+}
+
+/** Hours Open = Check Out − Check In → "5 hours 30 minutes" (익일 퇴근은 +24h). */
+function computeHoursOpen(checkIn: unknown, checkOut: unknown): string {
+  const inMin = parseTimeToMinutes(checkIn);
+  const outMin = parseTimeToMinutes(checkOut);
+  if (inMin == null || outMin == null) return '';
+  let diffMin = outMin - inMin;
+  if (diffMin < 0) diffMin += 24 * 60;
+  return formatMinutesAsHoursLabel(diffMin);
+}
+
+/** UI/PDF 표시 — 저장값이 옛 소수(5.5) 형식이면 변환. */
+function formatHoursOpenLabel(hoursOpen: unknown): string {
+  const raw = String(hoursOpen ?? '').trim();
+  if (!raw) return '-';
+  if (/hour|minute/i.test(raw)) return raw;
+  const n = parseNumber(raw);
+  if (Number.isFinite(n)) return formatMinutesAsHoursLabel(Math.round(n * 60));
+  return raw;
+}
+
+/** Prophy Total = Prophy @ OE + Prophy @ TX + Just Prophy (셋 다 비어 있으면 ''). */
+function computeProphyTotal(oe: unknown, tea: unknown, just: unknown): string {
+  const hasBasis =
+    String(oe ?? '').trim() !== '' || String(tea ?? '').trim() !== '' || String(just ?? '').trim() !== '';
+  if (!hasBasis) return '';
+  return String(Math.round(parseNumber(oe) + parseNumber(tea) + parseNumber(just)));
 }
 
 /** Read-only UI/PDF: leading $ when a value is present; '-' unchanged. */
@@ -574,7 +857,9 @@ function seenPercentReadOnlyInputValueFromMetrics(m: ProductionSideMetrics | und
 
 function getDoctorPerformanceProductionSum(row: ExtraInputRow | undefined): number {
   if (!row) return 0;
-  return parseNumber(row.doctorPreventative) + parseNumber(row.doctorRestorative) + parseNumber(row.doctorCraProduction);
+  return roundToCents(
+    parseMoney(row.doctorPreventative) + parseMoney(row.doctorRestorative) + parseMoney(row.doctorCraProduction)
+  );
 }
 
 function doctorPerformanceProductionRowHasInput(row: ExtraInputRow | undefined): boolean {
@@ -586,7 +871,7 @@ function doctorPerformanceProductionRowHasInput(row: ExtraInputRow | undefined):
 function getDoctorPerformanceRowProductionValue(row: ExtraInputRow | undefined, fallbackSales?: string): number {
   const sum = getDoctorPerformanceProductionSum(row);
   if (sum !== 0 || doctorPerformanceProductionRowHasInput(row)) return sum;
-  return parseNumber(fallbackSales);
+  return roundToCents(parseMoney(fallbackSales));
 }
 
 function formatDoctorPerformanceProductionCell(row: ExtraInputRow | undefined, fallbackSales?: string): string {
@@ -647,7 +932,7 @@ function createEmptyReportRow(): ReportRow {
 
 function createEmptyTableRow(): TableRow {
   return {
-    position: 'Barista',
+    position: '',
     name: '',
     sales: '',
     coffeeNew: '',
@@ -664,7 +949,7 @@ function createEmptyTableRow(): TableRow {
 
 function createEmptySugarRow(): SugarRow {
   return {
-    position: 'Barista',
+    position: '',
     name: '',
     sugar: '',
     sugarGood: '',
@@ -866,7 +1151,16 @@ export default function ViewPage() {
       try {
         const snap = await getDocs(collection(db, 'simple-forms'));
         const loaded = snap.docs
-          .map((d) => ({ id: d.id, ...(d.data() as Omit<FormDoc, 'id'>) }))
+          .map((d) => {
+            const data = d.data() as Omit<FormDoc, 'id'>;
+            const { notesLines: _nl, notDueLines: _ndl, ...rest } = data;
+            return {
+              id: d.id,
+              ...rest,
+              notes: loadMultilineField(data.notes, data.notesLines).slice(0, NOTES_MAX_LENGTH),
+              notDue: loadMultilineField(data.notDue, data.notDueLines).slice(0, NOTES_MAX_LENGTH),
+            };
+          })
           .filter((doc) => String(doc.submittedDateTime ?? '').trim() !== '')
           .sort((a, b) => `${b.date ?? ''}_${b.location ?? ''}`.localeCompare(`${a.date ?? ''}_${a.location ?? ''}`));
         setDocs(loaded);
@@ -968,8 +1262,13 @@ export default function ViewPage() {
       ...createEmptyProductionSideMetrics(),
       ...(selectedDoc.productionSideMetrics || {}),
     };
+    const { notesLines: _draftNl, notDueLines: _draftNdl, ...selectedWithoutLineArrays } = selectedDoc;
     setDraft({
-      ...selectedDoc,
+      ...selectedWithoutLineArrays,
+      checkIn: toTimeInputValue(selectedDoc.checkIn),
+      checkOut: toTimeInputValue(selectedDoc.checkOut),
+      notes: loadMultilineField(selectedDoc.notes, selectedDoc.notesLines).slice(0, NOTES_MAX_LENGTH),
+      notDue: loadMultilineField(selectedDoc.notDue, selectedDoc.notDueLines).slice(0, NOTES_MAX_LENGTH),
       reportRows: normalizedReportRows,
       tableRows: normalizedTableRows,
       coffeeActualTotals: selectedDoc.coffeeActualTotals || {},
@@ -990,7 +1289,21 @@ export default function ViewPage() {
   }, [selectedDoc?.pdfSaved, isEditing]);
 
   const updateDraftField = (field: keyof FormDoc, value: string) => {
-    setDraft((prev) => (prev ? { ...prev, [field]: value } : prev));
+    const nextValue =
+      field === 'notes' || field === 'notDue' ? value.slice(0, NOTES_MAX_LENGTH) : value;
+    setDraft((prev) => {
+      if (!prev) return prev;
+      if (field === 'checkIn' || field === 'checkOut') {
+        const checkIn = field === 'checkIn' ? nextValue : String(prev.checkIn ?? '');
+        const checkOut = field === 'checkOut' ? nextValue : String(prev.checkOut ?? '');
+        return {
+          ...prev,
+          [field]: nextValue,
+          hoursOpen: computeHoursOpen(checkIn, checkOut),
+        };
+      }
+      return { ...prev, [field]: nextValue };
+    });
   };
 
   const updateCoffeeActualTotalField = (
@@ -1161,11 +1474,23 @@ export default function ViewPage() {
       const grandTotal = String(draft.grandTotal ?? '');
       const bothEmpty = grandTotal.trim() === '' && coffeeSales.trim() === '';
       const salesWithoutCoffee = bothEmpty ? '' : String(parseNumber(grandTotal) - parseNumber(coffeeSales));
+      const prophyTotal = computeProphyTotal(
+        draft.paperAtOrangeJuice,
+        draft.paperAtTea,
+        draft.justPaper
+      );
+      const hoursOpen = computeHoursOpen(draft.checkIn, draft.checkOut);
       const firstReport = reportRowsToSave[0] ?? createEmptyReportRow();
       const coffeeActualTotals = computeCoffeeActualTotals(draft.coffeeActualTotals || {});
 
+      const { notesLines: _saveNl, notDueLines: _saveNdl, ...draftWithoutLineArrays } = draft;
+      const multilineFields = getMultilineFirestoreFields(
+        String(draft.notes ?? ''),
+        String(draft.notDue ?? '')
+      );
       const payload: Omit<FormDoc, 'id'> & { updatedAt: unknown } = {
-        ...draft,
+        ...draftWithoutLineArrays,
+        ...multilineFields,
         edited: true,
         editedAt: serverTimestamp(),
         reportRows: reportRowsToSave,
@@ -1185,6 +1510,11 @@ export default function ViewPage() {
         amount: firstReport.amount ?? '',
         coffeeSales,
         salesWithoutCoffee,
+        prophyTotal,
+        checkIn: toStoredCheckTime12h(String(draft.checkIn ?? '')),
+        checkOut: toStoredCheckTime12h(String(draft.checkOut ?? '')),
+        hoursOpen,
+        closer: String(draft.closer ?? ''),
         updatedAt: serverTimestamp(),
       };
 
@@ -1272,6 +1602,23 @@ export default function ViewPage() {
   const visiblePaperAtOrangeJuice = isEditing ? String(draft?.paperAtOrangeJuice ?? '') : selectedDoc?.paperAtOrangeJuice || '';
   const visiblePaperAtTea = isEditing ? String(draft?.paperAtTea ?? '') : selectedDoc?.paperAtTea || '';
   const visibleJustPaper = isEditing ? String(draft?.justPaper ?? '') : selectedDoc?.justPaper || '';
+  const visibleProphyTotal = computeProphyTotal(
+    visiblePaperAtOrangeJuice,
+    visiblePaperAtTea,
+    visibleJustPaper
+  );
+  const visibleCheckIn = isEditing ? String(draft?.checkIn ?? '') : selectedDoc?.checkIn || '';
+  const visibleCheckOut = isEditing ? String(draft?.checkOut ?? '') : selectedDoc?.checkOut || '';
+  const visibleCloser = isEditing ? String(draft?.closer ?? '') : selectedDoc?.closer || '';
+  const visibleHoursOpen = (() => {
+    const checkIn = isEditing ? draft?.checkIn : selectedDoc?.checkIn;
+    const checkOut = isEditing ? draft?.checkOut : selectedDoc?.checkOut;
+    const computed = computeHoursOpen(checkIn, checkOut);
+    if (computed) return computed;
+    const stored = isEditing ? draft?.hoursOpen : selectedDoc?.hoursOpen;
+    const formatted = formatHoursOpenLabel(stored);
+    return formatted === '-' ? '' : formatted;
+  })();
   const visibleProductionSideMetrics = {
     ...createEmptyProductionSideMetrics(),
     ...(isEditing ? draft?.productionSideMetrics || {} : selectedDoc?.productionSideMetrics || {}),
@@ -1308,6 +1655,10 @@ export default function ViewPage() {
         location: selectedDoc.location || '',
         generatedDate,
         reasonIfLate: selectedDoc.reasonIfLate || '',
+        checkIn: visibleCheckIn,
+        checkOut: visibleCheckOut,
+        hoursOpen: visibleHoursOpen,
+        closer: visibleCloser,
         submittedAt: selectedDoc.submittedDateTime || '',
         grandTotal: visibleGrandTotal,
         coffeeSales: visibleCoffeeSales,
@@ -1315,6 +1666,7 @@ export default function ViewPage() {
         paperAtOrangeJuice: visiblePaperAtOrangeJuice,
         paperAtTea: visiblePaperAtTea,
         justPaper: visibleJustPaper,
+        prophyTotal: visibleProphyTotal,
         reportRows: visibleReportRows,
         tableRows: visibleTableRows,
         tableTotals: visibleTableTotals,
@@ -1337,13 +1689,14 @@ export default function ViewPage() {
       });
       const blob = await pdf(pdfDoc).toBlob();
       const filename = sanitizeFilename(`${selectedDoc.date || 'no-date'}_${selectedDoc.location || 'no-location'}_daily production.pdf`);
-      const safeLocation = sanitizeFilename(selectedDoc.location || 'no-location');
-      const safeDate = sanitizeFilename(selectedDoc.date || 'no-date');
-      const storage = getStorage();
-      const targetRef = ref(storage, `Coffee/${safeLocation}/${safeDate}/${filename}`);
-      await uploadBytes(targetRef, blob);
+      const downloadUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = downloadUrl;
+      link.download = filename;
+      link.click();
+      URL.revokeObjectURL(downloadUrl);
 
-      // PDF 저장 완료 시점에 월/지점별 누적 집계도 함께 저장
+      // PDF 생성 완료 시점에 월/지점별 누적 집계도 함께 저장
       const monthKey = getMonthKey(selectedDoc.date);
       const locationKey = toFirestoreKey(selectedDoc.location);
       const monthlyDocId = `${monthKey}-${locationKey}`;
@@ -1354,6 +1707,7 @@ export default function ViewPage() {
       const paperAtOrangeJuiceValue = parseNumber(visiblePaperAtOrangeJuice);
       const paperAtTeaValue = parseNumber(visiblePaperAtTea);
       const justPaperValue = parseNumber(visibleJustPaper);
+      const prophyTotalValue = parseNumber(visibleProphyTotal);
       const actualOrangeNewValue = parseNumber(visibleCoffeeActualTotals.orangeJuiceNew);
       const actualOrangeReturnValue = parseNumber(visibleCoffeeActualTotals.orangeJuiceReturn);
       const pineappleValue = parseNumber(visiblePineappleValue);
@@ -1374,6 +1728,7 @@ export default function ViewPage() {
           paperAtOrangeJuice: increment(paperAtOrangeJuiceValue),
           paperAtTea: increment(paperAtTeaValue),
           justPaper: increment(justPaperValue),
+          prophyTotal: increment(prophyTotalValue),
           actualOrangeJuiceNew: increment(actualOrangeNewValue),
           actualOrangeJuiceReturn: increment(actualOrangeReturnValue),
           pineapple: increment(pineappleValue),
@@ -1401,9 +1756,9 @@ export default function ViewPage() {
             : item
         )
       );
-      setSaveMessage('PDF가 저장되었습니다.');
+      setSaveMessage('PDF가 다운로드되었습니다.');
     } catch (e: any) {
-      setSaveMessage(`PDF 저장 실패: ${e?.message || '알 수 없는 오류'}`);
+      setSaveMessage(`PDF 생성 실패: ${e?.message || '알 수 없는 오류'}`);
     } finally {
       setIsPdfSaving(false);
     }
@@ -1416,10 +1771,7 @@ export default function ViewPage() {
         style={{
           maxWidth: 2600,
           margin: '0 auto',
-          border: '1px solid #e5e7eb',
-          borderRadius: 12,
           padding: 20,
-          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.06)',
         }}
       >
         <div style={{ marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
@@ -1644,6 +1996,54 @@ export default function ViewPage() {
                     </div>
                   </div>
 
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(200px, 1fr))', gap: 10, marginBottom: 14 }}>
+                    <div>
+                      <strong>Check In:</strong>{' '}
+                      {isEditing ? (
+                        <input
+                          type="time"
+                          value={visibleCheckIn}
+                          onChange={(e) => updateDraftField('checkIn', e.target.value)}
+                          style={{ height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                        />
+                      ) : (
+                        visibleCheckIn || '-'
+                      )}
+                    </div>
+                    <div>
+                      <strong>Check Out:</strong>{' '}
+                      {isEditing ? (
+                        <input
+                          type="time"
+                          value={visibleCheckOut}
+                          onChange={(e) => updateDraftField('checkOut', e.target.value)}
+                          style={{ height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                        />
+                      ) : (
+                        visibleCheckOut || '-'
+                      )}
+                    </div>
+                    <div>
+                      <strong>Hours Open:</strong>{' '}
+                      <span style={{ marginLeft: 6, color: '#374151' }}>
+                        {formatHoursOpenLabel(visibleHoursOpen)}
+                      </span>
+                    </div>
+                    <div>
+                      <strong>Closer:</strong>{' '}
+                      {isEditing ? (
+                        <input
+                          type="text"
+                          value={visibleCloser}
+                          onChange={(e) => updateDraftField('closer', e.target.value)}
+                          style={{ width: '100%', maxWidth: 220, height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                        />
+                      ) : (
+                        visibleCloser || '-'
+                      )}
+                    </div>
+                  </div>
+
                   <h3 style={{ margin: '10px 0' }}>Billers</h3>
                   <div style={dPageDetailTableBleedScroll}>
                     <table style={{ width: '100%', minWidth: 920, borderCollapse: 'collapse', fontSize: 14 }}>
@@ -1770,7 +2170,7 @@ export default function ViewPage() {
                     </div>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(220px, 1fr))', gap: 10, marginTop: 10 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(200px, 1fr))', gap: 10, marginTop: 10 }}>
                     <div>
                       <strong>Prophy @ OE:</strong>{' '}
                       {isEditing ? (
@@ -1809,6 +2209,10 @@ export default function ViewPage() {
                       ) : (
                         selectedDoc.justPaper || '-'
                       )}
+                    </div>
+                    <div>
+                      <strong>Prophy Total:</strong>{' '}
+                      <span style={{ marginLeft: 6, color: '#374151' }}>{visibleProphyTotal || '-'}</span>
                     </div>
                   </div>
 
@@ -1922,7 +2326,7 @@ export default function ViewPage() {
                   </div>
 
                   <>
-                    <h3 style={{ margin: '16px 0 10px' }}>Doctors Performance</h3>
+                    <h3 style={{ margin: '16px 0 10px' }}>Doctors</h3>
                       <div style={dPageDetailTableBleedScroll}>
                         <table style={{ width: '100%', minWidth: 1400, borderCollapse: 'collapse', fontSize: 14 }}>
                           <thead>
@@ -2145,9 +2549,11 @@ export default function ViewPage() {
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
                                 {formatCurrencyLabel(
                                   String(
-                                    visibleExtraInputRowsWithIdentity.reduce(
-                                      (acc, r, i) => acc + getDoctorPerformanceRowProductionValue(r, visibleTableRows[i]?.sales),
-                                      0
+                                    roundToCents(
+                                      visibleExtraInputRowsWithIdentity.reduce(
+                                        (acc, r, i) => acc + getDoctorPerformanceRowProductionValue(r, visibleTableRows[i]?.sales),
+                                        0
+                                      )
                                     )
                                   )
                                 )}
@@ -2260,7 +2666,7 @@ export default function ViewPage() {
                       </button>
                     </div>
                   )}
-                  <h3 style={{ margin: '16px 0 10px' }}>Sealant</h3>
+                  <h3 style={{ margin: '16px 0 10px' }}>Sealant / Prophy</h3>
                   <div style={dPageDetailTableBleedScroll}>
                     <table style={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
@@ -2367,12 +2773,32 @@ export default function ViewPage() {
                       {isEditing ? (
                         <textarea
                           value={String(draft?.notDue ?? '')}
+                          maxLength={NOTES_MAX_LENGTH}
                           onChange={(e) => updateDraftField('notDue', e.target.value)}
                           rows={4}
-                          style={{ marginTop: 6, width: '100%', minHeight: 110, padding: 8, border: '1px solid #d1d5db', borderRadius: 8, resize: 'vertical' }}
+                          style={{
+                            marginTop: 6,
+                            width: '100%',
+                            minHeight: 110,
+                            padding: 8,
+                            border: '1px solid #d1d5db',
+                            borderRadius: 8,
+                            resize: 'vertical',
+                            whiteSpace: 'pre-wrap',
+                          }}
                         />
                       ) : (
-                        <p style={{ margin: '6px 0 0', minHeight: 110, color: '#374151' }}>{selectedDoc.notDue || '-'}</p>
+                        <p
+                          style={{
+                            margin: '6px 0 0',
+                            minHeight: 110,
+                            color: '#374151',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {String(selectedDoc.notDue ?? '') === '' ? '-' : selectedDoc.notDue}
+                        </p>
                       )}
                     </div>
                     <div>
@@ -2380,12 +2806,32 @@ export default function ViewPage() {
                       {isEditing ? (
                         <textarea
                           value={String(draft?.notes ?? '')}
+                          maxLength={NOTES_MAX_LENGTH}
                           onChange={(e) => updateDraftField('notes', e.target.value)}
                           rows={4}
-                          style={{ marginTop: 6, width: '100%', minHeight: 110, padding: 8, border: '1px solid #d1d5db', borderRadius: 8, resize: 'vertical' }}
+                          style={{
+                            marginTop: 6,
+                            width: '100%',
+                            minHeight: 110,
+                            padding: 8,
+                            border: '1px solid #d1d5db',
+                            borderRadius: 8,
+                            resize: 'vertical',
+                            whiteSpace: 'pre-wrap',
+                          }}
                         />
                       ) : (
-                        <p style={{ margin: '6px 0 0', minHeight: 110, color: '#374151' }}>{selectedDoc.notes || '-'}</p>
+                        <p
+                          style={{
+                            margin: '6px 0 0',
+                            minHeight: 110,
+                            color: '#374151',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word',
+                          }}
+                        >
+                          {String(selectedDoc.notes ?? '') === '' ? '-' : selectedDoc.notes}
+                        </p>
                       )}
                     </div>
                   </div>
