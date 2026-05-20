@@ -21,8 +21,7 @@ export default function LobbyInspectionPage() {
   const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
   const [userOfficesOptions, setUserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
 
-  // Rate limiting을 위한 ref
-  const lastUpdateLobbyDataCall = useRef<number>(0);
+  // Rate limiting을 위한 ref (로드·제출만)
   const lastLoadDataCall = useRef<number>(0);
   const lastSubmitCall = useRef<number>(0);
 
@@ -31,14 +30,27 @@ export default function LobbyInspectionPage() {
 
   // Office별 Check 옵션 정의 (알파벳 순)
   const OFFICE_CHECK_OPTIONS = {
-    "Bernard": ["Carmen", "Cynthia", "Elisa", "Ranjit"],
-    "California": ["Kindal"],
-    "Delano": ["Helen", "Stephanie"],
+    "Bernard": ["Carmen", "Elisa", "Ranjit"],
+    "California": ["Helen", "Kindal"],
+    "Delano": ["Helen", "Jasmine", "Leana"],
     "Fresno": ["Cynthia"],
-    "Ming": ["Kindal", "Hopie", "Marbella"],
+    "Ming": ["Hopie", "Kindal", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Dianne"],
-    "Visalia": ["Dianne"]
+    "Visalia": ["Abby", "Dianne", "Jessica"]
+  };
+
+  /** Task checkbox columns: Row{N}_Col3 … Row{N}_Col13 */
+  const LOBBY_TASK_COLUMN_START = 3;
+  const LOBBY_TASK_COLUMN_COUNT = 11;
+
+  const hasCheckColumnValue = (value: unknown): boolean =>
+    value !== false && value !== null && value !== undefined && String(value).trim() !== '';
+
+  const setRowTaskCheckboxes = (data: Record<string, unknown>, rowNumber: string, checked: boolean) => {
+    for (let i = 0; i < LOBBY_TASK_COLUMN_COUNT; i++) {
+      data[`Row${rowNumber}_Col${LOBBY_TASK_COLUMN_START + i}`] = checked;
+    }
   };
 
   // --- PDF 생성 관련 상수/스타일 ---
@@ -316,49 +328,29 @@ export default function LobbyInspectionPage() {
     };
   }, [inspectionDate, selectedOffice]);
 
-  // 데이터 업데이트 함수 (Rate limiting 적용)
   const updateLobbyData = (field: string, value: any) => {
-    // Rate limiting: 최근 300ms 내 동일한 필드에 대한 호출 방지
-    // (여러 필드를 빠르게 업데이트할 수 있도록 허용하되, 과도한 호출 방지)
-    const now = Date.now();
-    const fieldKey = `lastUpdate_${field}`;
-    const lastCall = (window as any)[fieldKey] || 0;
-    
-    // 전역 rate limiting: 모든 업데이트에 대해 300ms 제한
-    if (now - lastUpdateLobbyDataCall.current < 300) {
-      return;
-    }
-    lastUpdateLobbyDataCall.current = now;
-
-    // 개별 필드 rate limiting: 동일 필드에 대해 800ms 제한
-    if (now - lastCall < 800) {
-      return;
-    }
-    (window as any)[fieldKey] = now;
-
     setLobbyData((prev: any) => {
       const newData = { ...prev, [field]: value };
-      
-      // Check 필드가 입력되면 시간 자동 기록
-      if (field.includes('_Check') && value && value.toString().trim() !== '' && (!prev[field] || prev[field].toString().trim() === '')) {
+
+      if (field.includes('_Check')) {
         const rowNumber = field.match(/Row(\d+)_Check/)?.[1];
         if (rowNumber) {
           const timeField = `Row${rowNumber}_CheckedTime`;
-          if (!newData[timeField]) {
-            newData[timeField] = getCurrentTime12Hour();
+          const filled = hasCheckColumnValue(value);
+
+          if (filled) {
+            setRowTaskCheckboxes(newData, rowNumber, true);
+            const wasEmpty = !hasCheckColumnValue(prev[field]);
+            if (wasEmpty && !newData[timeField]) {
+              newData[timeField] = getCurrentTime12Hour();
+            }
+          } else {
+            setRowTaskCheckboxes(newData, rowNumber, false);
+            newData[timeField] = '';
           }
         }
       }
-      
-      // Check 필드가 비워지면 시간도 비움
-      if (field.includes('_Check') && (!value || value.toString().trim() === '')) {
-        const rowNumber = field.match(/Row(\d+)_Check/)?.[1];
-        if (rowNumber) {
-          const timeField = `Row${rowNumber}_CheckedTime`;
-          newData[timeField] = '';
-        }
-      }
-      
+
       return newData;
     });
   };
@@ -418,7 +410,7 @@ export default function LobbyInspectionPage() {
       }
 
       const userData = userDoc.data();
-      if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
+      if (userData?.role !== 'HR' && userData?.role !== 'Manager' && userData?.role !== 'Employee') {
         alert('You do not have access to this page.');
         setLoading(false);
         setSubmitStatus('');
@@ -491,7 +483,6 @@ export default function LobbyInspectionPage() {
 
       const blob = await pdf(pdfDoc).toBlob();
         
-      // PDF를 Firebase Storage에 저장 (endofday-pdfs 저장)
       setSubmitStatus('Saving...');
       setProgress(70);
       try {
@@ -729,7 +720,7 @@ export default function LobbyInspectionPage() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
+        if (userData?.role !== 'HR' && userData?.role !== 'Manager' && userData?.role !== 'Employee') {
           alert('You do not have access to this page.');
           setIsAuthorized(false);
           // 다른 페이지로 리다이렉트하거나 홈으로 이동
