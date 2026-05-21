@@ -57,14 +57,12 @@ type ReasonRow = {
   coffee: string;
 };
 
-/** Matches `d-page.tsx` Production 1 (locationSummary). */
 type LocationSummary = {
   pineapple?: string;
   rose?: string;
   total?: string;
 };
 
-/** Matches `d-page.tsx` Visits table (productionSideMetrics). */
 type ProductionSideMetrics = {
   add?: string;
   noShow?: string;
@@ -73,7 +71,6 @@ type ProductionSideMetrics = {
   seenPercent?: string;
 };
 
-/** Matches `d-page.tsx` Doctors Performance (`extraInputRows`); dessert names = column metrics. */
 type ExtraInputRow = {
   position?: string;
   name?: string;
@@ -84,6 +81,9 @@ type ExtraInputRow = {
   tart?: string;
   peach?: string;
   peppermint?: string;
+  doctorPreventative?: string;
+  doctorRestorative?: string;
+  doctorCraProduction?: string;
 };
 
 type SimpleFormDoc = {
@@ -98,6 +98,7 @@ type SimpleFormDoc = {
   paperAtOrangeJuice?: string;
   paperAtTea?: string;
   justPaper?: string;
+  prophyTotal?: string;
   notes?: string;
   notDue?: string;
   /** When true, form is finalized and should appear in reports. */
@@ -114,7 +115,6 @@ type SimpleFormDoc = {
   [key: string]: unknown;
 };
 
-/** Fields selectable in column dropdowns (Biller / report rows excluded). */
 type ColumnFieldId =
   | ''
   | 'main.grandTotal'
@@ -123,6 +123,7 @@ type ColumnFieldId =
   | 'main.paperAtOrangeJuice'
   | 'main.paperAtTea'
   | 'main.justPaper'
+  | 'main.prophyTotal'
   | 'table.sales'
   | 'table.coffeeNew'
   | 'table.coffeeReturn'
@@ -152,20 +153,19 @@ type ColumnFieldId =
   | 'docperf.donut'
   | 'docperf.tart'
   | 'docperf.peach'
-  | 'docperf.peppermint';
+  | 'docperf.peppermint'
+  | 'docperf.doctorPreventative'
+  | 'docperf.doctorRestorative'
+  | 'docperf.doctorCraProduction';
 
-/** One slot picks this → table shows one column per fixed reason (OE, Pro, or CRA only). */
 type ShortProcBundleId = 'bundle.spOE' | 'bundle.spPro' | 'bundle.spCRA';
 
-/** One slot → pick a person **Name**, then one or more sub-columns each with its own metric dropdown. */
 const NAME_BUNDLE_ID = 'bundle.nameRow' as const;
 
-/** One slot → pick a **Position**, then metrics; body cells list fixed names (for that position) with values under each name. */
 const POSITION_BUNDLE_ID = 'bundle.positionRow' as const;
 
 type SlotValue = ColumnFieldId | ShortProcBundleId | typeof NAME_BUNDLE_ID | typeof POSITION_BUNDLE_ID;
 
-/** Same order/labels as p_page.tsx reason rows (match `reason` text when saving). */
 const FIXED_REASON_OPTIONS = [
   'Declined/DDP/Pt Left',
   'Not Due/Freq',
@@ -197,12 +197,12 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
       { id: 'main.paperAtOrangeJuice', label: 'Prophy @ OE' },
       { id: 'main.paperAtTea', label: 'Prophy @ TX' },
       { id: 'main.justPaper', label: 'Just Prophy' },
+      { id: 'main.prophyTotal', label: 'Prophy Total' },
     ],
   },
   {
     label: 'CRA / OE',
     options: [
-      { id: 'table.sales', label: 'Production' },
       { id: 'table.coffeeNew', label: 'CRA (New)' },
       { id: 'table.coffeeReturn', label: 'CRA (Return)' },
       { id: 'table.coffeeTotal', label: 'CRA Total' },
@@ -251,7 +251,6 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
   },
 ];
 
-/** Per-name subcolumns: only row-level metrics (CRA / sealant / doctors). */
 function collectNameBundleMetricOptions(): { id: ColumnFieldId; label: string }[] {
   const out: { id: ColumnFieldId; label: string }[] = [];
   for (const g of FIELD_GROUPS) {
@@ -269,6 +268,24 @@ const NAME_BUNDLE_METRIC_OPTIONS = collectNameBundleMetricOptions();
 const NAME_BUNDLE_MAX_METRICS = 12;
 
 const POSITION_BUNDLE_METRIC_OPTIONS = NAME_BUNDLE_METRIC_OPTIONS;
+
+const POSITION_BUNDLE_DOCTOR_METRIC_OPTIONS: { id: ColumnFieldId; label: string }[] = [
+  { id: 'docperf.doctorPreventative', label: 'Preventative' },
+  { id: 'docperf.doctorRestorative', label: 'Restorative' },
+  { id: 'docperf.doctorCraProduction', label: 'CRA Production' },
+];
+
+function isDoctorPosition(position: string): boolean {
+  return position.trim().toLowerCase() === 'doctor';
+}
+
+function getPositionBundleMetricOptions(position: string): { id: ColumnFieldId; label: string }[] {
+  if (isDoctorPosition(position)) {
+    return [...POSITION_BUNDLE_METRIC_OPTIONS, ...POSITION_BUNDLE_DOCTOR_METRIC_OPTIONS];
+  }
+  return POSITION_BUNDLE_METRIC_OPTIONS;
+}
+
 const POSITION_BUNDLE_MAX_METRICS = 12;
 
 const NUM_SLOTS = 12;
@@ -364,7 +381,6 @@ function parseNumber(value: string | number | undefined): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** Matches d-page: Seen % = round(Seen ÷ Scheduled × 100); '-' when Scheduled is 0. */
 function computeSeenPercentRounded(
   scheduledRaw: string | number | undefined,
   seenRaw: string | number | undefined
@@ -375,12 +391,60 @@ function computeSeenPercentRounded(
   return String(Math.round((seen / sch) * 100));
 }
 
-/** Footer: sum of parsed numeric cell values; blank when zero or non-finite. */
-function formatTotalCell(n: number): string {
+const CURRENCY_FIELD_IDS = new Set<ColumnFieldId>([
+  'main.grandTotal',
+  'main.coffeeSales',
+  'main.salesWithoutCoffee',
+  'location.pineapple',
+  'location.rose',
+  'docperf.doctorPreventative',
+  'docperf.doctorRestorative',
+  'docperf.doctorCraProduction',
+]);
+
+function isCurrencyField(id: ColumnFieldId): boolean {
+  return CURRENCY_FIELD_IDS.has(id);
+}
+
+const PERCENT_FIELD_IDS = new Set<ColumnFieldId>(['side.seenPercent']);
+
+function isPercentField(id: ColumnFieldId): boolean {
+  return PERCENT_FIELD_IDS.has(id);
+}
+
+function formatCurrencyDisplay(raw: string): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  if (s.startsWith('$')) return s;
+  return `$${s}`;
+}
+
+function formatPercentDisplay(raw: string): string {
+  const s = String(raw ?? '').trim();
+  if (!s || s === '-') return s;
+  if (s.endsWith('%')) return s;
+  return `${s}%`;
+}
+
+function formatMetricCellDisplay(metric: ColumnFieldId, raw: string): string {
+  const s = String(raw ?? '').trim();
+  if (!s) return '';
+  if (isCurrencyField(metric)) return formatCurrencyDisplay(s);
+  if (isPercentField(metric)) return formatPercentDisplay(s);
+  return s;
+}
+
+function formatTotalCell(n: number, currency = false, percent = false): string {
   if (!Number.isFinite(n) || n === 0) return '';
-  if (Number.isInteger(n)) return String(n);
-  const rounded = Math.round(n * 100) / 100;
-  return String(rounded);
+  let out: string;
+  if (Number.isInteger(n)) out = String(n);
+  else {
+    const rounded = Math.round(n * 100) / 100;
+    out = String(rounded);
+  }
+  if (currency) return `$${out}`;
+  if (percent) return `${out}%`;
+  return out;
 }
 
 function computeRow(row: TableRow): TableRow {
@@ -506,7 +570,6 @@ function getNamedPersonRowMetricValue(doc: SimpleFormDoc, personName: string, me
   return '';
 }
 
-/** One cell block: row matching **name** and **position** for CRA / sealant / doctors. */
 function getPositionPersonRowMetricValue(
   doc: SimpleFormDoc,
   position: string,
@@ -608,7 +671,6 @@ function resolveTotals(doc: SimpleFormDoc): { table: TableTotals; sugar: SugarTo
   return { table, sugar };
 }
 
-/** First column Day: weekday (English short, e.g. Mon). */
 function formatDayColumn(dateStr: string): string {
   if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return '—';
   const d = new Date(`${dateStr}T12:00:00`);
@@ -616,7 +678,6 @@ function formatDayColumn(dateStr: string): string {
   return new Intl.DateTimeFormat('en-US', { weekday: 'short' }).format(d);
 }
 
-/** Date column: stored YYYY-MM-DD → display as M/D/YYYY (no leading zeros). */
 function formatDateMDY(iso: string): string {
   const s = iso.trim();
   if (!s) return '—';
@@ -661,6 +722,21 @@ function getFieldDisplay(
   }
   if (id.startsWith('docperf.')) {
     const sub = id.replace('docperf.', '');
+    if (
+      sub === 'doctorPreventative' ||
+      sub === 'doctorRestorative' ||
+      sub === 'doctorCraProduction'
+    ) {
+      const rows = Array.isArray(doc.extraInputRows) ? doc.extraInputRows : [];
+      if (rows.length === 0) return '';
+      const hasAny = rows.some((r) => String((r as Record<string, unknown>)[sub] ?? '').trim() !== '');
+      if (!hasAny) return '';
+      const sum = rows.reduce(
+        (s, r) => s + parseNumber((r as Record<string, unknown>)[sub] as string | number | undefined),
+        0
+      );
+      return String(sum);
+    }
     if (!DOCPERF_ROW_KEYS.includes(sub as DocPerfRowKey)) return '';
     return getDoctorsPerfCellDisplay(doc, sub as DocPerfRowKey);
   }
@@ -1340,7 +1416,7 @@ export default function SimpleFormsDropdownViewPage() {
                               }}
                               style={{ ...thSelectStyle, minWidth: 100, fontWeight: 600 }}
                             >
-                              {POSITION_BUNDLE_METRIC_OPTIONS.map((opt) => (
+                              {getPositionBundleMetricOptions(cfg.position).map((opt) => (
                                 <option key={opt.id} value={opt.id}>
                                   {opt.label}
                                 </option>
@@ -1460,11 +1536,15 @@ export default function SimpleFormsDropdownViewPage() {
                             metrics: ['docperf.customer' as ColumnFieldId],
                           };
                           const metrics = cfg.metrics.length > 0 ? cfg.metrics : (['docperf.customer' as ColumnFieldId]);
-                          return metrics.map((metric, mi) => (
-                            <td key={`c-${doc.id}-${slotIndex}-${mi}`} style={cellStyle}>
-                              {getNamedPersonRowMetricValue(doc, cfg.personName, metric)}
-                            </td>
-                          ));
+                          return metrics.map((metric, mi) => {
+                            const raw = getNamedPersonRowMetricValue(doc, cfg.personName, metric);
+                            const show = String(raw).trim() !== '';
+                            return (
+                              <td key={`c-${doc.id}-${slotIndex}-${mi}`} style={cellStyle}>
+                                {show ? formatMetricCellDisplay(metric, raw) : '—'}
+                              </td>
+                            );
+                          });
                         }
                         if (isPositionBundle(slotId)) {
                           const cfg = positionBundleBySlot[slotIndex] ?? {
@@ -1483,15 +1563,18 @@ export default function SimpleFormsDropdownViewPage() {
                               const show = String(raw).trim() !== '';
                               return (
                                 <td key={`c-pb-${doc.id}-${slotIndex}-${mi}-${pi}`} style={cellStyle}>
-                                  {emptySlot ? '—' : show ? raw : '—'}
+                                  {emptySlot ? '—' : show ? formatMetricCellDisplay(metric, raw) : '—'}
                                 </td>
                               );
                             })
                           );
                         }
+                        const fieldId = slotId as ColumnFieldId;
+                        const raw = getFieldDisplay(doc, fieldId, totals);
+                        const show = String(raw).trim() !== '';
                         return [
                           <td key={`c-${doc.id}-${slotIndex}`} style={cellStyle}>
-                            {getFieldDisplay(doc, slotId as ColumnFieldId, totals)}
+                            {show ? formatMetricCellDisplay(fieldId, raw) : '—'}
                           </td>,
                         ];
                       })}
@@ -1504,6 +1587,7 @@ export default function SimpleFormsDropdownViewPage() {
                   <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Total</td>
                   <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
                   {footerSlotTotals.flatMap((fv, slotIndex) => {
+                    const slotId = columnSlots[slotIndex] as ColumnFieldId;
                     if (fv.type === 'empty') {
                       return [<td key={`ft-${slotIndex}`} style={cellStyle} />];
                     }
@@ -1515,16 +1599,26 @@ export default function SimpleFormsDropdownViewPage() {
                       ));
                     }
                     if (fv.type === 'nameBundle') {
+                      const nbCfg = nameBundleBySlot[slotIndex];
+                      const nbMetrics =
+                        nbCfg && nbCfg.metrics.length > 0
+                          ? nbCfg.metrics
+                          : (['docperf.customer' as ColumnFieldId]);
                       return fv.values.map((n, ri) => (
                         <td key={`ft-${slotIndex}-nb-${ri}`} style={cellStyle}>
-                          {formatTotalCell(n)}
+                          {formatTotalCell(n, isCurrencyField(nbMetrics[ri] ?? ''))}
                         </td>
                       ));
                     }
                     if (fv.type === 'positionBundle') {
+                      const pbCfg = positionBundleBySlot[slotIndex];
+                      const pbMetrics =
+                        pbCfg && pbCfg.metrics.length > 0
+                          ? pbCfg.metrics
+                          : (['docperf.customer' as ColumnFieldId]);
                       return fv.valuesByMetric.flatMap((perPerson, mi) =>
                         perPerson.map((n, pi) => {
-                          const formatted = formatTotalCell(n);
+                          const formatted = formatTotalCell(n, isCurrencyField(pbMetrics[mi] ?? ''));
                           return (
                             <td key={`ft-${slotIndex}-pb-${mi}-${pi}`} style={cellStyle}>
                               {fv.people.length === 0 ? '—' : formatted || '—'}
@@ -1535,7 +1629,11 @@ export default function SimpleFormsDropdownViewPage() {
                     }
                     return [
                       <td key={`ft-${slotIndex}`} style={cellStyle}>
-                        {formatTotalCell(fv.total)}
+                        {formatTotalCell(
+                          fv.total,
+                          isCurrencyField(slotId),
+                          isPercentField(slotId)
+                        )}
                       </td>,
                     ];
                   })}
@@ -1556,7 +1654,7 @@ export default function SimpleFormsDropdownViewPage() {
             }}
           >
             <span style={{ fontSize: 14, color: '#6b7280' }}>
-              {rows.length} row{rows.length === 1 ? '' : 's'} · {NUM_SLOTS} column slots
+              {rows.length} day{rows.length === 1 ? '' : 's'} · {NUM_SLOTS} column slots
             </span>
             <button
               type="button"
