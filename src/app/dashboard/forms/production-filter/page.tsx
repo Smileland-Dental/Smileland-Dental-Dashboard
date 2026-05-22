@@ -112,6 +112,9 @@ type SimpleFormDoc = {
   productionSideMetrics?: ProductionSideMetrics;
   coffeeActualTotals?: Partial<Record<keyof TableTotals, string>>;
   extraInputRows?: ExtraInputRow[];
+  checkIn?: string;
+  checkOut?: string;
+  closer?: string;
   [key: string]: unknown;
 };
 
@@ -160,11 +163,28 @@ type ColumnFieldId =
 
 type ShortProcBundleId = 'bundle.spOE' | 'bundle.spPro' | 'bundle.spCRA';
 
+const OPERATING_BUNDLE_ID = 'bundle.operating' as const;
+
+type OperatingBundleId = typeof OPERATING_BUNDLE_ID;
+
+const OPERATING_COL_COUNT = 4;
+
+const OPERATING_SUB_LABELS = ['Check In', 'Check Out', 'Hours Open', 'Closer'] as const;
+
+const OPERATING_HOURS_OPEN_COL_INDEX = 2;
+
+const OPERATING_HOURS_OPEN_MIN_WIDTH = 168;
+
 const NAME_BUNDLE_ID = 'bundle.nameRow' as const;
 
 const POSITION_BUNDLE_ID = 'bundle.positionRow' as const;
 
-type SlotValue = ColumnFieldId | ShortProcBundleId | typeof NAME_BUNDLE_ID | typeof POSITION_BUNDLE_ID;
+type SlotValue =
+  | ColumnFieldId
+  | ShortProcBundleId
+  | OperatingBundleId
+  | typeof NAME_BUNDLE_ID
+  | typeof POSITION_BUNDLE_ID;
 
 const FIXED_REASON_OPTIONS = [
   'Declined/DDP/Pt Left',
@@ -192,12 +212,12 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
     label: 'Summary',
     options: [
       { id: 'main.grandTotal', label: 'Grand Total' },
-      { id: 'main.coffeeSales', label: 'CRA Production' },
+      { id: 'main.coffeeSales', label: 'CRA Production Production' },
       { id: 'main.salesWithoutCoffee', label: 'Production W/Out CRA' },
       { id: 'main.paperAtOrangeJuice', label: 'Prophy @ OE' },
       { id: 'main.paperAtTea', label: 'Prophy @ TX' },
       { id: 'main.justPaper', label: 'Just Prophy' },
-      { id: 'main.prophyTotal', label: 'Prophy Total' },
+      { id: 'main.prophyTotal', label: 'Actual Prophy' },
     ],
   },
   {
@@ -222,14 +242,14 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
       { id: 'sugar.sugar', label: 'Sealant' },
       { id: 'sugar.sugarGood', label: 'Sealant (Billable)' },
       { id: 'sugar.sugarBad', label: 'Sealant (Redo)' },
-      { id: 'sugar.paper', label: 'Prophy' },
+      { id: 'sugar.paper', label: 'Prophy Documented' },
     ],
   },
   {
     label: 'Production / Visits',
     options: [
-      { id: 'location.pineapple', label: 'Preventative' },
-      { id: 'location.rose', label: 'Restorative' },
+      { id: 'location.pineapple', label: 'Preventative Production' },
+      { id: 'location.rose', label: 'Restorative Production' },
       { id: 'side.add', label: 'Add On' },
       { id: 'side.noShow', label: 'No Shows' },
       { id: 'side.scheduled', label: 'Scheduled' },
@@ -240,6 +260,10 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
   {
     label: 'Doctors Performance',
     options: [
+      { id: 'docperf.doctorPreventative', label: 'Preventative Doctor' },
+      { id: 'docperf.doctorRestorative', label: 'Restorative Doctor' },
+      { id: 'docperf.doctorCraProduction', label: 'CRA Production Doctor' },
+      { id: 'table.sales', label: 'Production Doctor' },
       { id: 'docperf.customer', label: 'Patient Seen' },
       { id: 'docperf.icecream', label: 'Insurance' },
       { id: 'docperf.cake', label: 'Cash' },
@@ -264,27 +288,29 @@ function collectNameBundleMetricOptions(): { id: ColumnFieldId; label: string }[
   return out;
 }
 
-const NAME_BUNDLE_METRIC_OPTIONS = collectNameBundleMetricOptions();
+function dedupeFieldOptions(
+  options: { id: ColumnFieldId; label: string }[]
+): { id: ColumnFieldId; label: string }[] {
+  const seen = new Set<ColumnFieldId>();
+  const out: { id: ColumnFieldId; label: string }[] = [];
+  for (const opt of options) {
+    if (!opt.id || seen.has(opt.id)) continue;
+    seen.add(opt.id);
+    out.push(opt);
+  }
+  return out;
+}
+
+const NAME_BUNDLE_METRIC_OPTIONS = dedupeFieldOptions(collectNameBundleMetricOptions());
 const NAME_BUNDLE_MAX_METRICS = 12;
 
 const POSITION_BUNDLE_METRIC_OPTIONS = NAME_BUNDLE_METRIC_OPTIONS;
 
-const POSITION_BUNDLE_DOCTOR_METRIC_OPTIONS: { id: ColumnFieldId; label: string }[] = [
-  { id: 'docperf.doctorPreventative', label: 'Preventative' },
-  { id: 'docperf.doctorRestorative', label: 'Restorative' },
-  { id: 'docperf.doctorCraProduction', label: 'CRA Production' },
-];
-
-function isDoctorPosition(position: string): boolean {
-  return position.trim().toLowerCase() === 'doctor';
-}
-
-function getPositionBundleMetricOptions(position: string): { id: ColumnFieldId; label: string }[] {
-  if (isDoctorPosition(position)) {
-    return [...POSITION_BUNDLE_METRIC_OPTIONS, ...POSITION_BUNDLE_DOCTOR_METRIC_OPTIONS];
-  }
-  return POSITION_BUNDLE_METRIC_OPTIONS;
-}
+const DOCPERF_EXTRA_INPUT_SUM_KEYS = new Set([
+  'doctorPreventative',
+  'doctorRestorative',
+  'doctorCraProduction',
+]);
 
 const POSITION_BUNDLE_MAX_METRICS = 12;
 
@@ -312,6 +338,94 @@ function createEmptyPositionBundleSlotConfigs(): PositionBundleSlotConfig[] {
 
 function isShortProcBundle(slot: SlotValue): slot is ShortProcBundleId {
   return slot === 'bundle.spOE' || slot === 'bundle.spPro' || slot === 'bundle.spCRA';
+}
+
+function isOperatingBundle(slot: SlotValue): slot is OperatingBundleId {
+  return slot === OPERATING_BUNDLE_ID;
+}
+
+/** Parse "8:30 AM", "17:00", etc. to minutes from midnight. */
+function parseTimeToMinutes(value: string): number | null {
+  const s = String(value ?? '').trim();
+  if (!s) return null;
+  const m12 = /^(\d{1,2}):(\d{2})\s*(AM|PM)$/i.exec(s);
+  if (m12) {
+    let h = Number(m12[1]);
+    const min = Number(m12[2]);
+    const ap = m12[3].toUpperCase();
+    if (!Number.isFinite(h) || !Number.isFinite(min) || min < 0 || min > 59) return null;
+    if (ap === 'PM' && h !== 12) h += 12;
+    if (ap === 'AM' && h === 12) h = 0;
+    if (h < 0 || h > 23) return null;
+    return h * 60 + min;
+  }
+  const m24 = /^(\d{1,2}):(\d{2})$/.exec(s);
+  if (m24) {
+    const h = Number(m24[1]);
+    const min = Number(m24[2]);
+    if (!Number.isFinite(h) || !Number.isFinite(min) || h < 0 || h > 23 || min < 0 || min > 59) return null;
+    return h * 60 + min;
+  }
+  return null;
+}
+
+function formatMinutesAsHrsMins(totalMinutes: number): string {
+  if (!Number.isFinite(totalMinutes) || totalMinutes <= 0) return '';
+  const wholeHours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  const parts: string[] = [];
+  if (wholeHours > 0) parts.push(`${wholeHours} hrs`);
+  if (mins > 0) parts.push(`${mins} mins`);
+  return parts.join(' ');
+}
+
+function computeHoursOpen(checkIn: string, checkOut: string): string {
+  const inMin = parseTimeToMinutes(checkIn);
+  const outMin = parseTimeToMinutes(checkOut);
+  if (inMin === null || outMin === null) return '';
+  let diff = outMin - inMin;
+  if (diff < 0) diff += 24 * 60;
+  if (diff <= 0) return '';
+  return formatMinutesAsHrsMins(diff);
+}
+
+function parseHoursOpenToMinutes(hoursOpen: string): number | null {
+  const s = String(hoursOpen ?? '').trim();
+  if (!s) return null;
+  const hrsMins = /(\d+)\s*hrs?\s+(\d+)\s*mins?/i.exec(s);
+  if (hrsMins) {
+    const h = Number(hrsMins[1]);
+    const m = Number(hrsMins[2]);
+    if (Number.isFinite(h) && Number.isFinite(m)) return h * 60 + m;
+  }
+  const hrsOnly = /^(\d+)\s*hrs?$/i.exec(s);
+  if (hrsOnly) {
+    const h = Number(hrsOnly[1]);
+    if (Number.isFinite(h)) return h * 60;
+  }
+  const minsOnly = /^(\d+)\s*mins?$/i.exec(s);
+  if (minsOnly) {
+    const m = Number(minsOnly[1]);
+    if (Number.isFinite(m)) return m;
+  }
+  const hm = /^(\d+):(\d{2})$/.exec(s);
+  if (hm) {
+    const h = Number(hm[1]);
+    const m = Number(hm[2]);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return h * 60 + m;
+  }
+  const n = Number(s);
+  if (Number.isFinite(n) && n > 0) return Math.round(n * 60);
+  return null;
+}
+
+function getOperatingRowValues(doc: SimpleFormDoc): [string, string, string, string] {
+  const checkIn = String(doc.checkIn ?? '').trim();
+  const checkOut = String(doc.checkOut ?? '').trim();
+  const hoursOpen = computeHoursOpen(checkIn, checkOut);
+  const closer = String(doc.closer ?? '').trim();
+  return [checkIn, checkOut, hoursOpen, closer];
 }
 
 function isNameBundle(slot: SlotValue): boolean {
@@ -350,6 +464,29 @@ const subHeaderThStyle: React.CSSProperties = {
   maxWidth: 140,
   lineHeight: 1.25,
 };
+
+function operatingColumnThStyle(colIndex: number): React.CSSProperties {
+  if (colIndex === OPERATING_HOURS_OPEN_COL_INDEX) {
+    return {
+      ...subHeaderThStyle,
+      minWidth: OPERATING_HOURS_OPEN_MIN_WIDTH,
+      maxWidth: 260,
+      whiteSpace: 'nowrap',
+    };
+  }
+  return subHeaderThStyle;
+}
+
+function operatingColumnTdStyle(colIndex: number, base: React.CSSProperties): React.CSSProperties {
+  if (colIndex === OPERATING_HOURS_OPEN_COL_INDEX) {
+    return {
+      ...base,
+      minWidth: OPERATING_HOURS_OPEN_MIN_WIDTH,
+      whiteSpace: 'nowrap',
+    };
+  }
+  return base;
+}
 
 function monthRange(ym: string): { start: string; end: string } {
   const [y, m] = ym.split('-').map((v) => Number(v));
@@ -400,6 +537,7 @@ const CURRENCY_FIELD_IDS = new Set<ColumnFieldId>([
   'docperf.doctorPreventative',
   'docperf.doctorRestorative',
   'docperf.doctorCraProduction',
+  'table.sales',
 ]);
 
 function isCurrencyField(id: ColumnFieldId): boolean {
@@ -722,11 +860,7 @@ function getFieldDisplay(
   }
   if (id.startsWith('docperf.')) {
     const sub = id.replace('docperf.', '');
-    if (
-      sub === 'doctorPreventative' ||
-      sub === 'doctorRestorative' ||
-      sub === 'doctorCraProduction'
-    ) {
+    if (DOCPERF_EXTRA_INPUT_SUM_KEYS.has(sub)) {
       const rows = Array.isArray(doc.extraInputRows) ? doc.extraInputRows : [];
       if (rows.length === 0) return '';
       const hasAny = rows.some((r) => String((r as Record<string, unknown>)[sub] ?? '').trim() !== '');
@@ -904,7 +1038,7 @@ export default function SimpleFormsDropdownViewPage() {
   const maxSubHeaderRows = useMemo(() => {
     let m = 0;
     for (const slot of columnSlots) {
-      if (isShortProcBundle(slot) || isNameBundle(slot)) m = Math.max(m, 1);
+      if (isShortProcBundle(slot) || isOperatingBundle(slot) || isNameBundle(slot)) m = Math.max(m, 1);
       if (isPositionBundle(slot)) m = Math.max(m, 2);
     }
     return m;
@@ -922,6 +1056,17 @@ export default function SimpleFormsDropdownViewPage() {
           values: FIXED_REASON_OPTIONS.map((label) =>
             rows.reduce((sum, doc) => sum + parseNumber(getReasonCellValue(doc, label, metric)), 0)
           ),
+        };
+      }
+      if (isOperatingBundle(slotId)) {
+        const totalMinutes = rows.reduce((sum, doc) => {
+          const [, , hoursOpen] = getOperatingRowValues(doc);
+          const mins = parseHoursOpenToMinutes(hoursOpen);
+          return sum + (mins ?? 0);
+        }, 0);
+        return {
+          type: 'operating' as const,
+          hoursOpenTotal: formatMinutesAsHrsMins(totalMinutes),
         };
       }
       if (isNameBundle(slotId)) {
@@ -992,14 +1137,21 @@ export default function SimpleFormsDropdownViewPage() {
       style={thSelectStyle}
     >
       <option value="">Select</option>
-      {FIELD_GROUPS.map((g) => (
-        <optgroup key={g.label} label={g.label}>
-          {g.options.map((opt) => (
-            <option key={opt.id} value={opt.id}>
-              {opt.label}
-            </option>
-          ))}
-        </optgroup>
+      {FIELD_GROUPS.map((g, gi) => (
+        <React.Fragment key={g.label}>
+          <optgroup label={g.label}>
+            {g.options.map((opt) => (
+              <option key={`${g.label}-${opt.id}`} value={opt.id}>
+                {opt.label}
+              </option>
+            ))}
+          </optgroup>
+          {gi === 0 ? (
+            <optgroup label="Operating">
+              <option value={OPERATING_BUNDLE_ID}>Operating</option>
+            </optgroup>
+          ) : null}
+        </React.Fragment>
       ))}
       <optgroup label="Short Procedures (bundles)">
         {SHORT_PROC_BUNDLE_OPTIONS.map((opt) => (
@@ -1166,6 +1318,20 @@ export default function SimpleFormsDropdownViewPage() {
                         </th>
                       );
                     }
+                    if (isOperatingBundle(slotId)) {
+                      return (
+                        <th
+                          key={`h-${slotIndex}`}
+                          colSpan={OPERATING_COL_COUNT}
+                          style={{
+                            ...cellStyle,
+                            minWidth: 100 * (OPERATING_COL_COUNT - 1) + OPERATING_HOURS_OPEN_MIN_WIDTH,
+                          }}
+                        >
+                          {slotFieldSelect(slotIndex, slotId)}
+                        </th>
+                      );
+                    }
                     if (isNameBundle(slotId)) {
                       const nbMetrics = nameBundleBySlot[slotIndex]?.metrics?.length
                         ? nameBundleBySlot[slotIndex].metrics.length
@@ -1325,6 +1491,16 @@ export default function SimpleFormsDropdownViewPage() {
                           </th>
                         ));
                       }
+                      if (isOperatingBundle(slotId)) {
+                        return OPERATING_SUB_LABELS.map((label, ri) => (
+                          <th
+                            key={`h2-op-${slotIndex}-${ri}`}
+                            style={{ ...cellStyle, ...operatingColumnThStyle(ri) }}
+                          >
+                            {label}
+                          </th>
+                        ));
+                      }
                       if (isNameBundle(slotId)) {
                         const cfg = nameBundleBySlot[slotIndex] ?? {
                           personName: '',
@@ -1350,7 +1526,7 @@ export default function SimpleFormsDropdownViewPage() {
                               style={{ ...thSelectStyle, minWidth: 100, fontWeight: 600 }}
                             >
                               {NAME_BUNDLE_METRIC_OPTIONS.map((opt) => (
-                                <option key={opt.id} value={opt.id}>
+                                <option key={`nb-${slotIndex}-${mi}-${opt.id}`} value={opt.id}>
                                   {opt.label}
                                 </option>
                               ))}
@@ -1416,8 +1592,8 @@ export default function SimpleFormsDropdownViewPage() {
                               }}
                               style={{ ...thSelectStyle, minWidth: 100, fontWeight: 600 }}
                             >
-                              {getPositionBundleMetricOptions(cfg.position).map((opt) => (
-                                <option key={opt.id} value={opt.id}>
+                              {POSITION_BUNDLE_METRIC_OPTIONS.map((opt) => (
+                                <option key={`pb-${slotIndex}-${mi}-${opt.id}`} value={opt.id}>
                                   {opt.label}
                                 </option>
                               ))}
@@ -1465,6 +1641,21 @@ export default function SimpleFormsDropdownViewPage() {
                           <th
                             key={`h3-sp-${slotIndex}-${ri}`}
                             style={{ ...cellStyle, ...subHeaderThStyle, color: '#cbd5e1', fontSize: 10 }}
+                          >
+                            {'\u00a0'}
+                          </th>
+                        ));
+                      }
+                      if (isOperatingBundle(slotId)) {
+                        return OPERATING_SUB_LABELS.map((label, ri) => (
+                          <th
+                            key={`h3-op-${slotIndex}-${ri}`}
+                            style={{
+                              ...cellStyle,
+                              ...operatingColumnThStyle(ri),
+                              color: '#cbd5e1',
+                              fontSize: 10,
+                            }}
                           >
                             {'\u00a0'}
                           </th>
@@ -1527,6 +1718,18 @@ export default function SimpleFormsDropdownViewPage() {
                           return FIXED_REASON_OPTIONS.map((label) => (
                             <td key={`c-${doc.id}-${slotIndex}-${label}`} style={cellStyle}>
                               {getReasonCellValue(doc, label, bundleToMetric(slotId))}
+                            </td>
+                          ));
+                        }
+                        if (isOperatingBundle(slotId)) {
+                          const [checkIn, checkOut, hoursOpen, closer] = getOperatingRowValues(doc);
+                          const values = [checkIn, checkOut, hoursOpen, closer];
+                          return values.map((val, ci) => (
+                            <td
+                              key={`c-op-${doc.id}-${slotIndex}-${ci}`}
+                              style={operatingColumnTdStyle(ci, cellStyle)}
+                            >
+                              {String(val).trim() !== '' ? val : '—'}
                             </td>
                           ));
                         }
@@ -1595,6 +1798,13 @@ export default function SimpleFormsDropdownViewPage() {
                       return fv.values.map((n, ri) => (
                         <td key={`ft-${slotIndex}-${ri}`} style={cellStyle}>
                           {formatTotalCell(n)}
+                        </td>
+                      ));
+                    }
+                    if (fv.type === 'operating') {
+                      return OPERATING_SUB_LABELS.map((_, ri) => (
+                        <td key={`ft-op-${slotIndex}-${ri}`} style={operatingColumnTdStyle(ri, cellStyle)}>
+                          {ri === OPERATING_HOURS_OPEN_COL_INDEX ? fv.hoursOpenTotal || '—' : '—'}
                         </td>
                       ));
                     }
