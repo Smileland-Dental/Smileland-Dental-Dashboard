@@ -47,7 +47,6 @@ type ReasonRow = {
 type ExtraInputRow = {
   position?: string;
   name?: string;
-  /** Per-doctor row values (office-wide totals live in `locationSummary`). */
   doctorPreventative?: string;
   doctorRestorative?: string;
   doctorCraProduction?: string;
@@ -67,6 +66,7 @@ type LocationSummary = {
   pineapple?: string;
   rose?: string;
   total?: string;
+  mailedProduction?: string;
 };
 
 /** Visits-style metrics beside Production 1 (labels in first column). */
@@ -164,7 +164,7 @@ const TABLE_HEADERS = [
   'Actual OE (RC)',
 ];
 
-const SUGAR_HEADERS = ['Position', 'Name', 'Sealant', 'Sealant (Billable)', 'Sealant (Redo)', 'Prophy'];
+const SUGAR_HEADERS = ['Position', 'Name', 'Sealant', 'Sealant (Billable)', 'Sealant (Redo)', 'Prophy Documented'];
 const REASON_HEADERS = ['Reasoning', 'OE', 'Pro', 'CRA'];
 
 const NOTES_MAX_LENGTH = 300;
@@ -299,7 +299,7 @@ function createPdfMultilineCellContent(
 ): React.ReactElement {
   const text = safeNotesPdfText(raw);
   if (text.trim() === '') {
-    return React.createElement(Text, { style: styles.notesTableText }, '-');
+    return React.createElement(Text, { style: styles.notesTableText }, '');
   }
   const lines = expandNotesTextToPdfLines(text);
   return React.createElement(
@@ -346,6 +346,7 @@ function createPdfNotesTable(
   return React.createElement(
     View,
     {
+      wrap: false,
       style: {
         flexDirection: 'row',
         flexWrap: 'nowrap',
@@ -359,6 +360,20 @@ function createPdfNotesTable(
   );
 }
 
+/** PDF 섹션 — 제목+내용이 현재 페이지에 다 안 들어가면 통째로 다음 페이지로 이동. */
+function createPdfSection(
+  styles: ReturnType<typeof StyleSheet.create>,
+  title: string | null,
+  ...children: React.ReactElement[]
+) {
+  return React.createElement(
+    View,
+    { style: styles.section, wrap: false },
+    ...(title ? [React.createElement(Text, { key: 'section-title', style: styles.sectionTitle }, title)] : []),
+    ...children
+  );
+}
+
 function createPdfTable(
   styles: ReturnType<typeof StyleSheet.create>,
   headers: string[],
@@ -367,27 +382,27 @@ function createPdfTable(
 ) {
   return React.createElement(
     View,
-    { style: styles.table },
+    { style: styles.table, wrap: false },
     React.createElement(
       View,
-      { style: styles.tableRow, key: `${keyPrefix}-header` },
+      { style: styles.tableRow, key: `${keyPrefix}-header`, wrap: false },
       ...headers.map((header, idx) =>
         React.createElement(
           View,
           { key: `${keyPrefix}-h-${idx}`, style: [styles.tableCell, styles.tableHeaderCell] },
-          React.createElement(Text, { style: styles.tableHeaderText }, safeStr(header, 60) || '-')
+          React.createElement(Text, { style: styles.tableHeaderText }, safeStr(header, 60))
         )
       )
     ),
     ...rows.map((row, rowIdx) =>
       React.createElement(
         View,
-        { style: styles.tableRow, key: `${keyPrefix}-r-${rowIdx}` },
+        { style: styles.tableRow, key: `${keyPrefix}-r-${rowIdx}`, wrap: false },
         ...headers.map((_, colIdx) =>
           React.createElement(
             View,
             { key: `${keyPrefix}-c-${rowIdx}-${colIdx}`, style: styles.tableCell },
-            React.createElement(Text, { style: styles.tableCellText }, safeStr(row[colIdx] ?? '', 100) || '-')
+            React.createElement(Text, { style: styles.tableCellText }, safeStr(row[colIdx] ?? '', 100))
           )
         )
       )
@@ -424,6 +439,7 @@ function createSubmittedReportPDFDocument(props: {
     rose: string;
     coffeeSales: string;
     total: string;
+    mailedProduction: string;
   };
   productionSideMetrics: ProductionSideMetrics;
   sugarRows: SugarRow[];
@@ -472,8 +488,8 @@ function createSubmittedReportPDFDocument(props: {
     ['Name', 'Start', 'End', 'Chart', 'Amount'],
     reportRows.map((row) => [
       safeStr(row.name, 30),
-      safeStr(row.timeStart, 20),
-      safeStr(row.timeEnd, 20),
+      formatReportDateTimeForPdf(row.timeStart),
+      formatReportDateTimeForPdf(row.timeEnd),
       safeStr(row.chartCount, 12),
       safeStr(formatCurrencyLabel(row.amount), 12),
     ]),
@@ -483,23 +499,23 @@ function createSubmittedReportPDFDocument(props: {
   const salesPaperSummaryTable = createPdfTable(
     s,
     [
-      'Grand Total',
+      'Submitted Production',
       'CRA Production',
       'Production W/Out CRA',
       'Prophy @ OE',
       'Prophy @ TX',
       'Just Prophy',
-      'Prophy Total',
+      'Actual Prophy',
     ],
     [
       [
-        formatCurrencyLabel(grandTotal || '-'),
-        formatCurrencyLabel(coffeeSales || '-'),
-        formatCurrencyLabel(salesWithoutCoffee || '-'),
-        paperAtOrangeJuice || '-',
-        paperAtTea || '-',
-        justPaper || '-',
-        prophyTotal || '-',
+        formatCurrencyLabel(grandTotal || ''),
+        formatCurrencyLabel(coffeeSales || ''),
+        formatCurrencyLabel(salesWithoutCoffee || ''),
+        paperAtOrangeJuice || '',
+        paperAtTea || '',
+        justPaper || '',
+        prophyTotal || '',
       ],
     ],
     'sales-paper-summary'
@@ -507,26 +523,27 @@ function createSubmittedReportPDFDocument(props: {
   const submissionInfoTable = createPdfTable(
     s,
     ['Reason if Late', 'Submitted by office at:'],
-    [[reasonIfLate || '-', submittedAt || '-']],
+    [[reasonIfLate || '', submittedAt || '']],
     'submission-info'
   );
 
   const officeHoursTable = createPdfTable(
     s,
     ['Check In', 'Check Out', 'Hours Open', 'Closer'],
-    [[checkIn || '-', checkOut || '-', formatHoursOpenLabel(hoursOpen), closer || '-']],
+    [[checkIn || '', checkOut || '', formatHoursOpenLabel(hoursOpen), closer || '']],
     'office-hours'
   );
 
   const locationSummaryTable = createPdfTable(
     s,
-    ['Preventative', 'Restorative', 'CRA Production', 'Total'],
+    ['Preventative', 'Restorative', 'CRA Production', '1st Review Production', 'Mailed Production'],
     [
       [
-        formatCurrencyLabel(locationSummary.pineapple || '-'),
-        formatCurrencyLabel(locationSummary.rose || '-'),
-        formatCurrencyLabel(locationSummary.coffeeSales || '-'),
-        formatCurrencyLabel(locationSummary.total || '-'),
+        formatCurrencyLabel(locationSummary.pineapple || ''),
+        formatCurrencyLabel(locationSummary.rose || ''),
+        formatCurrencyLabel(locationSummary.coffeeSales || ''),
+        formatCurrencyLabel(locationSummary.total || ''),
+        formatCurrencyLabel(locationSummary.mailedProduction || ''),
       ],
     ],
     'location-summary'
@@ -539,15 +556,13 @@ function createSubmittedReportPDFDocument(props: {
   const visitsPdfHeaders = PRODUCTION_SIDE_METRIC_ROWS.map(({ label }) => label);
   const visitsPdfValues = PRODUCTION_SIDE_METRIC_ROWS.map(({ key }) =>
     key === 'seenPercent'
-      ? safeStr(formatSeenPercentDisplay(computeSeenPercentRounded(sideMetrics.scheduled, sideMetrics.seen)), 40) || '-'
-      : safeStr(sideMetrics[key], 40) || '-'
+      ? safeStr(formatSeenPercentDisplay(computeSeenPercentRounded(sideMetrics.scheduled, sideMetrics.seen)), 40) || ''
+      : safeStr(sideMetrics[key], 40) || ''
   );
   const productionSideMetricsTable = createPdfTable(s, visitsPdfHeaders, [visitsPdfValues], 'production-side-metrics');
 
-  const productionTotalForPdf = String(
-    roundToCents(
-      extraInputRows.reduce((acc, row, idx) => acc + getDoctorPerformanceRowProductionValue(row, tableRows[idx]?.sales), 0)
-    )
+  const productionTotalForPdf = formatRoundedNumber(
+    extraInputRows.reduce((acc, row, idx) => acc + getDoctorPerformanceRowProductionValue(row, tableRows[idx]?.sales), 0)
   );
   const additionalInputsTable = createPdfTable(
     s,
@@ -584,10 +599,10 @@ function createSubmittedReportPDFDocument(props: {
       ]),
       [
         'Total',
-        '-',
-        formatCurrencyLabel(String(extraInputTotals.doctorPreventative)),
-        formatCurrencyLabel(String(extraInputTotals.doctorRestorative)),
-        formatCurrencyLabel(String(extraInputTotals.doctorCraProduction)),
+        '',
+        formatCurrencyLabel(formatRoundedNumber(extraInputTotals.doctorPreventative)),
+        formatCurrencyLabel(formatRoundedNumber(extraInputTotals.doctorRestorative)),
+        formatCurrencyLabel(formatRoundedNumber(extraInputTotals.doctorCraProduction)),
         formatCurrencyLabel(productionTotalForPdf),
         String(extraInputTotals.customer),
         String(extraInputTotals.icecream),
@@ -617,12 +632,12 @@ function createSubmittedReportPDFDocument(props: {
         safeStr(row.orangeJuiceNew, 12),
         safeStr(row.orangeJuiceReturn, 12),
         safeStr(row.orangeJuiceTotal, 12),
-        '-',
-        '-',
+        '',
+        '',
       ]),
       [
         'Total',
-        '-',
+        '',
         String(tableTotals?.coffeeNew ?? 0),
         String(tableTotals?.coffeeReturn ?? 0),
         String(tableTotals?.coffeeTotal ?? 0),
@@ -632,8 +647,8 @@ function createSubmittedReportPDFDocument(props: {
         String(tableTotals?.orangeJuiceNew ?? 0),
         String(tableTotals?.orangeJuiceReturn ?? 0),
         String(tableTotals?.orangeJuiceTotal ?? 0),
-        actualOrangeNew || '-',
-        actualOrangeReturn || '-',
+        actualOrangeNew || '',
+        actualOrangeReturn || '',
       ],
     ],
     'coffee-table'
@@ -653,7 +668,7 @@ function createSubmittedReportPDFDocument(props: {
       ]),
       [
         'Total',
-        '-',
+        '',
         String(sugarTotals?.sugar ?? 0),
         String(sugarTotals?.sugarGood ?? 0),
         String(sugarTotals?.sugarBad ?? 0),
@@ -683,33 +698,28 @@ function createSubmittedReportPDFDocument(props: {
     React.createElement(
       Page,
       { size: 'A4', orientation: 'landscape', style: s.page },
-      React.createElement(Text, { style: s.title }, `${location || '-'} Finalized Production - ${date || '/'} `),
+      React.createElement(Text, { style: s.title }, `${location || ''} Daily Production - ${date || '/'} `),
       React.createElement(
         Text,
         { style: s.subtitle },
-        `Generated: ${sanitizedGeneratedDate || '-'}`
+        `Generated: ${sanitizedGeneratedDate || ''}`
       ),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Submission Info'), submissionInfoTable),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Office Hours'), officeHoursTable),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Billers'), reportTable),
-      React.createElement(
-        View,
-        { style: s.section },
-        React.createElement(Text, { style: s.sectionTitle }, 'Production'),
-        salesPaperSummaryTable
-      ),
-      React.createElement(
-        View,
-        { style: s.section },
+      createPdfSection(s, 'Submission Info', submissionInfoTable),
+      createPdfSection(s, 'Operating', officeHoursTable),
+      createPdfSection(s, 'Billers', reportTable),
+      createPdfSection(s, 'Production', salesPaperSummaryTable),
+      createPdfSection(
+        s,
+        null,
         locationSummaryTable,
-        React.createElement(Text, { style: { ...s.sectionTitle, marginTop: 10 } }, 'Visits'),
+        React.createElement(Text, { key: 'visits-title', style: { ...s.sectionTitle, marginTop: 10 } }, 'Visits'),
         productionSideMetricsTable
       ),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Doctors'), additionalInputsTable),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'CRA / OE'), coffeeTable),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Sealant / Prophy'), sugarTable),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Short Procedures'), reasonTable),
-      React.createElement(View, { style: s.section }, React.createElement(Text, { style: s.sectionTitle }, 'Notes'), notesTable)
+      createPdfSection(s, 'Doctors', additionalInputsTable),
+      createPdfSection(s, 'CRA / OE', coffeeTable),
+      createPdfSection(s, 'Sealant / Prophy', sugarTable),
+      createPdfSection(s, 'Short Procedures', reasonTable),
+      createPdfSection(s, 'Notes', notesTable)
     )
   );
 }
@@ -732,6 +742,40 @@ function parseMoney(value: unknown): number {
 
 function roundToCents(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** 반올림된 숫자를 표시·저장용 문자열로 (정수면 소수 없음, 소수 있으면 둘째 자리까지·끝자리 0 유지). */
+function formatRoundedNumber(n: number): string {
+  if (!Number.isFinite(n)) return '0';
+  const cents = Math.round(roundToCents(n) * 100);
+  if (cents % 100 === 0) return String(cents / 100);
+  return (cents / 100).toFixed(2);
+}
+
+/** 금액 입력값을 저장·표시용 문자열로 (빈 값은 '', 있으면 formatRoundedNumber 규칙 적용). */
+function formatMoneyValue(value: unknown): string {
+  const s = String(value ?? '').trim();
+  if (!s || s === '-') return '';
+  return formatRoundedNumber(parseMoney(s));
+}
+
+function computeFirstReviewProductionTotal(pineapple: unknown, rose: unknown, craProduction: unknown): string {
+  const p = String(pineapple ?? '').trim();
+  const r = String(rose ?? '').trim();
+  const c = String(craProduction ?? '').trim();
+  if (p === '' && r === '' && c === '') return '';
+  return formatRoundedNumber(parseMoney(p) + parseMoney(r) + parseMoney(c));
+}
+
+function computeCraProductionSales(coffeeYes: number): string {
+  return formatRoundedNumber(coffeeYes * 61);
+}
+
+function computeSalesWithoutCoffee(grandTotal: unknown, coffeeSales: unknown): string {
+  const g = String(grandTotal ?? '').trim();
+  const c = String(coffeeSales ?? '').trim();
+  if (g === '' && c === '') return '';
+  return formatRoundedNumber(parseMoney(g) - parseMoney(c));
 }
 
 function formatTime12h(hours24: number, minutes: number): string {
@@ -788,6 +832,30 @@ function toStoredCheckTime12h(localValue: string): string {
   return formatTime12h(Math.floor(minutes / 60), minutes % 60);
 }
 
+/** Billers Start/End — PDF용 (AM/PM 포함, ISO·datetime-local도 변환). */
+function formatReportDateTimeForPdf(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  if (!raw) return '';
+
+  const sanitized = raw.replace(/[<>]/g, '');
+  const parsed = new Date(sanitized);
+  if (!Number.isNaN(parsed.getTime())) {
+    const datePart = parsed.toLocaleDateString('en-US', {
+      month: 'numeric',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    const timePart = formatTime12h(parsed.getHours(), parsed.getMinutes());
+    return `${datePart} ${timePart}`;
+  }
+
+  if (/\b(AM|PM)\b/i.test(sanitized)) {
+    return sanitized.replace(/,\s*/g, ' ').slice(0, 80);
+  }
+
+  return sanitized.replace(/,\s*/g, ' ').slice(0, 80);
+}
+
 function formatMinutesAsHoursLabel(totalMinutes: number): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
@@ -810,14 +878,13 @@ function computeHoursOpen(checkIn: unknown, checkOut: unknown): string {
 /** UI/PDF 표시 — 저장값이 옛 소수(5.5) 형식이면 변환. */
 function formatHoursOpenLabel(hoursOpen: unknown): string {
   const raw = String(hoursOpen ?? '').trim();
-  if (!raw) return '-';
+  if (!raw) return '';
   if (/hour|minute/i.test(raw)) return raw;
   const n = parseNumber(raw);
   if (Number.isFinite(n)) return formatMinutesAsHoursLabel(Math.round(n * 60));
   return raw;
 }
 
-/** Prophy Total = Prophy @ OE + Prophy @ TX + Just Prophy (셋 다 비어 있으면 ''). */
 function computeProphyTotal(oe: unknown, tea: unknown, just: unknown): string {
   const hasBasis =
     String(oe ?? '').trim() !== '' || String(tea ?? '').trim() !== '' || String(just ?? '').trim() !== '';
@@ -825,34 +892,37 @@ function computeProphyTotal(oe: unknown, tea: unknown, just: unknown): string {
   return String(Math.round(parseNumber(oe) + parseNumber(tea) + parseNumber(just)));
 }
 
-/** Read-only UI/PDF: leading $ when a value is present; '-' unchanged. */
+/** Read-only UI/PDF: leading $ when a value is present; empty when blank. 금액은 최대 소수 둘째 자리. */
 function formatCurrencyLabel(value: unknown): string {
   const s = String(value ?? '').trim();
-  if (!s || s === '-') return '-';
-  const core = s.startsWith('$') ? s.slice(1).trim() : s;
-  if (!core) return '-';
-  return `$${core}`;
+  if (!s || s === '-') return '';
+  const n = parseMoney(s);
+  if (!Number.isFinite(n)) {
+    const core = s.startsWith('$') ? s.slice(1).trim() : s;
+    return core ? (s.startsWith('$') ? s : `$${core}`) : '';
+  }
+  return `$${formatRoundedNumber(n)}`;
 }
 
-/** Append % for Seen % display; '-' stays '-'. */
+/** Append % for Seen % display; empty when not computable. */
 function formatSeenPercentDisplay(computed: string): string {
   const t = String(computed ?? '').trim();
-  if (!t || t === '-') return '-';
+  if (!t || t === '-') return '';
   const n = t.replace(/%$/, '').trim();
   return `${n}%`;
 }
 
-/** Seen % = round(Seen ÷ Scheduled × 100); '-' when Scheduled is 0. */
+/** Seen % = round(Seen ÷ Scheduled × 100); empty when Scheduled is 0. */
 function computeSeenPercentRounded(scheduledRaw: unknown, seenRaw: unknown): string {
   const sch = parseNumber(scheduledRaw);
-  if (sch === 0) return '-';
+  if (sch === 0) return '';
   const seen = parseNumber(seenRaw);
   return String(Math.round((seen / sch) * 100));
 }
 
 function seenPercentReadOnlyInputValueFromMetrics(m: ProductionSideMetrics | undefined): string {
   const s = computeSeenPercentRounded(m?.scheduled, m?.seen);
-  return s === '-' ? '' : `${s}%`;
+  return s === '' ? '' : `${s}%`;
 }
 
 function getDoctorPerformanceProductionSum(row: ExtraInputRow | undefined): number {
@@ -867,7 +937,6 @@ function doctorPerformanceProductionRowHasInput(row: ExtraInputRow | undefined):
   return [row.doctorPreventative, row.doctorRestorative, row.doctorCraProduction].some((v) => String(v ?? '').trim() !== '');
 }
 
-/** Sum of Preventative + Restorative + CRA Production; if all three empty, keep saved Production (`sales`). */
 function getDoctorPerformanceRowProductionValue(row: ExtraInputRow | undefined, fallbackSales?: string): number {
   const sum = getDoctorPerformanceProductionSum(row);
   if (sum !== 0 || doctorPerformanceProductionRowHasInput(row)) return sum;
@@ -876,14 +945,12 @@ function getDoctorPerformanceRowProductionValue(row: ExtraInputRow | undefined, 
 
 function formatDoctorPerformanceProductionCell(row: ExtraInputRow | undefined, fallbackSales?: string): string {
   const v = getDoctorPerformanceRowProductionValue(row, fallbackSales);
-  if (v === 0 && !doctorPerformanceProductionRowHasInput(row) && String(fallbackSales ?? '').trim() === '') return '-';
-  return String(v);
+  if (v === 0 && !doctorPerformanceProductionRowHasInput(row) && String(fallbackSales ?? '').trim() === '') return '';
+  return formatRoundedNumber(v);
 }
 
-/** Value for read-only number input (matches Dentical); empty string when the cell shows '-'. */
 function doctorPerformanceProductionReadOnlyInputValue(row: ExtraInputRow | undefined, fallbackSales?: string): string {
-  const s = formatDoctorPerformanceProductionCell(row, fallbackSales);
-  return s === '-' ? '' : s;
+  return formatDoctorPerformanceProductionCell(row, fallbackSales);
 }
 
 function getMonthKey(dateValue: string | undefined): string {
@@ -893,6 +960,23 @@ function getMonthKey(dateValue: string | undefined): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
 }
 
+function formatYearMonthOptionLabel(yearMonth: string): string {
+  if (!/^\d{4}-\d{2}$/.test(yearMonth)) return yearMonth;
+  const [year, month] = yearMonth.split('-').map(Number);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) return yearMonth;
+  return new Date(year, month - 1, 1).toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+}
+
+const FILTER_SELECT_STYLE: React.CSSProperties = {
+  width: '100%',
+  height: 34,
+  border: '1px solid #d1d5db',
+  borderRadius: 6,
+  padding: '0 10px',
+  background: '#fff',
+  fontWeight: 600,
+};
+
 function toFirestoreKey(value: string | undefined): string {
   const raw = String(value ?? '').trim();
   if (!raw) return 'Unknown';
@@ -900,13 +984,13 @@ function toFirestoreKey(value: string | undefined): string {
 }
 
 function getDurationLabel(start: string | undefined, end: string | undefined): string {
-  if (!start || !end) return '-';
+  if (!start || !end) return '';
   const startDate = new Date(start);
   const endDate = new Date(end);
-  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return '-';
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return '';
 
   const diffMs = endDate.getTime() - startDate.getTime();
-  if (diffMs < 0) return '-';
+  if (diffMs < 0) return '';
 
   const totalMinutes = Math.floor(diffMs / 60000);
   const days = Math.floor(totalMinutes / (24 * 60));
@@ -992,6 +1076,7 @@ function createEmptyLocationSummary(): LocationSummary {
     pineapple: '',
     rose: '',
     total: '',
+    mailedProduction: '',
   };
 }
 
@@ -1034,7 +1119,7 @@ function computeExtraInputRows(rows: ExtraInputRow[]): ExtraInputRow[] {
 
 function getTableTotalsFromRows(rows: TableRow[]): TableTotals {
   return {
-    sales: rows.reduce((sum, row) => sum + parseNumber(row.sales), 0),
+    sales: roundToCents(rows.reduce((sum, row) => sum + parseMoney(row.sales), 0)),
     coffeeNew: rows.reduce((sum, row) => sum + parseNumber(row.coffeeNew), 0),
     coffeeReturn: rows.reduce((sum, row) => sum + parseNumber(row.coffeeReturn), 0),
     coffeeTotal: rows.reduce((sum, row) => sum + parseNumber(row.coffeeTotal), 0),
@@ -1087,9 +1172,9 @@ function getSugarTotalsFromRows(rows: SugarRow[]): SugarTotals {
 
 function getExtraInputTotals(rows: ExtraInputRow[]) {
   return {
-    doctorPreventative: rows.reduce((sum, row) => sum + parseNumber(row.doctorPreventative), 0),
-    doctorRestorative: rows.reduce((sum, row) => sum + parseNumber(row.doctorRestorative), 0),
-    doctorCraProduction: rows.reduce((sum, row) => sum + parseNumber(row.doctorCraProduction), 0),
+    doctorPreventative: roundToCents(rows.reduce((sum, row) => sum + parseMoney(row.doctorPreventative), 0)),
+    doctorRestorative: roundToCents(rows.reduce((sum, row) => sum + parseMoney(row.doctorRestorative), 0)),
+    doctorCraProduction: roundToCents(rows.reduce((sum, row) => sum + parseMoney(row.doctorCraProduction), 0)),
     customer: rows.reduce((sum, row) => sum + parseNumber(row.customer), 0),
     icecream: rows.reduce((sum, row) => sum + parseNumber(row.icecream), 0),
     cake: rows.reduce((sum, row) => sum + parseNumber(row.cake), 0),
@@ -1137,8 +1222,9 @@ function computeCoffeeActualTotals(values: Partial<Record<keyof TableTotals, str
 export default function ViewPage() {
   const [docs, setDocs] = useState<FormDoc[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
+  const [selectedYearMonth, setSelectedYearMonth] = useState('');
+  const [selectedOffice, setSelectedOffice] = useState('');
   const [dateFilter, setDateFilter] = useState<string[]>([]);
-  const [locationFilter, setLocationFilter] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isEditing, setIsEditing] = useState(false);
@@ -1164,9 +1250,6 @@ export default function ViewPage() {
           .filter((doc) => String(doc.submittedDateTime ?? '').trim() !== '')
           .sort((a, b) => `${b.date ?? ''}_${b.location ?? ''}`.localeCompare(`${a.date ?? ''}_${a.location ?? ''}`));
         setDocs(loaded);
-        if (loaded.length > 0) {
-          setSelectedId(loaded[0].id);
-        }
       } catch (e: any) {
         setError(e?.message || '조회 중 오류가 발생했습니다.');
       } finally {
@@ -1177,31 +1260,66 @@ export default function ViewPage() {
     load();
   }, []);
 
+  const filtersReady = selectedYearMonth !== '' && selectedOffice !== '';
+
+  const yearMonthOptions = useMemo(() => {
+    const keys = new Set<string>();
+    for (const doc of docs) {
+      const key = getMonthKey(doc.date);
+      if (/^\d{4}-\d{2}$/.test(key)) keys.add(key);
+    }
+    return Array.from(keys).sort((a, b) => b.localeCompare(a));
+  }, [docs]);
+
+  const officeOptions = useMemo(() => {
+    const offices = new Set<string>();
+    for (const doc of docs) {
+      const office = String(doc.location ?? '').trim();
+      if (office) offices.add(office);
+    }
+    return Array.from(offices).sort((a, b) => a.localeCompare(b));
+  }, [docs]);
+
+  const dateOptions = useMemo(() => {
+    if (!filtersReady) return [];
+    const dates = new Set<string>();
+    for (const doc of docs) {
+      const dateValue = String(doc.date ?? '').trim();
+      if (!dateValue) continue;
+      if (getMonthKey(dateValue) !== selectedYearMonth) continue;
+      if (String(doc.location ?? '').trim() !== selectedOffice) continue;
+      dates.add(dateValue);
+    }
+    return Array.from(dates).sort((a, b) => b.localeCompare(a));
+  }, [docs, filtersReady, selectedYearMonth, selectedOffice]);
+
   const filteredDocs = useMemo(() => {
+    if (!filtersReady) return [];
     return docs.filter((doc) => {
       if (String(doc.submittedDateTime ?? '').trim() === '') return false;
-      const dateValue = String(doc.date ?? '');
-      const locationValue = String(doc.location ?? '');
-      const dateMatched = dateFilter.length === 0 || dateFilter.includes(dateValue);
-      const locationMatched = locationFilter.length === 0 || locationFilter.includes(locationValue);
-      return dateMatched && locationMatched;
+      const dateValue = String(doc.date ?? '').trim();
+      const locationValue = String(doc.location ?? '').trim();
+      if (getMonthKey(dateValue) !== selectedYearMonth) return false;
+      if (locationValue !== selectedOffice) return false;
+      if (dateFilter.length > 0 && !dateFilter.includes(dateValue)) return false;
+      return true;
     });
-  }, [docs, dateFilter, locationFilter]);
-  const dateOptions = useMemo(
-    () => Array.from(new Set(docs.map((doc) => String(doc.date ?? '').trim()).filter((v) => v !== ''))),
-    [docs]
-  );
-  const locationOptions = useMemo(
-    () => Array.from(new Set(docs.map((doc) => String(doc.location ?? '').trim()).filter((v) => v !== ''))),
-    [docs]
-  );
-  const dateFilterLabel = dateFilter.length === 0 ? 'Date (All)' : `Date (${dateFilter.length})`;
-  const locationFilterLabel = locationFilter.length === 0 ? 'Office (All)' : `Location (${locationFilter.length})`;
+  }, [docs, filtersReady, selectedYearMonth, selectedOffice, dateFilter]);
+
+  const dateFilterLabel = dateFilter.length === 0 ? 'Date (All in month)' : `Date (${dateFilter.length})`;
+
   const toggleDateFilterValue = (value: string) => {
     setDateFilter((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]));
   };
-  const toggleLocationFilterValue = (value: string) => {
-    setLocationFilter((prev) => (prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value]));
+
+  const handleYearMonthChange = (value: string) => {
+    setSelectedYearMonth(value);
+    setDateFilter([]);
+  };
+
+  const handleOfficeChange = (value: string) => {
+    setSelectedOffice(value);
+    setDateFilter([]);
   };
 
   useEffect(() => {
@@ -1368,7 +1486,7 @@ export default function ViewPage() {
 
       const table = (prev.tableRows || []).map((r) => ({ ...createEmptyTableRow(), ...r }));
       const prevTr = { ...createEmptyTableRow(), ...table[rowIndex] };
-      const newSales = String(getDoctorPerformanceRowProductionValue(extraInputRows[rowIndex], prevTr.sales));
+      const newSales = formatRoundedNumber(getDoctorPerformanceRowProductionValue(extraInputRows[rowIndex], prevTr.sales));
       table[rowIndex] = { ...prevTr, sales: newSales };
 
       return {
@@ -1379,7 +1497,7 @@ export default function ViewPage() {
     });
   };
 
-  const updateLocationSummaryField = (field: 'pineapple' | 'rose', value: string) => {
+  const updateLocationSummaryField = (field: 'pineapple' | 'rose' | 'mailedProduction', value: string) => {
     setDraft((prev) => {
       if (!prev) return prev;
       return {
@@ -1426,6 +1544,7 @@ export default function ViewPage() {
       const reportRowsToSave = (draft.reportRows || []).map((row) => ({
         ...createEmptyReportRow(),
         ...row,
+        amount: formatMoneyValue(row.amount),
       }));
       const reasonRows = (draft.reasonRows || []).map((row) => ({
         ...createEmptyReasonRow(),
@@ -1435,6 +1554,9 @@ export default function ViewPage() {
         ...row,
         position: row.position || tableRows[idx]?.position || '',
         name: row.name || tableRows[idx]?.name || '',
+        doctorPreventative: formatMoneyValue(row.doctorPreventative),
+        doctorRestorative: formatMoneyValue(row.doctorRestorative),
+        doctorCraProduction: formatMoneyValue(row.doctorCraProduction),
         pineapple: '',
         rose: '',
       }));
@@ -1442,22 +1564,27 @@ export default function ViewPage() {
       const tableRowsWithSyncedSales = computeTableRows(
         tableRows.map((tr, idx) => ({
           ...tr,
-          sales: String(getDoctorPerformanceRowProductionValue(extraInputRows[idx], tr.sales)),
+          sales: formatRoundedNumber(getDoctorPerformanceRowProductionValue(extraInputRows[idx], tr.sales)),
         }))
       );
 
       const tableTotals = getTableTotalsFromRows(tableRowsWithSyncedSales);
       const sugarTotals = getSugarTotalsFromRows(sugarRows);
       const hasCoffeeYesInput = tableRowsWithSyncedSales.some((row) => String(row.coffeeYes ?? '').trim() !== '');
-      const coffeeSales = hasCoffeeYesInput ? String(tableTotals.coffeeYes * 61) : '';
+      const coffeeSales = hasCoffeeYesInput ? computeCraProductionSales(tableTotals.coffeeYes) : '';
       const draftLocationSummary = {
         ...createEmptyLocationSummary(),
         ...(draft.locationSummary || {}),
       };
       const locationSummary = {
-        pineapple: String(draftLocationSummary.pineapple ?? ''),
-        rose: String(draftLocationSummary.rose ?? ''),
-        total: String(parseNumber(draftLocationSummary.pineapple) + parseNumber(draftLocationSummary.rose) + parseNumber(coffeeSales)),
+        pineapple: formatMoneyValue(draftLocationSummary.pineapple),
+        rose: formatMoneyValue(draftLocationSummary.rose),
+        total: computeFirstReviewProductionTotal(
+          draftLocationSummary.pineapple,
+          draftLocationSummary.rose,
+          coffeeSales
+        ),
+        mailedProduction: formatMoneyValue(draftLocationSummary.mailedProduction),
       };
       const draftSideMetrics = {
         ...createEmptyProductionSideMetrics(),
@@ -1469,11 +1596,10 @@ export default function ViewPage() {
         noShow: String(draftSideMetrics.noShow ?? ''),
         scheduled: String(draftSideMetrics.scheduled ?? ''),
         seen: String(draftSideMetrics.seen ?? ''),
-        seenPercent: seenPercentComputed === '-' ? '' : seenPercentComputed,
+        seenPercent: seenPercentComputed,
       };
-      const grandTotal = String(draft.grandTotal ?? '');
-      const bothEmpty = grandTotal.trim() === '' && coffeeSales.trim() === '';
-      const salesWithoutCoffee = bothEmpty ? '' : String(parseNumber(grandTotal) - parseNumber(coffeeSales));
+      const grandTotal = formatMoneyValue(draft.grandTotal);
+      const salesWithoutCoffee = computeSalesWithoutCoffee(grandTotal, coffeeSales);
       const prophyTotal = computeProphyTotal(
         draft.paperAtOrangeJuice,
         draft.paperAtTea,
@@ -1507,7 +1633,8 @@ export default function ViewPage() {
         timeStart: firstReport.timeStart ?? '',
         timeEnd: firstReport.timeEnd ?? '',
         chartCount: firstReport.chartCount ?? '',
-        amount: firstReport.amount ?? '',
+        amount: formatMoneyValue(firstReport.amount),
+        grandTotal,
         coffeeSales,
         salesWithoutCoffee,
         prophyTotal,
@@ -1530,7 +1657,7 @@ export default function ViewPage() {
     if (!selectedDoc) return null;
     if (selectedDoc.tableTotals) {
       return {
-        sales: parseNumber(selectedDoc.tableTotals.sales),
+        sales: roundToCents(parseMoney(selectedDoc.tableTotals.sales)),
         coffeeNew: parseNumber(selectedDoc.tableTotals.coffeeNew),
         coffeeReturn: parseNumber(selectedDoc.tableTotals.coffeeReturn),
         coffeeTotal: parseNumber(selectedDoc.tableTotals.coffeeTotal),
@@ -1586,19 +1713,18 @@ export default function ViewPage() {
   };
   const hasCoffeeYesInputVisible = visibleTableRows.some((row) => String(row.coffeeYes ?? '').trim() !== '');
   const visibleCoffeeSales = hasCoffeeYesInputVisible
-    ? String((visibleTableTotals?.coffeeYes ?? 0) * 61)
+    ? computeCraProductionSales(visibleTableTotals?.coffeeYes ?? 0)
     : selectedDoc?.coffeeSales || '';
   const visiblePineappleValue = String(visibleLocationSummary.pineapple ?? '');
   const visibleRoseValue = String(visibleLocationSummary.rose ?? '');
-  const visibleLocationTotal =
-    visiblePineappleValue.trim() === '' && visibleRoseValue.trim() === '' && visibleCoffeeSales.trim() === ''
-      ? ''
-      : String(parseNumber(visiblePineappleValue) + parseNumber(visibleRoseValue) + parseNumber(visibleCoffeeSales));
+  const visibleLocationTotal = computeFirstReviewProductionTotal(
+    visiblePineappleValue,
+    visibleRoseValue,
+    visibleCoffeeSales
+  );
+  const visibleMailedProduction = String(visibleLocationSummary.mailedProduction ?? '');
   const visibleGrandTotal = isEditing ? String(draft?.grandTotal ?? '') : selectedDoc?.grandTotal || '';
-  const visibleSalesWithoutCoffee =
-    visibleGrandTotal.trim() === '' && visibleCoffeeSales.trim() === ''
-      ? ''
-      : String(parseNumber(visibleGrandTotal) - parseNumber(visibleCoffeeSales));
+  const visibleSalesWithoutCoffee = computeSalesWithoutCoffee(visibleGrandTotal, visibleCoffeeSales);
   const visiblePaperAtOrangeJuice = isEditing ? String(draft?.paperAtOrangeJuice ?? '') : selectedDoc?.paperAtOrangeJuice || '';
   const visiblePaperAtTea = isEditing ? String(draft?.paperAtTea ?? '') : selectedDoc?.paperAtTea || '';
   const visibleJustPaper = isEditing ? String(draft?.justPaper ?? '') : selectedDoc?.justPaper || '';
@@ -1616,8 +1742,7 @@ export default function ViewPage() {
     const computed = computeHoursOpen(checkIn, checkOut);
     if (computed) return computed;
     const stored = isEditing ? draft?.hoursOpen : selectedDoc?.hoursOpen;
-    const formatted = formatHoursOpenLabel(stored);
-    return formatted === '-' ? '' : formatted;
+    return formatHoursOpenLabel(stored);
   })();
   const visibleProductionSideMetrics = {
     ...createEmptyProductionSideMetrics(),
@@ -1679,6 +1804,7 @@ export default function ViewPage() {
           rose: visibleRoseValue,
           coffeeSales: visibleCoffeeSales,
           total: visibleLocationTotal,
+          mailedProduction: visibleMailedProduction,
         },
         productionSideMetrics: visibleProductionSideMetrics,
         sugarRows: visibleSugarRows,
@@ -1775,7 +1901,7 @@ export default function ViewPage() {
         }}
       >
         <div style={{ marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-          <h2 style={{ margin: '0 0 8px', fontSize: 28, fontWeight: 800, color: '#111827' }}>Submitted Finalized Production</h2>
+          <h2 style={{ margin: '0 0 8px', fontSize: 28, fontWeight: 800, color: '#111827' }}>Daily Production</h2>
           {selectedDoc && (
             <div style={{ display: 'flex', gap: 8 }}>
               {isEditing ? (
@@ -1876,44 +2002,54 @@ export default function ViewPage() {
                 Date / Office
               </div>
               <div style={{ padding: 10, borderBottom: '1px solid #e5e7eb', display: 'grid', gap: 8 }}>
-                <details style={{ width: '72%', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff' }}>
-                  <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '8px 10px', fontWeight: 600 }}>{dateFilterLabel}</summary>
-                  <div style={{ borderTop: '1px solid #e5e7eb', padding: '8px 10px', display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={dateFilter.length === 0} onChange={() => setDateFilter([])} />
-                      All
-                    </label>
-                    {dateOptions.map((date) => (
-                      <label key={date} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                        <input type="checkbox" checked={dateFilter.includes(date)} onChange={() => toggleDateFilterValue(date)} />
-                        {date}
-                      </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Year / Month</span>
+                  <select
+                    value={selectedYearMonth}
+                    onChange={(e) => handleYearMonthChange(e.target.value)}
+                    style={FILTER_SELECT_STYLE}
+                  >
+                    <option value="">Select year / month</option>
+                    {yearMonthOptions.map((ym) => (
+                      <option key={ym} value={ym}>
+                        {formatYearMonthOptionLabel(ym)}
+                      </option>
                     ))}
-                  </div>
-                </details>
-                <details style={{ width: '72%', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff' }}>
-                  <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '8px 10px', fontWeight: 600 }}>{locationFilterLabel}</summary>
-                  <div style={{ borderTop: '1px solid #e5e7eb', padding: '8px 10px', display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
-                    <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                      <input type="checkbox" checked={locationFilter.length === 0} onChange={() => setLocationFilter([])} />
-                      All
-                    </label>
-                    {locationOptions.map((location) => (
-                      <label key={location} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                        <input
-                          type="checkbox"
-                          checked={locationFilter.includes(location)}
-                          onChange={() => toggleLocationFilterValue(location)}
-                        />
-                        {location}
-                      </label>
+                  </select>
+                </label>
+                <label style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontSize: 12, fontWeight: 600, color: '#475569' }}>Office</span>
+                  <select value={selectedOffice} onChange={(e) => handleOfficeChange(e.target.value)} style={FILTER_SELECT_STYLE}>
+                    <option value="">Select office</option>
+                    {officeOptions.map((office) => (
+                      <option key={office} value={office}>
+                        {office}
+                      </option>
                     ))}
-                  </div>
-                </details>
+                  </select>
+                </label>
+                {filtersReady && (
+                  <details style={{ width: '100%', border: '1px solid #d1d5db', borderRadius: 6, background: '#fff' }}>
+                    <summary style={{ cursor: 'pointer', listStyle: 'none', padding: '8px 10px', fontWeight: 600 }}>{dateFilterLabel}</summary>
+                    <div style={{ borderTop: '1px solid #e5e7eb', padding: '8px 10px', display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                        <input type="checkbox" checked={dateFilter.length === 0} onChange={() => setDateFilter([])} />
+                        All dates in month
+                      </label>
+                      {dateOptions.map((date) => (
+                        <label key={date} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                          <input type="checkbox" checked={dateFilter.includes(date)} onChange={() => toggleDateFilterValue(date)} />
+                          {date}
+                        </label>
+                      ))}
+                    </div>
+                  </details>
+                )}
               </div>
-              {filteredDocs.length === 0 ? (
-                <div style={{ padding: 12, color: '#6b7280' }}>저장된 데이터가 없습니다.</div>
-              ) : (
+              {filtersReady && filteredDocs.length === 0 && (
+                <div style={{ padding: 12, color: '#6b7280' }}>선택한 조건에 해당하는 데이터가 없습니다.</div>
+              )}
+              {filtersReady &&
                 filteredDocs.map((d, docIdx) => {
                   const active = d.id === selectedId;
                   const statusLabel = d.pdfSaved ? 'Completed' : d.edited ? 'Editing' : '';
@@ -1937,7 +2073,7 @@ export default function ViewPage() {
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                        <div style={{ fontWeight: 700 }}>{d.date || '-'}</div>
+                        <div style={{ fontWeight: 700 }}>{d.date || ''}</div>
                         {statusLabel && (
                           <span
                             style={{
@@ -1952,11 +2088,10 @@ export default function ViewPage() {
                           </span>
                         )}
                       </div>
-                      <div style={{ color: '#475569', fontSize: 13 }}>{d.location || '-'}</div>
+                      <div style={{ color: '#475569', fontSize: 13 }}>{d.location || ''}</div>
                     </button>
                   );
-                })
-              )}
+                })}
             </div>
 
             <div
@@ -1967,16 +2102,14 @@ export default function ViewPage() {
                 boxSizing: 'border-box',
               }}
             >
-              {!selectedDoc ? (
-                <p style={{ margin: 0, color: '#6b7280' }}>왼쪽에서 항목을 선택해 주세요.</p>
-              ) : (
+              {filtersReady && selectedDoc && (
                 <>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(220px, 1fr))', gap: 10, marginBottom: 14 }}>
                     <div>
-                      <strong>Date:</strong> {selectedDoc.date || '-'}
+                      <strong>Date:</strong> {selectedDoc.date || ''}
                     </div>
                     <div>
-                      <strong>Office:</strong> {selectedDoc.location || '-'}
+                      <strong>Office:</strong> {selectedDoc.location || ''}
                     </div>
                     <div>
                       <strong>Reason if Late:</strong>{' '}
@@ -1988,11 +2121,11 @@ export default function ViewPage() {
                           style={{ width: '100%', maxWidth: 420, height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        selectedDoc.reasonIfLate || '-'
+                        selectedDoc.reasonIfLate || ''
                       )}
                     </div>
                     <div>
-                      <strong>Submitted at:</strong> {selectedDoc.submittedDateTime || '-'}
+                      <strong>Submitted at:</strong> {selectedDoc.submittedDateTime || ''}
                     </div>
                   </div>
 
@@ -2007,7 +2140,7 @@ export default function ViewPage() {
                           style={{ height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        visibleCheckIn || '-'
+                        visibleCheckIn || ''
                       )}
                     </div>
                     <div>
@@ -2020,7 +2153,7 @@ export default function ViewPage() {
                           style={{ height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        visibleCheckOut || '-'
+                        visibleCheckOut || ''
                       )}
                     </div>
                     <div>
@@ -2039,7 +2172,7 @@ export default function ViewPage() {
                           style={{ width: '100%', maxWidth: 220, height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        visibleCloser || '-'
+                        visibleCloser || ''
                       )}
                     </div>
                   </div>
@@ -2068,7 +2201,7 @@ export default function ViewPage() {
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
-                                r.name || '-'
+                                r.name || ''
                               )}
                             </td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2080,7 +2213,7 @@ export default function ViewPage() {
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
-                                r.timeStart || '-'
+                                r.timeStart || ''
                               )}
                             </td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2092,7 +2225,7 @@ export default function ViewPage() {
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
-                                r.timeEnd || '-'
+                                r.timeEnd || ''
                               )}
                             </td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8, color: '#374151' }}>
@@ -2107,7 +2240,7 @@ export default function ViewPage() {
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
-                                r.chartCount || '-'
+                                r.chartCount || ''
                               )}
                             </td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2119,7 +2252,7 @@ export default function ViewPage() {
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
-                                formatCurrencyLabel(r.amount || '-')
+                                formatCurrencyLabel(r.amount || '')
                               )}
                             </td>
                           </tr>
@@ -2150,7 +2283,7 @@ export default function ViewPage() {
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(220px, 1fr))', gap: 10, marginTop: 14 }}>
                     <div>
-                      <strong>Grand Total:</strong>{' '}
+                      <strong>Submitted Production:</strong>{' '}
                       {isEditing ? (
                         <input
                           type="number"
@@ -2159,14 +2292,14 @@ export default function ViewPage() {
                           style={{ width: 140, height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        formatCurrencyLabel(selectedDoc.grandTotal || '-')
+                        formatCurrencyLabel(selectedDoc.grandTotal || '')
                       )}
                     </div>
                     <div>
-                      <strong>CRA Production:</strong> {formatCurrencyLabel(visibleCoffeeSales || '-')}
+                      <strong>CRA Production:</strong> {formatCurrencyLabel(visibleCoffeeSales || '')}
                     </div>
                     <div>
-                      <strong>Production W/Out CRA:</strong> {formatCurrencyLabel(visibleSalesWithoutCoffee || '-')}
+                      <strong>Production W/Out CRA:</strong> {formatCurrencyLabel(visibleSalesWithoutCoffee || '')}
                     </div>
                   </div>
 
@@ -2181,7 +2314,7 @@ export default function ViewPage() {
                           style={{ width: 120, height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        selectedDoc.paperAtOrangeJuice || '-'
+                        selectedDoc.paperAtOrangeJuice || ''
                       )}
                     </div>
                     <div>
@@ -2194,7 +2327,7 @@ export default function ViewPage() {
                           style={{ width: 120, height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        selectedDoc.paperAtTea || '-'
+                        selectedDoc.paperAtTea || ''
                       )}
                     </div>
                     <div>
@@ -2207,12 +2340,12 @@ export default function ViewPage() {
                           style={{ width: 120, height: 30, marginLeft: 6, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                         />
                       ) : (
-                        selectedDoc.justPaper || '-'
+                        selectedDoc.justPaper || ''
                       )}
                     </div>
                     <div>
-                      <strong>Prophy Total:</strong>{' '}
-                      <span style={{ marginLeft: 6, color: '#374151' }}>{visibleProphyTotal || '-'}</span>
+                      <strong>Actual Prophy:</strong>{' '}
+                      <span style={{ marginLeft: 6, color: '#374151' }}>{visibleProphyTotal || ''}</span>
                     </div>
                   </div>
 
@@ -2240,7 +2373,7 @@ export default function ViewPage() {
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
-                                formatCurrencyLabel(visiblePineappleValue || '-')
+                                formatCurrencyLabel(visiblePineappleValue || '')
                               )}
                             </td>
                           </tr>
@@ -2255,17 +2388,32 @@ export default function ViewPage() {
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
-                                formatCurrencyLabel(visibleRoseValue || '-')
+                                formatCurrencyLabel(visibleRoseValue || '')
                               )}
                             </td>
                           </tr>
                           <tr>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>CRA Production</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{formatCurrencyLabel(visibleCoffeeSales || '-')}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{formatCurrencyLabel(visibleCoffeeSales || '')}</td>
                           </tr>
                           <tr>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f3f4f6', fontWeight: 800 }}>Total</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8, fontWeight: 800 }}>{formatCurrencyLabel(visibleLocationTotal || '-')}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>1st Review Production</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{formatCurrencyLabel(visibleLocationTotal || '')}</td>
+                          </tr>
+                          <tr>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>Mailed Production</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                              {isEditing ? (
+                                <input
+                                  type="number"
+                                  value={String(draft?.locationSummary?.mailedProduction ?? '')}
+                                  onChange={(e) => updateLocationSummaryField('mailedProduction', e.target.value)}
+                                  style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                />
+                              ) : (
+                                formatCurrencyLabel(visibleMailedProduction || '')
+                              )}
+                            </td>
                           </tr>
                         </tbody>
                       </table>
@@ -2314,7 +2462,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', minWidth: 100, height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    String(visibleProductionSideMetrics[key] ?? '').trim() || '-'
+                                    String(visibleProductionSideMetrics[key] ?? '').trim() || ''
                                   )}
                                 </td>
                               </tr>
@@ -2364,7 +2512,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    row.position || '-'
+                                    row.position || ''
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2376,7 +2524,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    row.name || '-'
+                                    row.name || ''
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2388,7 +2536,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    formatCurrencyLabel(row.doctorPreventative || '-')
+                                    formatCurrencyLabel(row.doctorPreventative || '')
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2400,7 +2548,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    formatCurrencyLabel(row.doctorRestorative || '-')
+                                    formatCurrencyLabel(row.doctorRestorative || '')
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2412,7 +2560,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    formatCurrencyLabel(row.doctorCraProduction || '-')
+                                    formatCurrencyLabel(row.doctorCraProduction || '')
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2447,7 +2595,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    row.customer || '-'
+                                    row.customer || ''
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2459,7 +2607,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    row.icecream || '-'
+                                    row.icecream || ''
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2471,7 +2619,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    row.cake || '-'
+                                    row.cake || ''
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2491,7 +2639,7 @@ export default function ViewPage() {
                                       }}
                                     />
                                   ) : (
-                                    row.donut || '-'
+                                    row.donut || ''
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2503,7 +2651,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    row.tart || '-'
+                                    row.tart || ''
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2515,7 +2663,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    row.peach || '-'
+                                    row.peach || ''
                                   )}
                                 </td>
                                 <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
@@ -2527,7 +2675,7 @@ export default function ViewPage() {
                                       style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                     />
                                   ) : (
-                                    row.peppermint || '-'
+                                    row.peppermint || ''
                                   )}
                                 </td>
                               </tr>
@@ -2536,24 +2684,22 @@ export default function ViewPage() {
                           <tfoot>
                             <tr style={{ background: '#f9fafb', fontWeight: 700 }}>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>Total</td>
-                              <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>-</td>
+                              <td style={{ border: '1px solid #e5e7eb', padding: 8 }} />
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
-                                {formatCurrencyLabel(String(visibleExtraInputTotals.doctorPreventative))}
+                                {formatCurrencyLabel(formatRoundedNumber(visibleExtraInputTotals.doctorPreventative))}
                               </td>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
-                                {formatCurrencyLabel(String(visibleExtraInputTotals.doctorRestorative))}
+                                {formatCurrencyLabel(formatRoundedNumber(visibleExtraInputTotals.doctorRestorative))}
                               </td>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
-                                {formatCurrencyLabel(String(visibleExtraInputTotals.doctorCraProduction))}
+                                {formatCurrencyLabel(formatRoundedNumber(visibleExtraInputTotals.doctorCraProduction))}
                               </td>
                               <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
                                 {formatCurrencyLabel(
-                                  String(
-                                    roundToCents(
-                                      visibleExtraInputRowsWithIdentity.reduce(
-                                        (acc, r, i) => acc + getDoctorPerformanceRowProductionValue(r, visibleTableRows[i]?.sales),
-                                        0
-                                      )
+                                  formatRoundedNumber(
+                                    visibleExtraInputRowsWithIdentity.reduce(
+                                      (acc, r, i) => acc + getDoctorPerformanceRowProductionValue(r, visibleTableRows[i]?.sales),
+                                      0
                                     )
                                   )
                                 )}
@@ -2589,34 +2735,34 @@ export default function ViewPage() {
                               {isEditing ? (
                                 <input type="text" value={r.position || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'position', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} />
                               ) : (
-                                r.position || '-'
+                                r.position || ''
                               )}
                             </td>
                             <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
                               {isEditing ? (
                                 <input type="text" value={r.name || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'name', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} />
                               ) : (
-                                r.name || '-'
+                                r.name || ''
                               )}
                             </td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeNew || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeNew', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeNew || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeReturn || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeReturn', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeReturn || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{r.coffeeTotal || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeNo || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeNo', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeNo || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.renderedCoffee || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'renderedCoffee', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.renderedCoffee || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: isEditing ? '#6b7280' : undefined }}>{r.coffeeYes || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.orangeJuiceNew || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'orangeJuiceNew', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.orangeJuiceNew || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.orangeJuiceReturn || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'orangeJuiceReturn', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.orangeJuiceReturn || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{r.orangeJuiceTotal || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: '#6b7280' }}>-</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: '#6b7280' }}>-</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeNew || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeNew', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeNew || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeReturn || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeReturn', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeReturn || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{r.coffeeTotal || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffeeNo || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'coffeeNo', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffeeNo || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.renderedCoffee || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'renderedCoffee', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.renderedCoffee || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: isEditing ? '#6b7280' : undefined }}>{r.coffeeYes || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.orangeJuiceNew || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'orangeJuiceNew', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.orangeJuiceNew || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.orangeJuiceReturn || ''} onChange={(e) => updateRowField<TableRow>('tableRows', idx, 'orangeJuiceReturn', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.orangeJuiceReturn || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{r.orangeJuiceTotal || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: '#6b7280' }} />
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: '#6b7280' }} />
                           </tr>
                         ))}
                       </tbody>
                       <tfoot>
                         <tr style={{ background: '#f9fafb', fontWeight: 700 }}>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>Total</td>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>-</td>
+                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }} />
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleTableTotals ? visibleTableTotals.coffeeNew : 0}</td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleTableTotals ? visibleTableTotals.coffeeReturn : 0}</td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleTableTotals ? visibleTableTotals.coffeeTotal : 0}</td>
@@ -2632,14 +2778,14 @@ export default function ViewPage() {
                             {isEditing ? (
                               <input type="number" value={String(visibleCoffeeActualTotals.orangeJuiceNew ?? '')} onChange={(e) => updateCoffeeActualTotalField('orangeJuiceNew', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} />
                             ) : (
-                              visibleCoffeeActualTotals.orangeJuiceNew || '-'
+                              visibleCoffeeActualTotals.orangeJuiceNew || ''
                             )}
                           </td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
                             {isEditing ? (
                               <input type="number" value={String(visibleCoffeeActualTotals.orangeJuiceReturn ?? '')} onChange={(e) => updateCoffeeActualTotalField('orangeJuiceReturn', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} />
                             ) : (
-                              visibleCoffeeActualTotals.orangeJuiceReturn || '-'
+                              visibleCoffeeActualTotals.orangeJuiceReturn || ''
                             )}
                           </td>
                         </tr>
@@ -2681,19 +2827,19 @@ export default function ViewPage() {
                       <tbody>
                         {visibleSugarRows.map((r, idx) => (
                           <tr key={`sugar-${idx}`}>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.position || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'position', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.position || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.name || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'name', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.name || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.sugar || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'sugar', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sugar || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: isEditing ? '#6b7280' : undefined }}>{r.sugarGood || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.sugarBad || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'sugarBad', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sugarBad || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.paper || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'paper', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.paper || '-'}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.position || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'position', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.position || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.name || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'name', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.name || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.sugar || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'sugar', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sugar || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, color: isEditing ? '#6b7280' : undefined }}>{r.sugarGood || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.sugarBad || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'sugarBad', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sugarBad || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.paper || ''} onChange={(e) => updateRowField<SugarRow>('sugarRows', idx, 'paper', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.paper || ''}</td>
                           </tr>
                         ))}
                       </tbody>
                       <tfoot>
                         <tr style={{ background: '#f9fafb', fontWeight: 700 }}>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>Total</td>
-                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>-</td>
+                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }} />
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleSugarTotals ? visibleSugarTotals.sugar : 0}</td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleSugarTotals ? visibleSugarTotals.sugarGood : 0}</td>
                           <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleSugarTotals ? visibleSugarTotals.sugarBad : 0}</td>
@@ -2737,10 +2883,10 @@ export default function ViewPage() {
                       <tbody>
                         {visibleReasonRows.map((r, idx) => (
                           <tr key={`reason-${idx}`}>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.reason || ''} onChange={(e) => updateRowField<ReasonRow>('reasonRows', idx, 'reason', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.reason || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.orangeJuice || ''} onChange={(e) => updateRowField<ReasonRow>('reasonRows', idx, 'orangeJuice', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.orangeJuice || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.paper || ''} onChange={(e) => updateRowField<ReasonRow>('reasonRows', idx, 'paper', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.paper || '-'}</td>
-                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffee || ''} onChange={(e) => updateRowField<ReasonRow>('reasonRows', idx, 'coffee', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffee || '-'}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.reason || ''} onChange={(e) => updateRowField<ReasonRow>('reasonRows', idx, 'reason', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.reason || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.orangeJuice || ''} onChange={(e) => updateRowField<ReasonRow>('reasonRows', idx, 'orangeJuice', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.orangeJuice || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.paper || ''} onChange={(e) => updateRowField<ReasonRow>('reasonRows', idx, 'paper', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.paper || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.coffee || ''} onChange={(e) => updateRowField<ReasonRow>('reasonRows', idx, 'coffee', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.coffee || ''}</td>
                           </tr>
                         ))}
                       </tbody>
@@ -2797,7 +2943,7 @@ export default function ViewPage() {
                             wordBreak: 'break-word',
                           }}
                         >
-                          {String(selectedDoc.notDue ?? '') === '' ? '-' : selectedDoc.notDue}
+                          {selectedDoc.notDue}
                         </p>
                       )}
                     </div>
@@ -2830,7 +2976,7 @@ export default function ViewPage() {
                             wordBreak: 'break-word',
                           }}
                         >
-                          {String(selectedDoc.notes ?? '') === '' ? '-' : selectedDoc.notes}
+                          {selectedDoc.notes}
                         </p>
                       )}
                     </div>
@@ -2844,4 +2990,3 @@ export default function ViewPage() {
     </main>
   );
 }
-
