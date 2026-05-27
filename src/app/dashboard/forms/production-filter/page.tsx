@@ -4,7 +4,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { db } from '@/lib/firebase.config';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 
-const LOCATION_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'] as const;
+const LOCATION_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia', 'Crowns', 'Endo'] as const;
 
 type TableRow = {
   position: string;
@@ -61,6 +61,7 @@ type LocationSummary = {
   pineapple?: string;
   rose?: string;
   total?: string;
+  mailedProduction?: string;
 };
 
 type ProductionSideMetrics = {
@@ -143,6 +144,8 @@ type ColumnFieldId =
   | 'sugar.paper'
   | 'location.pineapple'
   | 'location.rose'
+  | 'location.total'
+  | 'location.mailedProduction'
   | 'side.add'
   | 'side.noShow'
   | 'side.scheduled'
@@ -211,7 +214,9 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
   {
     label: 'Summary',
     options: [
-      { id: 'main.grandTotal', label: 'Grand Total' },
+      { id: 'main.grandTotal', label: 'Submitted Production' },
+      { id: 'location.total', label: '1st Review Production' },
+      { id: 'location.mailedProduction', label: 'Mailed Production' },
       { id: 'main.coffeeSales', label: 'CRA Production Production' },
       { id: 'main.salesWithoutCoffee', label: 'Production W/Out CRA' },
       { id: 'main.paperAtOrangeJuice', label: 'Prophy @ OE' },
@@ -314,7 +319,7 @@ const DOCPERF_EXTRA_INPUT_SUM_KEYS = new Set([
 
 const POSITION_BUNDLE_MAX_METRICS = 12;
 
-const NUM_SLOTS = 12;
+const NUM_SLOTS = 7;
 
 const EMPTY_COLUMN_SLOTS: SlotValue[] = Array.from({ length: NUM_SLOTS }, () => '' as SlotValue);
 
@@ -436,6 +441,58 @@ function isPositionBundle(slot: SlotValue): boolean {
   return slot === POSITION_BUNDLE_ID;
 }
 
+const FIELD_SELECT_MIN_WIDTH_PX = 280;
+const METRIC_SELECT_MIN_WIDTH_PX = 240;
+const SINGLE_COLUMN_HEADER_MIN_WIDTH_PX = 300;
+
+const FIELD_OPTION_LABEL_BY_ID: Map<string, string> = (() => {
+  const map = new Map<string, string>();
+  for (const g of FIELD_GROUPS) {
+    for (const opt of g.options) {
+      if (opt.id) map.set(opt.id, opt.label);
+    }
+  }
+  return map;
+})();
+
+function getFieldOptionLabel(id: ColumnFieldId): string {
+  return FIELD_OPTION_LABEL_BY_ID.get(id) ?? id;
+}
+
+function getSlotDisplayLabel(slot: SlotValue): string {
+  if (!slot) return 'Select';
+  if (isShortProcBundle(slot)) {
+    return SHORT_PROC_BUNDLE_OPTIONS.find((o) => o.id === slot)?.label ?? slot;
+  }
+  if (isOperatingBundle(slot)) return 'Operating';
+  if (isNameBundle(slot)) return 'Name';
+  if (isPositionBundle(slot)) return 'Position';
+  return getFieldOptionLabel(slot as ColumnFieldId);
+}
+
+const PRODUCTION_FILTER_SELECT_CSS = `
+.production-filter-root .production-filter-toolbar select,
+.production-filter-root .production-filter-toolbar input[type="month"] {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  field-sizing: fixed;
+}
+.production-filter-root .production-filter-toolbar > * {
+  min-width: 0;
+}
+.production-filter-root .production-filter-table select {
+  field-sizing: content;
+  min-width: ${FIELD_SELECT_MIN_WIDTH_PX}px;
+  max-width: 100%;
+  line-height: 1.35;
+}
+.production-filter-root .production-filter-table select.metric-field-select {
+  min-width: ${METRIC_SELECT_MIN_WIDTH_PX}px;
+}
+`;
+
 function bundleToMetric(bundle: ShortProcBundleId): 'orangeJuice' | 'paper' | 'coffee' {
   if (bundle === 'bundle.spOE') return 'orangeJuice';
   if (bundle === 'bundle.spPro') return 'paper';
@@ -460,8 +517,7 @@ const subHeaderThStyle: React.CSSProperties = {
   whiteSpace: 'normal' as const,
   wordBreak: 'break-word' as const,
   verticalAlign: 'bottom' as const,
-  minWidth: 104,
-  maxWidth: 140,
+  minWidth: METRIC_SELECT_MIN_WIDTH_PX,
   lineHeight: 1.25,
 };
 
@@ -534,6 +590,8 @@ const CURRENCY_FIELD_IDS = new Set<ColumnFieldId>([
   'main.salesWithoutCoffee',
   'location.pineapple',
   'location.rose',
+  'location.total',
+  'location.mailedProduction',
   'docperf.doctorPreventative',
   'docperf.doctorRestorative',
   'docperf.doctorCraProduction',
@@ -906,6 +964,12 @@ export default function SimpleFormsDropdownViewPage() {
     () => createEmptyPositionBundleSlotConfigs()
   );
 
+  const resetColumnConfiguration = useCallback(() => {
+    setColumnSlots([...EMPTY_COLUMN_SLOTS]);
+    setNameBundleBySlot(createEmptyNameBundleSlotConfigs());
+    setPositionBundleBySlot(createEmptyPositionBundleSlotConfigs());
+  }, []);
+
   const uniquePersonNames = useMemo(() => {
     const set = new Set<string>();
     for (const doc of rows) {
@@ -963,7 +1027,7 @@ export default function SimpleFormsDropdownViewPage() {
         const q = query(
           collection(db, 'simple-forms'),
           where('location', '==', location.trim()),
-          where('pdfSaved', '==', true),
+          where('submittedDateTime', '!=', ''),
           where('date', '>=', start),
           where('date', '<=', end)
         );
@@ -976,7 +1040,7 @@ export default function SimpleFormsDropdownViewPage() {
         const all: SimpleFormDoc[] = [];
         allSnap.forEach((docSnap) => {
           const data = docSnap.data() as Record<string, unknown>;
-          if (data.pdfSaved !== true) return;
+          if (!data.submittedDateTime) return;
           all.push({ id: docSnap.id, ...data } as SimpleFormDoc);
         });
         list = filterDocsByLocationAndMonth(all, location, start, end);
@@ -1119,9 +1183,9 @@ export default function SimpleFormsDropdownViewPage() {
 
   const thSelectStyle: React.CSSProperties = {
     width: '100%',
-    minWidth: 120,
-    height: 36,
-    padding: '0 8px',
+    minWidth: FIELD_SELECT_MIN_WIDTH_PX,
+    minHeight: 36,
+    padding: '6px 8px',
     border: '1px solid #d1d5db',
     borderRadius: 6,
     background: '#fff',
@@ -1129,9 +1193,15 @@ export default function SimpleFormsDropdownViewPage() {
     fontWeight: 600,
   };
 
+  const metricSelectStyle: React.CSSProperties = {
+    ...thSelectStyle,
+    minWidth: METRIC_SELECT_MIN_WIDTH_PX,
+  };
+
   const slotFieldSelect = (slotIndex: number, slotId: SlotValue) => (
     <select
       aria-label={`Column ${slotIndex + 1} field`}
+      title={getSlotDisplayLabel(slotId)}
       value={slotId}
       onChange={(e) => setSlot(slotIndex, e.target.value as SlotValue)}
       style={thSelectStyle}
@@ -1178,6 +1248,7 @@ export default function SimpleFormsDropdownViewPage() {
 
   return (
     <main
+      className="production-filter-root"
       style={{
         minHeight: '100vh',
         display: 'grid',
@@ -1186,15 +1257,13 @@ export default function SimpleFormsDropdownViewPage() {
         padding: '48px 24px',
       }}
     >
+      <style>{PRODUCTION_FILTER_SELECT_CSS}</style>
       <section
         style={{
           width: '100%',
           maxWidth: 2600,
           background: '#fff',
-          border: '1px solid #e5e7eb',
-          borderRadius: 12,
           padding: 20,
-          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.06)',
         }}
       >
         <h1 style={{ margin: '0 0 8px', fontSize: 28, fontWeight: 800, color: '#111827' }}>
@@ -1202,6 +1271,7 @@ export default function SimpleFormsDropdownViewPage() {
         </h1>
 
         <div
+          className="production-filter-toolbar"
           style={{
             display: 'grid',
             gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
@@ -1214,7 +1284,10 @@ export default function SimpleFormsDropdownViewPage() {
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Office</label>
             <select
               value={location}
-              onChange={(e) => setLocation(e.target.value)}
+              onChange={(e) => {
+                resetColumnConfiguration();
+                setLocation(e.target.value);
+              }}
               style={{
                 width: '100%',
                 height: 40,
@@ -1237,7 +1310,10 @@ export default function SimpleFormsDropdownViewPage() {
             <input
               type="month"
               value={month}
-              onChange={(e) => setMonth(e.target.value)}
+              onChange={(e) => {
+                resetColumnConfiguration();
+                setMonth(e.target.value);
+              }}
               style={{
                 width: '100%',
                 height: 40,
@@ -1275,12 +1351,11 @@ export default function SimpleFormsDropdownViewPage() {
         ) : null}
 
         {location.trim() && rows.length > 0 && (
-          <div style={{ overflowX: 'auto' }}>
+          <div className="production-filter-table" style={{ overflowX: 'auto' }}>
             <table
               style={{
                 width: '100%',
                 borderCollapse: 'collapse',
-                border: '1px solid #e5e7eb',
                 fontSize: 14,
               }}
             >
@@ -1348,6 +1423,7 @@ export default function SimpleFormsDropdownViewPage() {
                             <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>Name</label>
                             <select
                               aria-label={`Column ${slotIndex + 1} person name`}
+                              title={nameBundleBySlot[slotIndex]?.personName?.trim() || 'Select name…'}
                               value={nameBundleBySlot[slotIndex]?.personName ?? ''}
                               onChange={(e) => {
                                 const v = e.target.value;
@@ -1417,6 +1493,7 @@ export default function SimpleFormsDropdownViewPage() {
                             <label style={{ fontSize: 11, fontWeight: 600, color: '#64748b' }}>Position</label>
                             <select
                               aria-label={`Column ${slotIndex + 1} position`}
+                              title={pbCfg.position.trim() || 'Select position…'}
                               value={pbCfg.position}
                               onChange={(e) => {
                                 const v = e.target.value;
@@ -1474,7 +1551,7 @@ export default function SimpleFormsDropdownViewPage() {
                       <th
                         key={`h-${slotIndex}`}
                         rowSpan={dayDateRowSpan}
-                        style={{ ...cellStyle, minWidth: 140 }}
+                        style={{ ...cellStyle, minWidth: SINGLE_COLUMN_HEADER_MIN_WIDTH_PX }}
                       >
                         {slotFieldSelect(slotIndex, slotId)}
                       </th>
@@ -1508,9 +1585,11 @@ export default function SimpleFormsDropdownViewPage() {
                         };
                         const metrics = cfg.metrics.length > 0 ? cfg.metrics : (['docperf.customer' as ColumnFieldId]);
                         return metrics.map((metric, mi) => (
-                          <th key={`h2-${slotIndex}-${mi}`} style={{ ...cellStyle, ...subHeaderThStyle, minWidth: 108 }}>
+                          <th key={`h2-${slotIndex}-${mi}`} style={{ ...cellStyle, ...subHeaderThStyle }}>
                             <select
+                              className="metric-field-select"
                               aria-label={`Column ${slotIndex + 1} metric ${mi + 1}`}
+                              title={getFieldOptionLabel(metric)}
                               value={metric}
                               onChange={(e) => {
                                 const nextM = e.target.value as ColumnFieldId;
@@ -1523,7 +1602,7 @@ export default function SimpleFormsDropdownViewPage() {
                                   return n;
                                 });
                               }}
-                              style={{ ...thSelectStyle, minWidth: 100, fontWeight: 600 }}
+                              style={metricSelectStyle}
                             >
                               {NAME_BUNDLE_METRIC_OPTIONS.map((opt) => (
                                 <option key={`nb-${slotIndex}-${mi}-${opt.id}`} value={opt.id}>
@@ -1577,7 +1656,9 @@ export default function SimpleFormsDropdownViewPage() {
                             style={{ ...cellStyle, ...subHeaderThStyle, minWidth: 92 * span }}
                           >
                             <select
+                              className="metric-field-select"
                               aria-label={`Column ${slotIndex + 1} position bundle metric ${mi + 1}`}
+                              title={getFieldOptionLabel(metric)}
                               value={metric}
                               onChange={(e) => {
                                 const nextM = e.target.value as ColumnFieldId;
@@ -1590,7 +1671,7 @@ export default function SimpleFormsDropdownViewPage() {
                                   return n;
                                 });
                               }}
-                              style={{ ...thSelectStyle, minWidth: 100, fontWeight: 600 }}
+                              style={metricSelectStyle}
                             >
                               {POSITION_BUNDLE_METRIC_OPTIONS.map((opt) => (
                                 <option key={`pb-${slotIndex}-${mi}-${opt.id}`} value={opt.id}>
@@ -1868,11 +1949,7 @@ export default function SimpleFormsDropdownViewPage() {
             </span>
             <button
               type="button"
-              onClick={() => {
-                setColumnSlots([...EMPTY_COLUMN_SLOTS]);
-                setNameBundleBySlot(createEmptyNameBundleSlotConfigs());
-                setPositionBundleBySlot(createEmptyPositionBundleSlotConfigs());
-              }}
+              onClick={resetColumnConfiguration}
               style={{
                 height: 34,
                 padding: '0 12px',
@@ -1893,4 +1970,3 @@ export default function SimpleFormsDropdownViewPage() {
     </main>
   );
 }
-

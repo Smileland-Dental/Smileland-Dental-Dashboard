@@ -113,7 +113,7 @@ const REASON_COLUMNS: Array<{ key: keyof ReasonRow; label: string }> = [
 const POSITION_OPTIONS = ['Doctor', 'RDA', 'DA', 'Extern', 'Working Interview'];
 const COFFEE_POSITION_OPTIONS = ['Doctor'];
 const FIXED_REASON_OPTIONS = ['Declined/DDP/Pt Left', 'Not Due/Freq', 'Medical Clearance', 'Furture TX/FMS', 'Courtesy, Not Billable', 'Mistakenly Done, Not Billable', 'Uncooperative/Re-eval', 'Not Documented', 'Age Limit/No teeth', 'Not Complete/Filled out'];
-const LOCATION_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
+const LOCATION_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia', 'Crowns', 'Endo'];
 
 /** 브라우저 number 스텝 화살표 제거 — 직접 입력만 (WebKit / Firefox). */
 const NO_NUMBER_SPINNER_CLASS = 'p-page-number-no-spinner';
@@ -194,8 +194,6 @@ function computeRow(row: TableRow): TableRow {
   };
 }
 
-/** Sealant (Billable) = Sealant − Sealant (Redo). */
-/** Prophy Total = Prophy @ OE + Prophy @ TX + Just Prophy (셋 다 비어 있으면 ''). */
 function computeProphyTotal(oe: string, tea: string, just: string): string {
   const hasBasis = oe.trim() !== '' || tea.trim() !== '' || just.trim() !== '';
   if (!hasBasis) return '';
@@ -1245,7 +1243,7 @@ export default function Page() {
             />
           </div>
           <div>
-            <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Prophy Total</label>
+            <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Actual Prophy</label>
             <input
               type="number"
               readOnly
