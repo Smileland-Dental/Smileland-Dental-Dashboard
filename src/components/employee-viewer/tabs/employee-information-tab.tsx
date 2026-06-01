@@ -1,6 +1,7 @@
 import React from 'react';
 import { Pencil, Save } from 'lucide-react';
 import { Employee } from '@/lib/types';
+import { OFFICES } from '@/lib/constants';
 
 interface TabProps {
   formData: Employee;
@@ -14,17 +15,16 @@ interface TabProps {
   hasUnsavedChanges: boolean;
   userRole: string;
   // Options for selects
-  statusOptions: string[];
-  departments: string[];
-  jobStatuses: string[];
-  employmentStatuses: string[];
-  offices: string[];
 }
+
+const departments = ["Back Office", "Front Office", "Support Services", "Management", "Call Center", "Accounts Receivable", "Dentist"];
+const jobStatuses = ["Full-Time", "Part-Time"];
+const employmentStatuses = ["Exempt", "Non-Exempt", "Contracted"];
+const statusOptions = ["Current", "Terminated", "On Leave"];
 
 export const EmployeeInfoTab = ({
   formData, handleInputChange, setFormData, isEditing, setIsEditing, 
-  handleCancelEdit, handleSave, isSaving, hasUnsavedChanges, userRole,
-  statusOptions, departments, jobStatuses, employmentStatuses, offices
+  handleCancelEdit, handleSave, isSaving, hasUnsavedChanges, userRole
 }: TabProps) => {
   return (
     <div className="relative">
@@ -121,7 +121,7 @@ export const EmployeeInfoTab = ({
             <label className="text-xs font-semibold text-gray-500">Office</label>
             <select name="office" value={formData.office || ''} onChange={handleInputChange} className="w-full border p-2 rounded">
               <option value="" disabled hidden>Select Office</option>
-              {offices.map(office => (
+              {OFFICES.map(office => (
                 <option key={office} value={office}>{office}</option>
               ))}
             </select>

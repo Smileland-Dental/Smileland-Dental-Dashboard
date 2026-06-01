@@ -7,9 +7,9 @@ import { db, storage } from '@/lib/firebase.config';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import FeedbackModal from '@/components/ui/FeedbackModal'; 
 import { Button } from '@/components/ui/button';
+import { OFFICES } from '@/lib/constants';
 
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"];
-const officeLocations = ["Corporate", "Ming", "Bernard", "California", "Ortho", "Delano", "Tulare", "Visalia", "Fresno"];
 
 interface NewAbsenceFormProps {
   employeeFirestore: string;
@@ -163,7 +163,7 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Office Location</label>
                 <select name="office" value={formData.office} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" required>
                   <option value="">Select Office</option>
-                  {officeLocations.map(o => <option key={o} value={o}>{o}</option>)}
+                  {OFFICES.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
             </div>
