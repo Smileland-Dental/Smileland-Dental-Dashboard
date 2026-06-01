@@ -5,6 +5,7 @@ import { X, Clock, MessageSquare, Save, Trash2, AlertCircle, FileText, User, Plu
 import { AbsenceRequest } from "@/lib/types";
 import { ref, uploadBytes, getDownloadURL, deleteObject} from "firebase/storage";
 import { storage } from '@/lib/firebase.config';
+import { OFFICES } from '@/lib/constants';
 
 interface HRDetailsProps {
   absence: AbsenceRequest;
@@ -178,15 +179,11 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                 className={`w-full rounded-xl text-sm font-bold border-2
                 ${isChanged('office') ? 'bg-rose-50 border-rose-300 text-rose-900' : 'bg-white text-slate-700 border-indigo-200'}`}
               >
-                <option value="Corporate">Corporate</option>
-                <option value="Ming">Ming</option>
-                <option value="Bernard">Bernard</option>
-                <option value="California">California</option>
-                <option value="Ortho">Ortho</option>
-                <option value="Delano">Delano</option>
-                <option value="Tulare">Tulare</option>
-                <option value="Visalia">Visalia</option>
-                <option value="Fresno">Fresno</option>
+              {OFFICES.map((office) => (
+                <option key={office} value={office}>
+                  {office}
+                </option>
+              ))}
               </select>
             </div>
 

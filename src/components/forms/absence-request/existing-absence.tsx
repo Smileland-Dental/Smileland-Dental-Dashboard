@@ -7,9 +7,10 @@ import { db, storage } from '@/lib/firebase.config';
 import { ref, uploadBytes, getDownloadURL, listAll, deleteObject } from "firebase/storage";
 import FeedbackModal from '@/components/ui/FeedbackModal';
 import { AlertCircle, Lock } from 'lucide-react'; // Added icons for visual feedback
+import { OFFICES } from '@/lib/constants';
 
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"];
-const officeLocations = ["Corporate", "Ming", "Bernard", "California", "Ortho", "Delano", "Tulare", "Visalia", "Fresno"];
+//const officeLocations = ["Corporate", "Ming", "Bernard", "California", "Ortho", "Delano", "Tulare", "Visalia", "Fresno"];
 
 export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: { absence: any, onFormSubmit: () => void, onClose: () => void }) {
   // --- 1. DEFINE DENIED STATE ---
@@ -238,7 +239,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Office Location</label>
                 <select name="office" value={formData.office} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required>
-                  {officeLocations.map(o => <option key={o} value={o}>{o}</option>)}
+                  {OFFICES.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
             </div>

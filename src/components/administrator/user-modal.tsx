@@ -3,6 +3,7 @@ import { db } from '@/lib/firebase.config';
 import { User, Employee } from '@/lib/types';
 import { doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { X, Users, Info, Trash2, Loader2, CheckCircle2, Search, UserPlus, MapPin, Building2, RotateCcw } from 'lucide-react';
+import { OFFICES } from '@/lib/constants';
 
 interface UserModalProps {
   user: User;
@@ -12,8 +13,6 @@ interface UserModalProps {
   onClose: () => void;
   onUpdate?: () => void;
 }
-
-const OFFICE_LIST = ["Fresno", "Visalia", "Tulare", "Delano", "Bernard", "Ming", "California", "Ortho"];
 
 const UserModal: React.FC<UserModalProps> = ({ user, allEmployees, allUsers,loggedInUserRole, onClose, onUpdate }) => {
   const [activeTab, setActiveTab] = useState<'info' | 'managed'>('info');
@@ -144,7 +143,7 @@ const handleLinkEmployee = async (employeeId: string | null) => {
   // 3. Office-based "Select All" Logic
 const officeAvailability = useMemo(() => {
   const stats: Record<string, string[]> = {};
-  OFFICE_LIST.forEach(office => {
+  OFFICES.forEach(office => {
     const ids = allEmployees
       .filter(emp => 
         emp.office === office && 
@@ -313,7 +312,7 @@ const handleBulkAdd = async () => {
                 <div>
                   <label className="text-xs font-bold text-gray-400 uppercase block mb-2">Assigned Offices</label>
                   <div className="grid grid-cols-2 gap-2">
-                    {OFFICE_LIST.map(office => (
+                    {OFFICES.map(office => (
                       <button
                         key={office}
                         disabled={!canEdit || loading}

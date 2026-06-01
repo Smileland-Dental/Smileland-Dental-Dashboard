@@ -6,9 +6,10 @@ import { db } from '@/lib/firebase.config';
 import { collection, query, where, getDocs, addDoc } from "firebase/firestore";
 import { AbsenceRequest } from "@/lib/types";
 import FeedbackModal from '@/components/ui/FeedbackModal';
+import { OFFICES } from '@/lib/constants';
 
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"];
-const officeLocations = ["Corporate", "Ming", "Bernard", "California", "Ortho", "Delano", "Tulare", "Visalia", "Fresno"];
+//const officeLocations = ["Corporate", "Ming", "Bernard", "California", "Ortho", "Delano", "Tulare", "Visalia", "Fresno"];
 
 interface HRCreateAbsenceModalProps {
   isOpen: boolean;
@@ -240,7 +241,7 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
                     <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Location</label>
                     <select required name="office" className="w-full p-3 bg-slate-50 rounded-xl border-none font-bold text-sm" onChange={handleChange}>
                       <option value="">Select Location</option>
-                      {officeLocations.map(o => <option key={o} value={o}>{o}</option>)}
+                      {OFFICES.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </div>
                 </div>

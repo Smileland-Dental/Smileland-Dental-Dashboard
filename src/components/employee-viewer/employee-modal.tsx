@@ -26,6 +26,8 @@ import {
 import { GeneralTab } from '@/components/employee-viewer/tabs/general-tab';
 import { EmployeeInfoTab } from '@/components/employee-viewer/tabs/employee-information-tab';
 import { IncidentNoticesTab } from '@/components/employee-viewer/tabs/incident-notices-tab';
+import { LicenseCertificatesTab } from '@/components/employee-viewer/tabs/license-certificates-tab';
+
 // 2. UPDATED: Restored the full list of types
 type TabCategory = 'general' | 'employee_information' | 'license_certificates' | 'incident_notices' | 'review' | 'leave_of_absence' | 'workers_comp' | 'edd_claims' | 'temp'; // Added more tabs to demonstrate scrolling
 
@@ -38,8 +40,6 @@ interface EmployeeModalProps {
 
 const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClose, onUpdate }) => {
   const [activeTab, setActiveTab] = useState<TabCategory>('general');
-  const [absences, setAbsences] = useState<AbsenceRequest[]>([]);
-  const [loadingHistory, setLoadingHistory] = useState<boolean>(true);
   
   // EDITING STATE
   const [isEditing, setIsEditing] = useState(false);
@@ -49,11 +49,6 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
 
   const hasUnsavedChanges = JSON.stringify(formData) !== JSON.stringify(employee) || newImageFile !== null;
 
-  const offices = ["Corporate", "Ortho", "California", "Ming", "Bernard", "Delano", "Tulare", "Visalia", "Fresno"];
-  const departments = ["Back Office", "Front Office", "Support Services", "Management", "Call Center", "Accounts Receivable", "Dentist"];
-  const jobStatuses = ["Full-Time", "Part-Time"];
-  const employmentStatuses = ["Exempt", "Non-Exempt", "Contracted"];
-  const statusOptions = ["Current", "Terminated", "On Leave"];
   const defaultProfileURL = "https://firebasestorage.googleapis.com/v0/b/smileland-dental-dashboard.firebasestorage.app/o/employee-pictures%2F.DefaultProfile%2Fprofile.png?alt=media&token=70b1a79f-1a33-4b6c-9b9b-c8e3debd209d"
 
   useEffect(() => {
@@ -63,30 +58,19 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
   }, [employee]);
 
   useEffect(() => {
+    // 1. Calculate scrollbar width
+    const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+    
+    // 2. Hide scrollbar AND add padding to "fill the gap"
     document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = 'unset'; };
-  }, []);
+    document.body.style.paddingRight = `${scrollbarWidth}px`;
 
-  /* Edit this when dealing with Absences
-  useEffect(() => {
-    if (!employee?.employeeID) return;
-    const fetchAbsences = async () => {
-      setLoadingHistory(true);
-      try {
-        const absencesCol = collection(db, 'absences');
-        const q = query(absencesCol, where('employee_id', '==', employee.employeeID));
-        const querySnapshot = await getDocs(q);
-        const absencesData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })) as AbsenceRequest[];
-        const sorted = absencesData.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-        setAbsences(sorted);
-      } catch (err) {
-        console.error("Error fetching absences:", err);
-      } finally {
-        setLoadingHistory(false);
-      }
+    return () => {
+      // 3. Reset everything when closing
+      document.body.style.overflow = 'unset';
+      document.body.style.paddingRight = '0px';
     };
-    fetchAbsences();
-  }, [employee.employeeID]);*/
+  }, []);
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -143,58 +127,6 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
     } catch (error) {
       console.error("Error updating employee:", error);
       alert("Failed to update employee information.");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleDeleteEmployee = async () => {
-    // 1. IMPORTANT: Use the Firestore Auto-ID (employee.id)
-    // This is the permanent ID we saved in AddEmployeeForm
-    const idToDelete = employee?.id;
-
-    // 2. Safety check: If ID is missing, stop immediately
-    if (!idToDelete) {
-      console.error("No Firestore Document ID found to delete");
-      alert("Error: Could not find the database record ID.");
-      return;
-    }
-
-    const confirmDelete = window.confirm(
-      `Are you sure you want to delete ${formData.firstName} ${formData.lastName}? This action cannot be undone.`
-    );
-
-    if (!confirmDelete) return;
-
-    setIsSaving(true); // Reusing isSaving to show a loading state
-    try {
-      //const employeeId = employee.employeeID;
-
-      // 1. Delete the Firestore Document
-      const employeeRef = doc(db, 'employees', idToDelete);
-      await deleteDoc(employeeRef);
-
-      // 2. Clean up Firebase Storage
-      // We list all files in the employee's folder and delete them
-      const folderRef = ref(storage, `employee-pictures/${idToDelete}`);
-
-      try {
-        const fileList = await listAll(folderRef);
-        const deletePromises = fileList.items.map((fileItem) => deleteObject(fileItem));
-        await Promise.all(deletePromises);
-      } catch (storageErr) {
-        console.warn("Storage folder was empty or already deleted:", storageErr);
-      }
-
-      alert("Employee record deleted successfully.");
-      
-      // 3. Refresh Parent and Close
-      if (onUpdate) onUpdate();
-      onClose();
-
-    } catch (error) {
-      console.error("Error deleting employee:", error);
-      alert("Failed to delete employee record.");
     } finally {
       setIsSaving(false);
     }
@@ -264,12 +196,7 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
         <EmployeeInfoTab 
           {...commonProps}
           setFormData={setFormData}
-          userRole={userRole} 
-          statusOptions={statusOptions}
-          offices={offices}
-          departments={departments}
-          jobStatuses={jobStatuses}
-          employmentStatuses={employmentStatuses}
+          userRole={userRole}
         />
       );
       
@@ -277,6 +204,13 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
         return <IncidentNoticesTab employee={employee} />;
       // 3. UPDATED: Grouped all other tabs here so they don't crash
       case 'license_certificates':
+        return (
+          <LicenseCertificatesTab 
+            isEditing={isEditing} 
+            setIsEditing={setIsEditing} 
+            handleCancelEdit={handleCancelEdit}
+          />
+        );
       case 'review':
       case 'leave_of_absence':
       case 'workers_comp':

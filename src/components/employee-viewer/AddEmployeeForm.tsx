@@ -6,6 +6,7 @@ import { doc, getDocs, setDoc, addDoc, collection, query, where } from 'firebase
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { db, storage } from '@/lib/firebase.config';
 import FeedbackModal from '@/components/ui/FeedbackModal';
+import { OFFICES } from '@/lib/constants';
 
 interface AddEmployeeFormProps {
   onSuccess: () => void;
@@ -126,7 +127,6 @@ export default function AddEmployeeForm({ onSuccess, onCancel }: AddEmployeeForm
     }
   };
 
-  const offices = ["Corporate", "Ortho", "California", "Ming", "Bernard", "Delano", "Tulare", "Visalia", "Fresno"];
   const departments = ["Back Office", "Front Office", "Support Services", "Management", "Call Center", "Accounts Receivable", "Dentist"];
   const jobStatuses = ["Full-Time", "Part-Time"];
   const employmentStatuses = ["Exempt", "Non-Exempt", "Contracted"];
@@ -184,7 +184,7 @@ export default function AddEmployeeForm({ onSuccess, onCancel }: AddEmployeeForm
                   className="w-full border p-2 rounded bg-white text-gray-700 h-[42px]" // h-[42px] matches standard input height
                 >
                   <option value="" disabled hidden>Select Office</option>
-                  {offices.map(loc => (
+                  {OFFICES.map(loc => (
                       <option key={loc} value={loc}>{loc}</option>
                     ))}
                 </select>
