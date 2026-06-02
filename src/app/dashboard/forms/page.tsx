@@ -121,7 +121,7 @@ export default function Page() {
           {/*<p className="capitalize mb-5">Role: {userRole}</p>*/}
 
           {/* Rendering logic for grouped links for managers */}
-          {userRole && ['Manager', 'HR', 'Director'].includes(userRole) && groupedOfficeLinks.length > 0 && (
+          {userRole && groupedOfficeLinks.length > 0 && (
             <div className="flex flex-wrap gap-8 w-screen sm:w-[100vw] md:w-[70vw]">
               {/* Outer loop: iterates through each office group */}
               {groupedOfficeLinks.map((officeGroup, groupIndex) => (
