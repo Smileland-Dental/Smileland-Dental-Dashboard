@@ -3,9 +3,7 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes } from 'firebase/storage';
-import { db, auth } from "@/lib/firebase.config";
-// Firebase 인증 직접 사용
-import { onAuthStateChanged } from 'firebase/auth';
+import { db } from "@/lib/firebase.config";
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 // 🔒 보안: 입력 검증 함수
@@ -14,8 +12,6 @@ function safeStr(v: unknown, max: number): string {
   return String(v).trim().slice(0, max).replace(/[<>]/g, '');
 }
 
-
-// Daily Office Duty PDF 생성 함수
 function createDailyOfficeDutyPDFDocument(props: {
   safeDutyDate: string;
   safeSelectedOffice: string;
@@ -103,8 +99,8 @@ function createDailyOfficeDutyPDFDocument(props: {
     { main: 'Total lab case deposits/deliveries', details: 'Name/DOB' },
     { main: 'Check all undelivered lab cases and make appointments', details: 'Any Lab case that is more than 3 weeks old must be sent to corporate along with $20 deposit' },
     { main: 'Check all lab cases for next day', details: 'Call lab for next day pick up\'s' },
-    { main: 'N₂O/ Compressor Off', details: null },
-    { main: 'Did you read the meter on the Oxygen/N₂O/Helium tank?', details: null },
+    { main: 'N2O/ Compressor Off', details: null },
+    { main: 'Did you read the meter on the Oxygen/N2O/Helium tank?', details: null },
     { main: 'How many tanks are empty & need to be replaced?', details: null },
     { main: 'Check restrooms initial logs hourly', details: null },
     { main: 'Swept/Mopped', details: null },
@@ -345,13 +341,6 @@ export default function DailyOfficeDuties() {
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
-  const [OfficesOptions, setOfficesOptions] = useState<string[]>([]);
-  
-  // Rate limiting을 위한 ref
-  const lastUpdateDutyDataCall = useRef<number>(0);
-  const lastSubmitCall = useRef<number>(0);
-  const fieldRateLimit = useRef<Record<string, number>>({});
   
   // 사용자 세션 ID 생성 (페이지 로드 시 한 번만)
   const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
@@ -615,62 +604,13 @@ export default function DailyOfficeDuties() {
     };
   }, [dutyDate, selectedOffice]);
 
-  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
+  // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
   useEffect(() => {
-    // Firebase Auth 상태 변경 감지
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      try {
-        if (!currentUser) {
-          setIsAuthorized(false);
-          return;
-        }
-
-        // Firestore에서 사용자 role 확인
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (!userDoc.exists()) {
-          setIsAuthorized(false);
-          return;
-        }
-
-        const userData = userDoc.data();
-
-        if (userData?.role !== 'Manager' && userData?.role !== 'Employee') {
-          setIsAuthorized(false);
-          return;
-        }
-
-        setIsAuthorized(true);
-
-        // offices 처리: 배열이거나 단일 값일 수 있음
-        if (userData?.offices) {
-          const officesArray = Array.isArray(userData.offices) 
-            ? userData.offices 
-            : [userData.offices];
-          const validOptions = officesArray.filter((g: string) => officeOptions.includes(g));
-          if (validOptions.length > 0) {
-            setOfficesOptions(validOptions);
-            if (validOptions.length === 1) {
-              setSelectedOffice(validOptions[0]);
-            }
-          }
-        }
-      } catch (error: any) {
-        setIsAuthorized(false);
-      }
-    });
-
-    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
-    if (process.env.NODE_ENV === 'production' && 
-        typeof window !== 'undefined' && 
+    if (process.env.NODE_ENV === 'production' &&
+        typeof window !== 'undefined' &&
         window.location.protocol !== 'https:') {
-      // HTTP로 접속한 경우 HTTPS로 리다이렉트
       window.location.href = window.location.href.replace('http:', 'https:');
     }
-
-    // cleanup 함수
-    return () => {
-      unsubscribe();
-    };
   }, []);
 
   // 컴포넌트 마운트 시 초기 로드는 dutyDate 변경 시 로드로 대체됨
@@ -682,25 +622,7 @@ export default function DailyOfficeDuties() {
     return value.slice(0, maxLength).replace(/[<>]/g, '');
   };
 
-  // 데이터 업데이트 함수 (Rate limiting 적용)
   const updateDutyData = (field: string, value: string) => {
-    // Rate limiting: 입력 반응성을 위해 완화된 제한 적용
-    // (자동 저장은 별도 debounce로 처리되므로 입력 자체는 빠르게 반응)
-    const now = Date.now();
-    const lastCall = fieldRateLimit.current[field] || 0;
-
-    // 전역 rate limiting: 모든 업데이트에 대해 50ms 제한 (입력 반응성 향상)
-    if (now - lastUpdateDutyDataCall.current < 50) {
-      return;
-    }
-    lastUpdateDutyDataCall.current = now;
-
-    // 개별 필드 rate limiting: 동일 필드에 대해 100ms 제한 (입력 반응성 향상)
-    if (now - lastCall < 100) {
-      return;
-    }
-    fieldRateLimit.current[field] = now;
-
     // 🔒 보안: 입력 검증 및 길이 제한
     const validatedValue = validateInput(value, 500);
     
@@ -775,16 +697,7 @@ export default function DailyOfficeDuties() {
   };
 
 
-  // 제출 처리 (Rate limiting 적용)
   const handleSubmit = async () => {
-    // Rate limiting: 최근 3초 내 호출 방지 (PDF 생성은 무거운 작업)
-    const now = Date.now();
-    if (now - lastSubmitCall.current < 3000) {
-      alert('⚠️ Please try again.');
-      return;
-    }
-    lastSubmitCall.current = now;
-
     // 확인 다이얼로그
     const confirmed = confirm('Would you like to submit?');
     if (!confirmed) {
@@ -1078,48 +991,6 @@ export default function DailyOfficeDuties() {
     };
   }, [loading]);
 
-  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
-  if (isAuthorized === null) {
-    return (
-      <div style={styles.body}>
-        <div style={{
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          height: '100vh',
-          background: 'linear-gradient(135deg, #fce4ec 0%, #f8bbd0 100%)',
-          fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
-        }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
-            <div style={{ fontSize: '18px', color: '#2c3e50' }}>Verifying authentication...</div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (isAuthorized === false) {
-    return (
-      <div style={styles.body}>
-        <div style={{
-          display: 'flex',
-          justifyContent: 'center',
-          alignItems: 'center',
-          height: '100vh',
-          background: 'linear-gradient(135deg, #fce4ec 0%, #f8bbd0 100%)',
-          fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
-        }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
-            <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
-            <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <>
       <style>{`
@@ -1251,35 +1122,21 @@ export default function DailyOfficeDuties() {
               required
             />
           </div>
-          {OfficesOptions.length > 0 && (
-            <div style={styles.formGroup}>
-              <label style={styles.label} htmlFor="selectedOffice">Office:</label>
-              {OfficesOptions.length === 1 ? (
-                <span style={{
-                  ...styles.input,
-                  display: 'inline-block',
-                  backgroundColor: '#e9ecef',
-                  fontWeight: '600',
-                  color: '#2c3e50'
-                }}>
-                  {selectedOffice}
-                </span>
-              ) : (
-                <select
-                  id="selectedOffice"
-                  value={selectedOffice}
-                  onChange={(e) => setSelectedOffice(e.target.value)}
-                  style={styles.input}
-                  required
-                >
-                  <option value="">-- Select Office --</option>
-                  {OfficesOptions.map(office => (
-                    <option key={office} value={office}>{office}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-          )}
+          <div style={styles.formGroup}>
+            <label style={styles.label} htmlFor="selectedOffice">Office:</label>
+            <select
+              id="selectedOffice"
+              value={selectedOffice}
+              onChange={(e) => setSelectedOffice(e.target.value)}
+              style={styles.input}
+              required
+            >
+              <option value="">-- Select Office --</option>
+              {officeOptions.map(office => (
+                <option key={office} value={office}>{office}</option>
+              ))}
+            </select>
+          </div>
         </div>
 
         {/* 업무 테이블 */}
