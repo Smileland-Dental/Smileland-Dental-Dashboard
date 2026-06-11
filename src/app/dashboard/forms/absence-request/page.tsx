@@ -153,11 +153,11 @@ export default function Page() {
             <h2 className="text-2xl font-bold text-center mb-6">Employee Login</h2>
             <div className="mb-4">
               <label htmlFor="employeeId" className="block text-gray-700">Employee ID</label>
-              <input type="text" id="employeeId" value={employeeID} onChange={(e) => setEmployeeID(e.target.value)} className="w-full p-2 border rounded" required />
+              <input type="text" id="employeeId" value={employeeID} onChange={(e) => setEmployeeID(e.target.value)} className="w-full p-2 border rounded" required autoComplete="off"/>
             </div>
             <div className="mb-6">
               <label htmlFor="birthYear" className="block text-gray-700">Birth Year</label>
-              <input type="text" id="birthYear" value={year} onChange={(e) => setYear(e.target.value)} className="w-full p-2 border rounded" required />
+              <input type="text" id="birthYear" value={year} onChange={(e) => setYear(e.target.value)} className="w-full p-2 border rounded" required autoComplete="off"/>
             </div>
             <button type="submit" className="w-full bg-blue-500 text-white p-2 rounded cursor-pointer">Login</button>
             {error && <p className="text-red-500 text-center mt-4">{error}</p>}
