@@ -15,7 +15,7 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
   const [statusFilter, setStatusFilter] = useState('all');
 
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5; // Adjust this number as needed
+  const itemsPerPage = 20; // Adjust this number as needed
 
   // Reset to page 1 whenever filters or search change
   useEffect(() => {
@@ -87,6 +87,7 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
               <tr>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Employee</th>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Type</th>
+                <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Office</th>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Incident Dates</th>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Submitted</th>
                 <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
@@ -110,10 +111,11 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
                         {req.type_of_incident}
                       </span>
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{req.office}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <div className="flex items-center gap-2 text-sm text-gray-600">
                         <Calendar className="h-3.5 w-3.5 text-gray-400" />
-                        {(req.incident_start === req.incident_end) ? (<span>{req.incident_start}</span>) : (<span>{req.incident_start} - {req.incident_end}</span>)}
+                        {(req.incident_start === req.incident_end) ? (<span>{(req.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')}</span>) : (<span>{(req.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')} - {(req.incident_end).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')}</span>)}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">

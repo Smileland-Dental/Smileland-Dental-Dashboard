@@ -12,7 +12,7 @@ const UserCard: React.FC<UserCardProps> = ({ user, onClick }) => {
   return (
     <div
       onClick={onClick}
-      className="bg-white rounded-lg shadow-md p-4 flex flex-col items-center text-center cursor-pointer hover:shadow-xl hover:scale-105 transition-transform duration-200"
+      className="bg-gray-50 rounded-lg shadow-md p-4 flex flex-col items-center text-center cursor-pointer hover:shadow-xl hover:scale-105 transition-transform duration-200"
     >
       <h3 className="text-xl font-semibold text-gray-800">{user.username || 'No Name'}</h3>
       <p className="text-gray-500">{user.email || 'No Email'}</p>

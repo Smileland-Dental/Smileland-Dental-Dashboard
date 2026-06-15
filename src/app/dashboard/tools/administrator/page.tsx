@@ -71,7 +71,7 @@ export default function AdministratorUsersPage() {
 
   return (
     <ProtectedRoute allowedRoles={['HR', 'Director']}>
-      <div className="p-4 min-h-screen bg-gray-50">
+      <div className="p-4 min-h-screen bg-white">
         <div className="max-w-6xl mx-auto">
           <header className="flex justify-between items-center mb-8">
             <div>

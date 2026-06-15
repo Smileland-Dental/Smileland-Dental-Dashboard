@@ -13,7 +13,7 @@ import { HRRequestDetailsModal } from "@/components/approval/hr-request-details-
 import { HRCreateAbsenceModal } from "@/components/forms/absence-request/hr-absence";
 import * as XLSX from 'xlsx';
 
-const itemsPerPage = 10;
+const itemsPerPage = 20;
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift", "Cancel Cell"];
 
 export default function Page() {
@@ -25,7 +25,11 @@ export default function Page() {
     d.setDate(d.getDate() - 30);
     return d.toISOString().split('T')[0];
   });
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().split('T')[0];
+  });
 
   const [absences, setAbsences] = useState<AbsenceRequest[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -145,7 +149,7 @@ export default function Page() {
   if (authLoading) return <div className="p-8 text-center font-bold">Verifying Permissions...</div>;
 
   return (
-    <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6 bg-white min-h-screen">
+    <div className="p-4 md:p-8 max-w-screen mx-auto space-y-6 bg-white min-h-screen">
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-3xl font-black text-slate-900 tracking-tight">HR Absence Table</h1>
@@ -196,6 +200,7 @@ export default function Page() {
             <tr>
               <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Employee</th>
               <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Type</th>
+              <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Office</th>
               <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Dates</th>
               <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Submitted</th>
               <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
@@ -209,32 +214,33 @@ export default function Page() {
             ) : paginated.length > 0 ? (
               paginated.map(a => (
               <tr key={a.id} className="hover:bg-slate-50/50 group transition-colors">
-                <td className="px-8 py-4">
+                <td className="px-6 py-4">
                   <div className="font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">{a.employee_name}</div>
                   <div className="text-[10px] font-mono text-slate-400">ID: {a.employee_id}</div>
                 </td>
-                <td className="px-8 py-4 text-sm font-medium text-slate-600">
+                <td className="px-4 py-4 text-sm font-medium text-slate-600">
                   <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded-md">
                     {/*a.type_of_incident === "Leave and Come Back" ? "LACB" : */}  
                     {a.type_of_incident}
                   </span>  
                 </td>
-                <td className="px-8 py-4 whitespace-nowrap">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{a.office}</td>
+                <td className="px-6 py-4 whitespace-nowrap">
                   <div className="flex items-center gap-2 text-sm text-gray-600">
                     <Calendar className="h-3.5 w-3.5 text-gray-400" />
-                    {(a.incident_start === a.incident_end) ? (<span>{a.incident_start}</span>) : (<span>{a.incident_start} - {a.incident_end}</span>)}
+                    {(a.incident_start === a.incident_end) ? (<span>{(a.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')}</span>) : (<span>{(a.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')} - {(a.incident_end).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')}</span>)}
                   </div>
                 </td>
-                <td className="px-8 py-4 whitespace-nowrap text-sm text-gray-500">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                     {a.createdAt?.toDate ? a.createdAt.toDate().toLocaleDateString() : 'N/A'}
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap">
+                <td className="px-5 py-4 whitespace-nowrap">
                   <StatusBadge req={a} />
                 </td>
                 <td className="whitespace-nowrap">
-                  <div className="px-2 text-sm font-bold text-slate-900">{a.DOAPoints ? a.DOAPoints : '0'}</div>
+                  <div className="px-1 text-sm font-bold text-slate-900">{a.DOAPoints ? a.DOAPoints : '0'}</div>
                 </td>
-                <td className="px-6 py-4 text-right">
+                <td className="px-3 py-4 text-right">
                   <button onClick={() => setSelectedAbsence(a)} className="p-2 text-black hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all">
                     <Edit3 className="h-5 w-5"/>
                   </button>

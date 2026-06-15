@@ -27,7 +27,9 @@ export default function Page() {
     return d.toISOString().split('T')[0];
   });
   const [endDate, setEndDate] = useState(() => {
-    return new Date().toISOString().split('T')[0];
+    const d = new Date();
+    d.setDate(d.getDate() + 30); // Default to next 30 days
+    return d.toISOString().split('T')[0];
   });
 
   const [selectedRequest, setSelectedRequest] = useState<AbsenceRequest | null>(null);

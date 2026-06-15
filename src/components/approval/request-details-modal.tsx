@@ -81,7 +81,7 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
               <div>
                 <label className="text-[10px] font-bold text-gray-400 uppercase">Dates</label>
                 <p className="text-sm font-semibold">
-                  {(selectedRequest.incident_start === selectedRequest.incident_end) ? selectedRequest.incident_start : `${selectedRequest.incident_start} — ${selectedRequest.incident_end}`}
+                  {(selectedRequest.incident_start === selectedRequest.incident_end) ? (selectedRequest.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1') : `${(selectedRequest.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')} — ${(selectedRequest.incident_end).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')}`}
                 </p>
               </div>
 

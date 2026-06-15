@@ -11,13 +11,17 @@ type RequestTableProps = {
 };
 
 export const AbsenceTable: React.FC<RequestTableProps> = ({ requests, status, onViewDetails }) => {
-  // --- Date Filter State (Default to last 30 days) ---
+  // --- Date Filter State (Default to -30 to +30 days) ---
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 30);
     return d.toISOString().split('T')[0];
   });
-  const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState(() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 30);
+    return d.toISOString().split('T')[0];
+  });
 
   const [typeFilter, setTypeFilter] = useState('all');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -144,8 +148,8 @@ export const AbsenceTable: React.FC<RequestTableProps> = ({ requests, status, on
                       <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
                         <Calendar className="h-3.5 w-3.5 text-slate-400" />
                         {req.incident_start === req.incident_end 
-                          ? req.incident_start 
-                          : `${req.incident_start} - ${req.incident_end}`}
+                          ? (req.incident_start.replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')) 
+                          : `${req.incident_start.replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')} - ${req.incident_end.replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')}`}
                       </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">

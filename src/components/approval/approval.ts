@@ -38,7 +38,8 @@ const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
 
     // 2. Logic: If no specific employees are managed, fetch EVERYTHING (Global Access)
     // This applies to HR/Directors who don't have a specific team assigned.
-    if (managedEmployeeIds.length === 0 && ["HR", "Director"].includes(userRole)) {
+    // CHANGED: HR/Directors now see all requests across the system, not just their offices, to align with the new requirement.
+    if (["HR", "Director"].includes(userRole)) {
       const globalQuery = query(absencesRef, where("createdAt", ">=", start), where("createdAt", "<=", end));
       const snap = await getDocs(globalQuery);
       allRequests = snap.docs.map(doc => ({ 
@@ -47,8 +48,8 @@ const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
       } as AbsenceRequest));
     }
 
-    // 3. Logic: Filtered access for Managers (or HR/Directors with a specific team)
-    else {
+    // 3. Logic: Filtered access for Managers as long as they have employees assigned. They see requests ONLY from their managed employees, regardless of office.
+    else if (userRole === "Manager" && managedEmployeeIds.length > 0) {
       // Chunk the IDs to stay under the Firestore 30-item limit
       const chunks = chunkArray(managedEmployeeIds, 30);
       
