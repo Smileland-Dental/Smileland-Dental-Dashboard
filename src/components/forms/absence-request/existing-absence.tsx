@@ -74,14 +74,32 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files) {
+    if (e.target.files && e.target.files.length > 0) {
       setNewExcuseNotes(prev => [...prev, ...Array.from(e.target.files!)]);
+      setFormData(prev => ({
+        ...prev,
+        excuse_note_submitted: 'submitted'
+      }));
       setIsChecked(false);
     }
   };
 
   const handleToggleRemoveExistingNote = (url: string) => {
-    setNotesToRemove(prev => prev.includes(url) ? prev.filter(u => u !== url) : [...prev, url]);
+    setNotesToRemove(prev => {
+      const isRemoving = !prev.includes(url);
+      const nextNotesToRemove = isRemoving ? [...prev, url] : prev.filter(u => u !== url);
+      
+      const existingNotesCount = (absence.excuse_note || []).length - nextNotesToRemove.length;
+      
+      // If we have files staged or remaining, keep it 'submitted'. Otherwise, wipe it.
+      if (newExcuseNotes.length === 0 && existingNotesCount === 0) {
+        setFormData(f => ({ ...f, excuse_note_submitted: 'not_provided' }));
+      } else {
+        setFormData(f => ({ ...f, excuse_note_submitted: 'submitted' }));
+      }
+
+      return nextNotesToRemove;
+    });
     setIsChecked(false);
   };
 
@@ -278,79 +296,131 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
               <textarea name="employee_comments" value={formData.employee_comments} onChange={handleChange} disabled={isDenied} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" rows={2} />
             </div>
 
-            {/* File Management */}
-            <div className={`p-4 rounded-lg space-y-3 mt-1 ${isDenied ? 'bg-slate-50 border border-slate-200' : 'bg-blue-50 border border-blue-200'}`}>
-              <p className={`text-xs font-bold uppercase ${isDenied ? 'text-slate-500' : 'text-blue-800'}`}>Notes & Files</p>
-        
-              {absence.excuse_note?.map((url: string, i: number) => {
-                const decodedPath = decodeURIComponent(url.split('/o/')[1].split('?')[0]);
-                const fileName = decodedPath.split('/').pop();
+          {/* File Management Container */}
+          <div className={`p-4 rounded-lg space-y-3 mt-1 ${isDenied ? 'bg-slate-50 border border-slate-200' : 'bg-blue-50 border border-blue-200'}`}>
+            <p className={`text-xs font-bold uppercase ${isDenied ? 'text-slate-500' : 'text-blue-800'}`}>Notes & Files</p>
 
-                return (
-                  <div key={i} className="flex justify-between items-center bg-white p-2 rounded border border-slate-100">
-                    <a href={url} target="_blank" rel="noreferrer" className="text-xs truncate max-w-[250px] font-medium text-blue-600 hover:underline">
-                      {fileName}
-                    </a>
-                    {/* Hide Remove button if Denied */}
-                    {!isDenied && (
-                      <button type="button" onClick={() => handleToggleRemoveExistingNote(url)} className="text-[10px] font-bold text-red-500 uppercase ml-2 hover:bg-red-50 px-2 py-1 rounded">
-                        {notesToRemove.includes(url) ? 'Undo' : 'Remove'}
-                      </button>
-                    )}
+            {/* 1. Existing Uploaded Files Array */}
+            {absence.excuse_note?.map((url: string, i: number) => {
+              const decodedPath = decodeURIComponent(url.split('/o/')[1].split('?')[0]);
+              const fileName = decodedPath.split('/').pop();
+              const isMarkedForDeletion = notesToRemove.includes(url);
+
+              return (
+                <div key={i} className={`flex justify-between items-center bg-white p-2 rounded border border-slate-100 ${isMarkedForDeletion ? 'bg-rose-50/60 border-rose-100 text-slate-400' : 'bg-white border-slate-100 text-slate-700'}`}>
+                  <a 
+                    href={url} 
+                    target="_blank" 
+                    rel="noreferrer" 
+                    className={`text-xs truncate max-w-[250px] font-medium text-blue-600 hover:underline ${isMarkedForDeletion ? 'line-through text-slate-400' : ''}`}
+                  >
+                    {fileName}
+                  </a>
+                  {!isDenied && (
+                    <button type="button" onClick={() => handleToggleRemoveExistingNote(url)} className={`text-[10px] font-bold uppercase ml-2 px-2 py-1 rounded ${isMarkedForDeletion ? 'text-green-600 hover:bg-green-50' : 'text-red-500 hover:bg-red-50'}`}>
+                      {isMarkedForDeletion ? 'Undo Delete' : 'Remove'}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* 2. Brand New Staged Files Preview List (Crucial Missing Feature!) */}
+            {newExcuseNotes.length > 0 && (
+              <div className="space-y-1.5 pt-1 border-t border-blue-100/50">
+                <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">Staged for Upload:</p>
+                {newExcuseNotes.map((file, idx) => (
+                  <div key={idx} className="flex justify-between items-center bg-blue-50/50 p-2 rounded border border-blue-100 animate-in fade-in-50 duration-200">
+                    <span className="text-xs font-medium text-slate-700 truncate max-w-[250px]">{file.name}</span>
+                    <button 
+                      type="button" 
+                      onClick={() => {
+                        setNewExcuseNotes(prev => {
+                          const updatedFiles = prev.filter((_, i) => i !== idx);
+                          
+                          // 💡 If there are no more new files staged, and no surviving old files, revert back
+                          const existingNotesCount = (absence.excuse_note || []).length - notesToRemove.length;
+                          if (updatedFiles.length === 0 && existingNotesCount === 0) {
+                            setFormData(f => ({ ...f, excuse_note_submitted: 'not_provided' }));
+                          }
+                          
+                          return updatedFiles;
+                        });
+                        setIsChecked(false);
+                      }}
+                      className="text-[10px] font-bold text-red-500 hover:bg-red-50 px-2 py-1 rounded uppercase"
+                    >
+                      Cancel
+                    </button>
                   </div>
-                );
-              })}
+                ))}
+              </div>
+            )}
 
-              {/* Hide File Upload if Denied */}
-              {!isDenied && (
-                <input type="file" multiple onChange={(e) => { if (e.target.files) setNewExcuseNotes(prev => [...prev, ...Array.from(e.target.files!)]); }} className="text-xs w-full file:mr-4 file:py-1 file:px-3 file:rounded file:border-0 file:bg-blue-600 file:text-white file:cursor-pointer" />
-              )}
-            </div>
+            {/* 3. Standard File Selector Input Trigger */}
+            {!isDenied && (
+            <div className="relative mt-2">
+                <label 
+                  htmlFor="file-upload" 
+                  className="inline-block text-xs font-bold uppercase bg-blue-600 text-white py-1.5 px-4 rounded cursor-pointer shadow-sm hover:bg-blue-700 transition"
+                >
+                  Browse Files
+                </label>
+                <input 
+                  id="file-upload" // 👈 Tied to the label above
+                  type="file" 
+                  multiple 
+                  onChange={handleFileChange}
+                  className="hidden" // 👈 Hides the ugly native browser text and "Choose File" button entirely!
+                />
+              </div>
+            )}
+          </div>
 
             {changed && !isDenied && (
-  <div className="flex items-start gap-2 px-1 pt-2 animate-in fade-in slide-in-from-top-1 duration-300">
-    <input 
-      type="checkbox" 
-      id="confirm-update" 
-      checked={isChecked} 
-      onChange={(e) => setIsChecked(e.target.checked)} 
-      className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer" 
-    />
-    <label htmlFor="confirm-update" className="text-xs text-gray-600 leading-tight cursor-pointer">
-      I confirm these updates are accurate. <span className="font-bold text-gray-800">Note: This will reset the approval status to pending.</span>
-    </label>
-  </div>
-)}
+              <div className="flex items-start gap-2 px-1 pt-2 animate-in fade-in slide-in-from-top-1 duration-300">
+                <input 
+                  type="checkbox" 
+                  id="confirm-update" 
+                  checked={isChecked} 
+                  onChange={(e) => setIsChecked(e.target.checked)} 
+                  className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer" 
+                />
+                <label htmlFor="confirm-update" className="text-xs text-gray-600 leading-tight cursor-pointer">
+                  I confirm these updates are accurate. <span className="font-bold text-gray-800">Note: This will reset the approval status to pending.</span>
+                </label>
+              </div>
+            )}
 
             {/* Footer Buttons */}
-<div className="flex items-center justify-between mt-6 border-t pt-5">
-  {/* ID on the left */}
-  <div className="text-[10px] font-mono text-gray-400 uppercase tracking-widest">
-    ID: <span className="select-all font-bold text-gray-500">{absence.id}</span>
-  </div>
+            <div className="flex items-center justify-between mt-6 border-t pt-5">
+              {/* ID on the left */}
+              <div className="text-[10px] font-mono text-gray-400 uppercase tracking-widest">
+                ID: <span className="select-all font-bold text-gray-500">{absence.id}</span>
+              </div>
 
-  {/* Buttons on the right */}
-  <div className="flex gap-3">
-    <button 
-      type="button" 
-      onClick={onClose} 
-      className="px-5 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-md transition"
-    >
-      {isDenied ? 'Close' : 'Cancel'}
-    </button>
-    
-    {!isDenied && (
-      <button 
-        type="submit" 
-        // Logic: Button is enabled ONLY if data changed AND user checked the box
-        disabled={!changed || !isChecked || isSubmitting} 
-        className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition shadow-sm"
-      >
-        {isSubmitting ? 'Saving...' : 'Save Changes'}
-      </button>
-    )}
-  </div>
-</div>
+              {/* Buttons on the right */}
+              <div className="flex gap-3">
+                <button 
+                  type="button" 
+                  onClick={onClose} 
+                  className="px-5 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 rounded-md transition"
+                >
+                  {isDenied ? 'Close' : 'Cancel'}
+                </button>
+                
+                {!isDenied && (
+                  <button 
+                    type="submit" 
+                    // Logic: Button is enabled ONLY if data changed AND user checked the box
+                    disabled={!changed || !isChecked || isSubmitting} 
+                    className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition shadow-sm"
+                  >
+                    {isSubmitting ? 'Saving...' : 'Save Changes'}
+                  </button>
+                )}
+              </div>
+            </div>
           </form>
         </div>
       </div>
