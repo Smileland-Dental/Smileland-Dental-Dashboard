@@ -37,7 +37,7 @@ export default function LobbyInspectionPage() {
     "Ming": ["Hopie", "Kindal", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Dianne"],
-    "Visalia": ["Abby", "Dianne", "Jessica"]
+    "Visalia": ["Abby", "Dianne", "Jessica", "Renee"]
   };
 
   /** Task checkbox columns: Row{N}_Col3 … Row{N}_Col13 */
