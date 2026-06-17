@@ -50,19 +50,16 @@ export default function Page() {
         setError(null);
         try {
           const requests = await getAbsenceRequestsByUser(
-          user, startDate, endDate
-        );
-          setAllRequests(requests as AbsenceRequest[]);
+            user, startDate, endDate
+          ); // Filter out archived requests at this stage
+          setAllRequests((requests as AbsenceRequest[]).filter(r => r.status !== 'archived'));
         } catch (err: any) {
           console.error("Error fetching requests:", err);
           setError("Failed to load requests. Please try again later.");
         } finally {
           setLoadingRequests(false);
         }
-      } else if (user) {
-        // User exists but has no offices assigned
-        setAllRequests([]);
-      }
+      } 
     };
 
     if (!authLoading) {
@@ -155,8 +152,8 @@ export default function Page() {
 
       setAllRequests(prevRequests =>
         prevRequests.map(req =>
-          req.id === selectedRequest.id ? { ...req, ...updateData } : req
-        )
+          (req.id === selectedRequest.id ? { ...req, ...updateData } : req)
+        ).filter(req => req.status !== 'archived')
       );
 
       handleCloseModal();

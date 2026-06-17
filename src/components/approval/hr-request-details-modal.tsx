@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo } from 'react';
-import { X, Clock, MessageSquare, Save, Trash2, AlertCircle, FileText, User, Plus, Paperclip } from 'lucide-react';
+import { X, Clock, MessageSquare, Save, Archive, ArchiveRestore, AlertCircle, FileText, User, Plus, Paperclip } from 'lucide-react';
 import { AbsenceRequest } from "@/lib/types";
 import { ref, uploadBytes, getDownloadURL, deleteObject} from "firebase/storage";
 import { storage } from '@/lib/firebase.config';
@@ -12,11 +12,11 @@ interface HRDetailsProps {
   userName: string;
   onClose: () => void;
   onUpdate: (updated: AbsenceRequest) => void;
-  onDelete: (id: string) => void;
+  onArchive: (id: string) => void;
   isSaving: boolean;
 }
 
-export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, onDelete, isSaving }: HRDetailsProps) => {
+export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, onArchive, isSaving }: HRDetailsProps) => {
   const [tempData, setTempData] = React.useState<AbsenceRequest>(absence);
 
   const [deleteFiles, setDeleteFiles] = React.useState<string[]>([]);
@@ -487,10 +487,10 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
               <input 
                 type="number" 
                 min="0" 
-                step="0.5" 
+                step="any"
                 value={tempData.DOAPoints || ''} 
                 onChange={e => setTempData({...tempData, DOAPoints: parseFloat(e.target.value) || 0})}
-                className="w-16 h-10 text-center font-bold text-lg bg-white rounded-xl border-none shadow-inner focus:ring-2 focus:ring-blue-400"
+                className="w-20 h-10 text-center font-bold text-lg bg-white rounded-xl border-none shadow-inner focus:ring-2 focus:ring-blue-400"
                 placeholder="0"
               />
             </div>
@@ -519,9 +519,15 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
 
           {/* Footer Actions */}
           <div className="flex gap-3 pt-4">
-            <button type="button" onClick={() => onDelete(absence.id)} className="p-4 text-rose-500 bg-rose-50 rounded-2xl shadow-xl hover:bg-rose-100 transition-colors">
-              <Trash2 className="h-5 w-5"/>
-            </button>
+            {absence.status !== 'archived' ? (
+              <button type="button" onClick={() => onArchive(absence.id)} className="p-4 text-rose-500 bg-rose-50 rounded-2xl shadow-xl hover:bg-rose-100 transition-colors">
+                <Archive className="h-5 w-5"/>
+              </button>
+            ) : (
+              <button type="button" onClick={() => onArchive(absence.id)} className="p-4 text-emerald-500 bg-emerald-50 rounded-2xl shadow-xl hover:bg-emerald-100 transition-colors">
+                <ArchiveRestore className="h-5 w-5"/>
+              </button>
+            )}
             <button 
               type="submit" 
               disabled={isSaving || !hasChanges} 

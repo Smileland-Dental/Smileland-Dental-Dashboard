@@ -8,11 +8,12 @@ import { AbsenceRequest } from "@/lib/types";
 import { getAbsenceRequestsByUser } from '@/components/approval/approval';
 
 // UI Components
-import { Search, ChevronLeft, ChevronRight, Edit3, Calendar, FileDown, Plus } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Edit3, Calendar, FileDown, Plus, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
 import { HRRequestDetailsModal } from "@/components/approval/hr-request-details-modal";
 import { HRCreateAbsenceModal } from "@/components/forms/absence-request/hr-absence";
 import * as XLSX from 'xlsx';
 
+import { OFFICES } from '@/lib/constants';
 const itemsPerPage = 20;
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift", "Cancel Cell"];
 
@@ -33,6 +34,8 @@ export default function Page() {
 
   const [absences, setAbsences] = useState<AbsenceRequest[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
+  const [officeFilter, setOfficeFilter] = useState('all');
+  const [activeFilter, setActiveFilter] = useState('active');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedAbsence, setSelectedAbsence] = useState<AbsenceRequest | null>(null);
   const [isAdding, setIsAdding] = useState(false);
@@ -65,11 +68,15 @@ export default function Page() {
   // --- Client-Side Search (Operating on the server-filtered set) ---
   const filteredRequests = useMemo(() => {
     const term = searchTerm.toLowerCase().trim();
-    return absences.filter((a) => 
-      a.employee_name.toLowerCase().includes(term) || 
-      String(a.employee_id || '').toLowerCase().includes(term)
+    return absences.filter((a) =>
+
+      ((a.status || 'active') === activeFilter) &&
+      (officeFilter === 'all' || a.office === officeFilter) && (
+        a.employee_name.toLowerCase().includes(term) || 
+        String(a.employee_id || '').toLowerCase().includes(term)
+      )
     );
-  }, [absences, searchTerm]);
+  }, [absences, searchTerm, officeFilter, activeFilter]);
 
   const paginated = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
@@ -107,43 +114,39 @@ export default function Page() {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    const confirmDelete = window.confirm("Are you sure? This will permanently remove the request and all attached files.");
-    if (!confirmDelete) return;
+  const handleArchive = async (id: string) => {
+    const currentAbsenceRequest = absences.find(req => req.id === id);
+    const currentStatus = currentAbsenceRequest?.status || 'active';
+    const isArchived = currentStatus === 'archived';
+
+    const nextStatus = isArchived ? 'active' : 'archived';
+
+    const confirmArchive = window.confirm('Are you sure? This will ' + (isArchived ? 'restore' : 'archive') + ' this request.');
+    if (!confirmArchive) return;
 
     try {
-    // 2. Identify the target (the request being deleted)
-    // We use selectedAbsence because it contains the list of file URLs
-    if (selectedAbsence?.excuse_note && selectedAbsence.excuse_note.length > 0) {
-      console.log("Cleaning up storage files...");
-      
-      // 3. Loop through and delete each physical file from Storage
-      const deletePromises = selectedAbsence.excuse_note.map((url) => {
-        const fileRef = ref(storage, url);
-        return deleteObject(fileRef).catch(err => {
-          console.warn(`Could not delete file at ${url}:`, err);
-          // We catch inside the map so one missing file doesn't stop the whole process
-        });
+      const newTime = new Date();
+      await updateDoc(doc(db, "absences", id), {
+        status: nextStatus,
+        updatedAt: newTime,
       });
 
-      await Promise.all(deletePromises);
-    }
-
-    // 4. Delete the document from Firestore
-    await deleteDoc(doc(db, "absences", id));
-
-    // 5. Update UI State
-    // Remove it from the local list so the table updates
-    setAbsences((prev) => prev.filter((item) => item.id !== id));
+      setAbsences((prev) =>
+        prev.map((item) =>
+          item.id === id 
+            ? { ...item, status: nextStatus, updatedAt: Timestamp.fromDate(newTime) } 
+            : item
+        )
+      );
     
     // Close the modal
     setSelectedAbsence(null);
-
-    alert("Request and all associated files deleted.");
-  } catch (error) {
-    console.error("Critical error during deletion:", error);
-    alert("An error occurred. The database record may still exist.");
-  }
+    alert("Request has been " + (isArchived ? 'restored' : 'archived') + " successfully!");
+    } 
+    catch (error) {
+      console.error("Critical error during " + (isArchived ? 'restore' : 'archive') + ":", error);
+      alert("An error occurred. The status change may not have saved.");
+    }
   }
 
   if (authLoading) return <div className="p-8 text-center font-bold">Verifying Permissions...</div>;
@@ -165,9 +168,9 @@ export default function Page() {
         </div>
       </div>
 
-      {/* Control Bar: Search + Dates */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-white p-4 rounded-[2rem] shadow-sm border border-slate-100">
-        <div className="md:col-span-2 relative">
+      {/* Control Bar: Search + Offices + Active Status + Dates */}
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 bg-white p-4 rounded-[2rem] shadow-sm border border-slate-100">
+        <div className="col-span-2 md:col-span-2 relative">
           <Search className="absolute left-4 top-3 text-gray-400 h-5 w-5" />
           <input 
             className="w-full pl-12 pr-4 py-2.5 rounded-xl border-none bg-slate-50 focus:ring-2 focus:ring-indigo-500 text-sm font-medium" 
@@ -176,14 +179,38 @@ export default function Page() {
             onChange={e => setSearchTerm(e.target.value)} 
           />
         </div>
-        <div className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+        <div className="flex grid-cols-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+          <select
+            className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0"
+            value={activeFilter}
+            onChange={e => setActiveFilter(e.target.value)}
+          >
+            <option value="active">Active</option>
+            <option value="archived">Archived</option>
+          </select>
+        </div>
+        <div className="flex grid-cols-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+          <select 
+            className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0" 
+            value={officeFilter} 
+            onChange={e => setOfficeFilter(e.target.value)}
+          >
+            <option value="all">All Offices</option>
+            {OFFICES.map(office => (
+              <option key={office} value={office}>
+                {office}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex grid-cols-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
           {/*<Calendar className="h-4 w-4 text-slate-400" />*/}
           <div className="flex flex-col w-full">
             <span className="text-[9px] font-black text-slate-400 uppercase">From</span>
             <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0" />
           </div>
         </div>
-        <div className="flex items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+        <div className="flex grid-cols-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
           {/*<Calendar className="h-4 w-4 text-slate-400" />*/}
           <div className="flex flex-col w-full">
             <span className="text-[9px] font-black text-slate-400 uppercase">To</span>
@@ -220,8 +247,8 @@ export default function Page() {
                 </td>
                 <td className="px-4 py-4 text-sm font-medium text-slate-600">
                   <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded-md">
-                    {/*a.type_of_incident === "Leave and Come Back" ? "LACB" : */}  
-                    {a.type_of_incident}
+                    {a.type_of_incident === "Leave and Come Back" ? "Leave & CB" : a.type_of_incident}  
+                    {/* a.type_of_incident */}
                   </span>  
                 </td>
                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{a.office}</td>
@@ -247,7 +274,7 @@ export default function Page() {
                 </td>
               </tr>
               ))) : (
-              <tr><td colSpan={6} className="px-8 py-20 text-center font-bold text-black">
+              <tr><td colSpan={8} className="px-8 py-15 text-center font-bold text-black">
                 <div className="flex flex-col items-center gap-2">No records found for this date range.</div></td></tr>              
             )}
           </tbody>
@@ -289,7 +316,7 @@ export default function Page() {
       </div>
 
       {/* Modals */}
-      {selectedAbsence && <HRRequestDetailsModal absence={selectedAbsence} userName={user?.username || ""} isSaving={isSaving} onClose={() => setSelectedAbsence(null)} onUpdate={handleUpdate} onDelete={handleDelete} />}
+      {selectedAbsence && <HRRequestDetailsModal absence={selectedAbsence} userName={user?.username || ""} isSaving={isSaving} onClose={() => setSelectedAbsence(null)} onUpdate={handleUpdate} onArchive={handleArchive} />}
       <HRCreateAbsenceModal isOpen={isAdding} onClose={() => setIsAdding(false)} onSave={fetchDocs} />
       </div>
     </div>
@@ -304,7 +331,7 @@ const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
     return <Badge color="red" text="Denied" />;
   }
   else if (req.final_approval === 'approved') {
-    return <Badge color="green" text="Fully Approved" />;
+    return <Badge color="green" text="Approved" />;
   }
   else if (req.manager_approval === 'approved') {
     return <Badge color="yellow" text="Manager Approved" />;

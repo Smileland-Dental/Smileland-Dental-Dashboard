@@ -191,7 +191,7 @@ const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
     return <Badge color="red" text="Denied" />;
   }
   else if (req.final_approval === 'approved') {
-    return <Badge color="green" text="Fully Approved" />;
+    return <Badge color="green" text="Approved" />;
   }
   else if (req.manager_approval === 'approved') {
     return <Badge color="yellow" text="Manager Approved" />;

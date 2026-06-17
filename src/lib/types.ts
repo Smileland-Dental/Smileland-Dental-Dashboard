@@ -25,6 +25,7 @@ export type AbsenceRequest = {
   updatedAt?: Timestamp;
   skipManagerApproval: boolean; // Field to indicate if manager approval is skipped (true/false)
   DOAPoints: number; // Points assigned for the DOA system based on the hours missed
+  status: 'active' | 'archived'; // New field to indicate if the request is active or archived
 };
 
 export interface User {

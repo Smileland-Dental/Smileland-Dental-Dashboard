@@ -42,6 +42,7 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
     final_approval_name: '', 
     skipManagerApproval: employeeSkipManagerApproval || false,
     DOAPoints: 0,
+    status: 'active',
   });
 
   const [excuse_notes, setExcuseNotes] = useState<File[]>([]);

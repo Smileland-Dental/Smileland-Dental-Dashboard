@@ -21,6 +21,7 @@ export default function Page() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   const [allAbsences, setAbsences] = useState<AbsenceRequest[]>([]);
+  const [archivedAbsences, setArchivedAbsences] = useState<AbsenceRequest[]>([]);
   const [selectedAbsence, setSelectedAbsence] = useState<AbsenceRequest | null>(null);
   const [newAbsence, setNewAbsence] = useState(false);
 
@@ -92,11 +93,15 @@ export default function Page() {
   const fetchAbsences = async (id: string) => {
     try {
       setLoading(true);
-      // This query remains the same as 'employee_id' is a field in the 'absences' collection
+      // This query remains the same as 'employee_id' is a field in the 'absences' collection and status is used to filter active requests
       const q = query(collection(db, "absences"), where("employee_id", "==", employeeID));
       const querySnapshot = await getDocs(q);
-      const absenceData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAbsences(absenceData as AbsenceRequest[]);
+      const absenceData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AbsenceRequest));
+
+      const activeAbsences = absenceData.filter(absence => absence.status !== 'archived');
+      const archivedAbsences = absenceData.filter(absence => absence.status === 'archived');
+      setAbsences(activeAbsences);
+      setArchivedAbsences(archivedAbsences);
     } 
     catch (err) {
       setAbsences([]);
@@ -202,6 +207,11 @@ export default function Page() {
               >
                 All Requests ({allAbsences.length})
               </button>
+              <button onClick={() => setActiveTab('archived')}
+                className={`${activeTab === 'archived' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+              >
+                Archived ({archivedAbsences.length})
+              </button>
             </nav>
           </div>
 
@@ -222,6 +232,9 @@ export default function Page() {
             )}
             {activeTab === 'all' && (
                 <AbsenceTable requests={allAbsences} status={'all'}  onViewDetails={handleViewDetails} />
+            )}
+            {activeTab === 'archived' && archivedAbsences.length > 0 && (
+                <AbsenceTable requests={archivedAbsences} status={'archived'} onViewDetails={handleViewDetails} />
             )}
           </div>
 

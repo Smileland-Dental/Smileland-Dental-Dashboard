@@ -104,9 +104,10 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
   };
 
   const handleDelete = async () => {
-    if (!window.confirm("Are you sure you want to PERMANENTLY delete this request?")) return;
+    if (!window.confirm("Are you sure you want to cancel this request?")) return;
     setIsSubmitting(true);
     try {
+      /*
       // --- 1. CLEAN UP STORAGE ---
       // Create a reference to the folder containing this absence's notes
       const folderRef = ref(storage, `excuse-notes/${absence.id}`);
@@ -122,8 +123,15 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
       //console.log("Deleting absence with ID:", absence.id);
       await deleteDoc(doc(db, "absences", absence.id));
       setFeedback({ isOpen: true, type: 'success', message: "Request deleted successfully." });
+      */
+      await updateDoc(doc(db, "absences", absence.id), {
+        status: 'archived',
+        updatedAt: new Date(),
+      });
+
+      setFeedback({ isOpen: true, type: 'success', message: "Request has been canceled and archived successfully!" });
     } catch (error) {
-      setFeedback({ isOpen: true, type: 'error', message: "Error deleting request." });
+      setFeedback({ isOpen: true, type: 'error', message: "Error canceling request." });
     } finally {
       setIsSubmitting(false);
     }
@@ -201,14 +209,16 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             <h2 className="text-2xl font-bold text-gray-800">
               {isDenied ? 'View Absence Request' : 'Edit Absence Request'}
             </h2>
-            
-            
+            {absence.status === 'archived' && (
+              <h3 className="text-lg font-bold text-red-700 uppercase">Archived</h3>
+            )}
+
             {/* 2. HIDE DELETE IF DENIED */}
-            {!isDenied && (
+            {!isDenied && absence.status !== 'archived' && (
               <button type="button" onClick={handleDelete} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1 rounded border border-red-200 uppercase tracking-tighter disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
                 disabled={absence.type_of_request === "HR Call In" || absence.final_approval === "approved" || absence.final_approval === "denied" || isSubmitting}
               >
-                Delete Request
+                Cancel Request
               </button>
             )}
           </div>
