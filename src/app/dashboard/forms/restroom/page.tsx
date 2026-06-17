@@ -57,7 +57,7 @@ export default function RestroomInspection() {
     "Ming": ["Hopie", "Kindal", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Dianne"],
-    "Visalia": ["Abby", "Dianne", "Jessica"]
+    "Visalia": ["Abby", "Dianne", "Jessica", "Renee"]
   };
 
 
