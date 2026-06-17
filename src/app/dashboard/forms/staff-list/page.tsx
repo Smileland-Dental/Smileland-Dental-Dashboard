@@ -539,7 +539,7 @@ export default function StaffListManagement() {
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'HR') {
+        if (userData?.role !== 'HR' && userData?.role !== 'Manager') {
           // 관리자 권한이 없는 경우 로그인 페이지로 리다이렉트
           if (typeof window !== 'undefined') {
             window.location.href = '/';
