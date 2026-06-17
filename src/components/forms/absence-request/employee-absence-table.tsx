@@ -2,11 +2,11 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
 import { AbsenceRequest } from '@/lib/types';
-import { ChevronRight, Calendar, FileText, ArrowUp, ArrowDown, Filter } from 'lucide-react';
+import { ChevronRight, Calendar, FileText, ArrowUp, ArrowDown, ArrowUpDown, Filter } from 'lucide-react';
 
 type RequestTableProps = {
   requests: AbsenceRequest[];
-  status: 'needed' | 'pending' | 'approved' | 'denied' | 'all';
+  status: 'needed' | 'pending' | 'approved' | 'denied' | 'all' | 'archived';
   onViewDetails: (request: AbsenceRequest) => void;
 };
 
@@ -24,7 +24,7 @@ export const AbsenceTable: React.FC<RequestTableProps> = ({ requests, status, on
   });
 
   const [typeFilter, setTypeFilter] = useState('all');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 5;
 
@@ -60,6 +60,18 @@ export const AbsenceTable: React.FC<RequestTableProps> = ({ requests, status, on
 
     return result;
   }, [requests, typeFilter, sortOrder, startDate, endDate]);
+
+  const handleSort = () => {
+    if (sortOrder === 'asc') {
+      setSortOrder('desc');
+    } else if (sortOrder === 'desc') {
+      // Cycle back to neutral no-sort state
+      setSortOrder(null);
+    } else {
+      setSortOrder('asc');
+    }
+    setCurrentPage(1); // Go to page 1 on layout mutations
+  };
 
   const paginatedRequests = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -127,11 +139,13 @@ export const AbsenceTable: React.FC<RequestTableProps> = ({ requests, status, on
               <tr>
                 <th className="px-6 py-4 text-left tracking-wider">
                   <button 
-                    onClick={() => setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc')}
+                    onClick={() => handleSort()}
                     className="flex items-center gap-1 hover:text-slate-900 transition-colors"
                   >
                     Incident Date
-                    {sortOrder === 'desc' ? <ArrowDown className="h-3 w-3" /> : <ArrowUp className="h-3 w-3" />}
+                    {sortOrder === 'asc' && <ArrowUp className="h-3 w-3 text-indigo-600" />}
+                    {sortOrder === 'desc' && <ArrowDown className="h-3 w-3 text-indigo-600" />}
+                    {sortOrder === null && <ArrowUpDown className="h-3 w-3 opacity-40" />}
                   </button>
                 </th>
                 <th className="px-6 py-4 text-left tracking-wider">Type</th>
@@ -240,7 +254,7 @@ const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
   if (req.manager_approval === 'denied' || req.final_approval === 'denied') {
     return <Badge color="red" text={req.manager_approval === 'denied' && req.final_approval === 'pending' ? "Manager Denied" : "Denied"} />;
   }
-  if (req.final_approval === 'approved') return <Badge color="green" text="Fully Approved" />;
+  if (req.final_approval === 'approved') return <Badge color="green" text="Approved" />;
   if (req.manager_approval === 'approved') return <Badge color="yellow" text="Manager Approved" />;
   if (req.manager_approval === 'not_required' && req.final_approval === 'pending') return <Badge color="yellow" text="Pending Corp" />;
   return <Badge color="gray" text="Pending" />;
