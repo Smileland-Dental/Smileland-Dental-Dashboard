@@ -199,8 +199,8 @@ const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
   else if (req.manager_approval === 'not_required' && req.final_approval === 'pending') {
     return <Badge color="yellow" text="Pending Final Approval" />;
   }
-  else{
-    return <Badge color="gray" text="Pending" />;
+  else if (req.manager_approval === 'pending' && req.final_approval === 'pending') {
+    return <Badge color="gray" text="Pending Manager Approval" />;
   }
 };
 
