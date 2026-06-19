@@ -1,13 +1,15 @@
 "use client";
 
 import { getPSTDate } from '@/lib/date';
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import { doc, updateDoc, addDoc, collection } from "firebase/firestore";
 import { db, storage } from '@/lib/firebase.config';
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import FeedbackModal from '@/components/ui/FeedbackModal'; 
 import { Button } from '@/components/ui/button';
 import { OFFICES } from '@/lib/constants';
+import { AbsenceRequest } from '@/lib/types';
+import { TriangleAlert } from 'lucide-react';
 
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"];
 
@@ -17,11 +19,12 @@ interface NewAbsenceFormProps {
   employeeTitle: string;
   employeeName: string;
   employeeSkipManagerApproval: boolean;
+  employeeExistingRequests: AbsenceRequest[]; // Pass existing requests to check for overlaps
   onFormSubmit: () => void;
   onClose: () => void;
 }
 
-export default function NewAbsenceForm({employeeFirestore, employeeID, employeeTitle, employeeName, employeeSkipManagerApproval, onFormSubmit, onClose }: NewAbsenceFormProps) {
+export default function NewAbsenceForm({employeeFirestore, employeeID, employeeTitle, employeeName, employeeSkipManagerApproval, employeeExistingRequests, onFormSubmit, onClose }: NewAbsenceFormProps) {
   const [formData, setFormData] = useState({
     employeeFirestoreID: employeeFirestore || '',
     employee_id: employeeID || '',
@@ -47,12 +50,68 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
 
   const [excuse_notes, setExcuseNotes] = useState<File[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
   const [isChecked, setIsChecked] = useState(false);
   const [feedback, setFeedback] = useState<{ isOpen: boolean; type: 'success' | 'error'; message: string }>({
     isOpen: false,
     type: 'success',
     message: '',
   });
+
+  const isOverlapping = useMemo(() => {
+    if (!formData.type_of_incident || !formData.incident_start || !formData.incident_end) {
+      return false;
+    }
+
+    const formStart = new Date(formData.incident_start + "T00:00:00").getTime();
+    const formEnd = new Date(formData.incident_end + "T00:00:00").getTime();
+
+    // Look through array instances currently stored in parent state
+    return employeeExistingRequests.some((absence) => {
+      // Ensure we only match overlapping dates for the *same* incident type and active records
+      if (
+        absence.type_of_incident !== formData.type_of_incident || 
+        absence.status === 'archived'
+      ) {
+        return false;
+      }
+
+      const existingStart = new Date(absence.incident_start + "T00:00:00").getTime();
+      const existingEnd = new Date(absence.incident_end + "T00:00:00").getTime();
+
+      // Check date interval overlap logic: (StartA <= EndB) AND (EndA >= StartB)
+      return formStart <= existingEnd && formEnd >= existingStart;
+    });
+  }, [formData.type_of_incident, formData.incident_start, formData.incident_end, employeeExistingRequests]);
+
+  // ... keep the rest of your form logic & buttons ...
+
+  const isDateWindowValid = useMemo(() => {
+    // If fields are empty, keep it valid (or fallback to HTML5 field requirements)
+    if (!formData.type_of_request || !formData.incident_start) return true;
+
+    // Set up standard Date objects set exactly to Midnight
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const startDate = new Date(formData.incident_start + "T00:00:00");
+
+    // Calculate absolute difference in days
+    const msPerDay = 24 * 60 * 60 * 1000;
+    const dayDifference = (startDate.getTime() - today.getTime()) / msPerDay;
+
+    if (formData.type_of_request === "Incident Notice") {
+      // Must be within 30 days of today (including past dates or less 30 days into the future)
+      return dayDifference < 30;
+    }
+
+    if (formData.type_of_request === "Time Off Request") {
+      // Must be 30 days or more in the future
+      return dayDifference >= 30;
+    }
+    
+    return true; // Default to valid if type_of_request is not selected yet
+  }, [formData.type_of_request, formData.incident_start]);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
@@ -134,6 +193,12 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
       <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50" onClick={onClose}>
         <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
           <h2 className="text-2xl font-bold mb-6 text-gray-800">New Absence Request</h2>
+          {isOverlapping && (
+            <div className="p-3.5 bg-red-50 border border-red-200 text-red-900 rounded-md text-xs font-medium mt-2">
+              <TriangleAlert className="inline-block size-3 mr-1 mb-1" />
+              <strong>Schedule Conflict:</strong> You already has an active <strong>{formData.type_of_incident}</strong> request registered within these dates.
+            </div>
+          )}
           
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Request Type Selection */}
@@ -174,6 +239,13 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Start Date</label>
                 <input name="incident_start" type="date" onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" required />
+                {!isDateWindowValid && (
+                  <p className="text-xs text-red-500 font-medium mt-1">
+                    {formData.type_of_request === "Incident Notice" 
+                      ? "Incident Notice must be dated within 30 days of today."
+                      : "Time-Off Requests require at least 30 days advance notice."}
+                  </p>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">End Date</label>
@@ -250,7 +322,7 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
                       checked={formData.excuse_note_submitted === opt}
                       className="accent-blue-600"
                     />
-                    {opt.replace('_', ' ')}
+                    {opt.replace('not_provided', 'Not Providing')}
                   </label>
                 ))}
               </div>
@@ -299,7 +371,7 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
               </button>
               <button 
                 type="submit" 
-                disabled={isSubmitting || !isChecked} 
+                disabled={isSubmitting || !isChecked || !isDateWindowValid ||  isOverlapping} 
                 className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition"
               >
                 {isSubmitting ? 'Submitting...' : 'Submit Request'}

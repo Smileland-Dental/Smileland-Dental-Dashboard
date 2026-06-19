@@ -163,7 +163,7 @@ export const IncidentNoticesTab = ({ employee }: TabProps) => {
               </div>
               <div className="text-right">
                 <StatusBadge req={request} />
-                <p className="text-[10px] text-gray-400 mt-2">{(request.incident_start === request.incident_end) ? request.incident_start : `${request.incident_start} - ${request.incident_end}`}</p>
+                <p className="text-[10px] text-gray-400 mt-2">{(request.incident_start === request.incident_end) ? (request.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2-$3-$1') : `${(request.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2-$3-$1')} - ${(request.incident_end).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2-$3-$1')}`}</p>
               </div>
             </div>
           </div>

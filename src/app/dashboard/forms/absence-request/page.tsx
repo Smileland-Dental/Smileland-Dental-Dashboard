@@ -245,6 +245,7 @@ export default function Page() {
             employeeTitle={employeeTitle} 
             employeeName={employeeName} 
             employeeSkipManagerApproval={employeeInfo.skipManagerApproval}
+            employeeExistingRequests={allAbsences}
             onFormSubmit={handleFormSubmit} 
             onClose={() => setNewAbsence(false)}
             />

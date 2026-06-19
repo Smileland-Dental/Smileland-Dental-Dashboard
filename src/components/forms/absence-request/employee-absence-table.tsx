@@ -257,7 +257,7 @@ const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
   if (req.final_approval === 'approved') return <Badge color="green" text="Approved" />;
   if (req.manager_approval === 'approved') return <Badge color="yellow" text="Manager Approved" />;
   if (req.manager_approval === 'not_required' && req.final_approval === 'pending') return <Badge color="yellow" text="Pending Corp" />;
-  return <Badge color="gray" text="Pending" />;
+  if (req.manager_approval === 'pending' && req.final_approval === 'pending') return <Badge color="gray" text="Pending Manager Approval" />;
 };
 
 const Badge = ({ color, text }: { color: string; text: string }) => {

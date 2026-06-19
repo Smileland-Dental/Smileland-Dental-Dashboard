@@ -166,8 +166,8 @@ export const EmployeeInfoTab = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-y-4 text-gray-700">
           <div className="space-y-3 text-gray-700">
             <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Status</span> {formData.status || 'N/A'}</p>
-            <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Hire:</span> {formData.dateOfHire || 'N/A'}</p>
-            <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Terminiation:</span> {formData.dateOfTermination || 'N/A'}</p>
+            <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Hire:</span> {(formData.dateOfHire || 'N/A').replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2-$3-$1')}</p>
+            <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Terminiation:</span> {(formData.dateOfTermination || 'N/A').replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2-$3-$1')}</p>
             <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Department:</span> {formData.department || 'N/A'}</p>
             <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Job Title:</span> {formData.jobTitle || 'N/A'}</p>
             <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Job Status:</span> {formData.jobStatus || 'N/A'}</p>
@@ -182,7 +182,7 @@ export const EmployeeInfoTab = ({
             )}
             <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Office:</span> {formData.office || 'N/A'}</p>
             <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Employee SSN:</span> {formData.employeeSSN || 'N/A'}</p>
-            <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Birth:</span> {formData.dateOfBirth || 'N/A'}</p>
+            <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Date of Birth:</span> {(formData.dateOfBirth || 'N/A').replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2-$3-$1')}</p>
             <p className="flex"><span className="font-semibold w-42 whitespace-nowrap inline-block text-gray-900">Other Job Titles:</span> {formData.otherJobTitles || 'N/A'}</p>
             <p className="flex items-center min-h-[32px]">
               <span className="font-semibold w-42 shrink-0 text-gray-900">Manager Approval:</span> 
