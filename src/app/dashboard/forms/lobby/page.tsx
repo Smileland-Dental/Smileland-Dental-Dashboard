@@ -36,7 +36,7 @@ export default function LobbyInspectionPage() {
     "Fresno": ["Cynthia"],
     "Ming": ["Hopie", "Kindal", "Marbella"],
     "Ortho": ["Kindal"],
-    "Tulare": ["Dianne"],
+    "Tulare": ["Dianne, Melissa, Crystal"],
     "Visalia": ["Abby", "Dianne", "Jessica", "Renee"]
   };
 
