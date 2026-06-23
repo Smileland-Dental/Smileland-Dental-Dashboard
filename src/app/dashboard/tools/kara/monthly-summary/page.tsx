@@ -76,6 +76,7 @@ type FormDoc = {
   checkOut?: string;
   closer?: string;
   locationSummary?: {
+    mailedProduction?: string;
     pineapple?: string;
     rose?: string;
     total?: unknown;
@@ -94,6 +95,7 @@ type Aggregate = {
   docCount: number;
   coffeeSales: number;
   prophyTotal: number;
+  mailedProduction: number;
   pineapple: number;
   rose: number;
   visitsAdd: number;
@@ -107,7 +109,10 @@ type Aggregate = {
   sugarRows: Array<{ position: string; name: string; sugarGood: number }>;
 };
 
-const OFFICE_SUMMARY_GOAL_KEYS = ['preventative', 'restorative', 'craProduction', 'firstReviewProduction'] as const;
+const OFFICE_SUMMARY_GOAL_KEYS = ['preventative', 'restorative', 'craProduction', 'firstReviewProduction', 'mailedProduction'] as const;
+const OFFICE_SUMMARY_TOTAL_COMPONENT_KEYS = ['preventative', 'restorative', 'craProduction'] as const;
+const OFFICE_SUMMARY_SAVABLE_GOAL_KEYS = ['preventative', 'restorative', 'craProduction', 'firstReviewProduction'] as const;
+const OFFICE_SUMMARY_NO_GOAL_KEYS = ['mailedProduction'] as const;
 const OE_CORE_GOAL_KEYS = ['oeNp', 'oeRc', 'oeTotal'] as const;
 const OE_PROPHY_GOAL_KEYS = ['actualProphy'] as const;
 const SEALANT_GOAL_KEYS = ['sealantRda', 'sealantDds'] as const;
@@ -823,10 +828,20 @@ function normalizeGoalSection<K extends string>(raw: unknown, keys: readonly K[]
 function normalizeOfficeSummaryGoalOverrides(raw: unknown): OfficeSummaryGoalOverrides {
   if (!raw || typeof raw !== 'object') return emptyOfficeSummaryGoalOverrides();
   const data = raw as Record<string, unknown>;
-  return {
+  return stripOfficeSummaryNoGoalFields({
     monthlyGoal: normalizeGoalSection(data.monthlyGoal, OFFICE_SUMMARY_GOAL_KEYS),
     dailyGoal: normalizeGoalSection(data.dailyGoal, OFFICE_SUMMARY_GOAL_KEYS),
-  };
+  });
+}
+
+function stripOfficeSummaryNoGoalFields(goals: OfficeSummaryGoalOverrides): OfficeSummaryGoalOverrides {
+  const nextDaily = { ...goals.dailyGoal };
+  const nextMonthly = { ...goals.monthlyGoal };
+  OFFICE_SUMMARY_NO_GOAL_KEYS.forEach((key) => {
+    delete nextDaily[key];
+    delete nextMonthly[key];
+  });
+  return { dailyGoal: nextDaily, monthlyGoal: nextMonthly };
 }
 
 function normalizeOeTableGoalOverrides(raw: unknown): OeTableGoalOverrides {
@@ -896,6 +911,7 @@ function buildAggregate(monthlyDocs: FormDoc[]): Aggregate | null {
     prophyTotal: 0,
     pineapple: 0,
     rose: 0,
+    mailedProduction: 0,
     visitsAdd: 0,
     visitsNoShow: 0,
     visitsScheduled: 0,
@@ -913,6 +929,7 @@ function buildAggregate(monthlyDocs: FormDoc[]): Aggregate | null {
     agg.prophyTotal = addAmount(agg.prophyTotal, doc.prophyTotal);
     agg.pineapple = addAmount(agg.pineapple, doc.locationSummary?.pineapple);
     agg.rose = addAmount(agg.rose, doc.locationSummary?.rose);
+    agg.mailedProduction = addAmount(agg.mailedProduction, doc.locationSummary?.mailedProduction);
 
     const sideMetrics = doc.productionSideMetrics;
     if (sideMetrics) {
@@ -970,6 +987,7 @@ function getGoalsActualMetrics(aggregate: Aggregate, oeTotalAmount: number) {
     restorative: aggregate.rose,
     craProduction: aggregate.coffeeSales,
     firstReviewProduction: aggregate.pineapple + aggregate.rose + aggregate.coffeeSales,
+    mailedProduction: aggregate.mailedProduction,
     oeNp: sumCoffeeRows(aggregate.coffeeRows, (r) => r.orangeJuiceNew),
     oeRc: sumCoffeeRows(aggregate.coffeeRows, (r) => r.orangeJuiceReturn),
     oeTotal: oeTotalAmount,
@@ -995,7 +1013,8 @@ const OFFICE_SUMMARY_COLUMNS: GoalColumnDef<OfficeSummaryGoalKey>[] = [
   { key: 'preventative', header: 'Preventative', getValue: (m) => m.preventative, formatTotal: formatDollarAmount, formatDaily: formatDollarDailyAverage, formatGoal: (v) => (v === undefined ? '' : formatDollarAmount(v)), goalStep: '0.01' },
   { key: 'restorative', header: 'Restorative', getValue: (m) => m.restorative, formatTotal: formatDollarAmount, formatDaily: formatDollarDailyAverage, formatGoal: (v) => (v === undefined ? '' : formatDollarAmount(v)), goalStep: '0.01' },
   { key: 'craProduction', header: 'CRA Production', getValue: (m) => m.craProduction, formatTotal: formatDollarAmount, formatDaily: formatDollarDailyAverage, formatGoal: (v) => (v === undefined ? '' : formatDollarAmount(v)), goalStep: '0.01' },
-  { key: 'firstReviewProduction', header: '1st Review Production', getValue: (m) => m.firstReviewProduction, formatTotal: formatDollarAmount, formatDaily: formatDollarDailyAverage, formatGoal: (v) => (v === undefined ? '' : formatDollarAmount(v)), goalStep: '0.01' },
+  { key: 'firstReviewProduction', header: 'Total', getValue: (m) => m.firstReviewProduction, formatTotal: formatDollarAmount, formatDaily: formatDollarDailyAverage, formatGoal: (v) => (v === undefined ? '' : formatDollarAmount(v)), goalStep: '0.01' },
+  { key: 'mailedProduction', header: 'Mailed Production', getValue: (m) => m.mailedProduction, formatTotal: formatDollarAmount, formatDaily: formatDollarDailyAverage, formatGoal: (v) => (v === undefined ? '' : formatDollarAmount(v)), goalStep: '0.01' },
 ];
 
 const OE_CORE_COLUMNS: GoalColumnDef<OeCoreGoalKey>[] = [
@@ -1054,6 +1073,68 @@ function getComputedMonthlyGoal(
   return storedMonthly;
 }
 
+function sumDefinedGoalValues<K extends string>(
+  goals: Partial<Record<K, number>>,
+  keys: readonly K[]
+): number | undefined {
+  let sum = 0;
+  let hasAny = false;
+  for (const key of keys) {
+    const value = goals[key];
+    if (value !== undefined) {
+      sum = Math.round((sum + value + Number.EPSILON) * 100) / 100;
+      hasAny = true;
+    }
+  }
+  return hasAny ? sum : undefined;
+}
+
+function getOfficeSummaryTotalDailyGoal(dailyGoals: OfficeSummaryGoals): number | undefined {
+  return sumDefinedGoalValues(dailyGoals, OFFICE_SUMMARY_TOTAL_COMPONENT_KEYS);
+}
+
+function getOfficeSummaryTotalMonthlyGoal(
+  dailyGoals: OfficeSummaryGoals,
+  monthlyGoals: OfficeSummaryGoals,
+  docCount: number
+): number | undefined {
+  let sum = 0;
+  let hasAny = false;
+  for (const key of OFFICE_SUMMARY_TOTAL_COMPONENT_KEYS) {
+    const monthly = getComputedMonthlyGoal(dailyGoals[key], monthlyGoals[key], docCount);
+    if (monthly !== undefined) {
+      sum = Math.round((sum + monthly + Number.EPSILON) * 100) / 100;
+      hasAny = true;
+    }
+  }
+  return hasAny ? sum : undefined;
+}
+
+function withOfficeSummaryTotalGoals(
+  goals: OfficeSummaryGoalOverrides,
+  docCount: number
+): OfficeSummaryGoalOverrides {
+  const totalDaily = getOfficeSummaryTotalDailyGoal(goals.dailyGoal);
+  const nextDaily = { ...goals.dailyGoal };
+  const nextMonthly = { ...goals.monthlyGoal };
+
+  if (totalDaily !== undefined) {
+    nextDaily.firstReviewProduction = totalDaily;
+    const totalMonthly = getOfficeSummaryTotalMonthlyGoal(goals.dailyGoal, goals.monthlyGoal, docCount)
+      ?? (docCount > 0 ? Math.round((totalDaily * docCount + Number.EPSILON) * 100) / 100 : undefined);
+    if (totalMonthly !== undefined) {
+      nextMonthly.firstReviewProduction = totalMonthly;
+    } else {
+      delete nextMonthly.firstReviewProduction;
+    }
+  } else {
+    delete nextDaily.firstReviewProduction;
+    delete nextMonthly.firstReviewProduction;
+  }
+
+  return stripOfficeSummaryNoGoalFields({ dailyGoal: nextDaily, monthlyGoal: nextMonthly });
+}
+
 function MetricsGoalsTable<K extends string>({
   columns,
   metrics,
@@ -1062,6 +1143,9 @@ function MetricsGoalsTable<K extends string>({
   dailyGoals,
   isEditing,
   onGoalChange,
+  readOnlyGoalKeys,
+  getDerivedDailyGoal,
+  getDerivedMonthlyGoal,
 }: {
   columns: GoalColumnDef<K>[];
   metrics: GoalsActualMetrics;
@@ -1070,7 +1154,17 @@ function MetricsGoalsTable<K extends string>({
   dailyGoals: Partial<Record<K, number>>;
   isEditing: boolean;
   onGoalChange: (key: K, rawValue: string) => void;
+  readOnlyGoalKeys?: readonly K[];
+  getDerivedDailyGoal?: (key: K, dailyGoals: Partial<Record<K, number>>) => number | undefined;
+  getDerivedMonthlyGoal?: (
+    key: K,
+    dailyGoals: Partial<Record<K, number>>,
+    monthlyGoals: Partial<Record<K, number>>,
+    docCount: number
+  ) => number | undefined;
 }) {
+  const readOnlyKeys = new Set(readOnlyGoalKeys ?? []);
+
   return (
     <table style={getTableStyle()}>
       <thead>
@@ -1084,26 +1178,37 @@ function MetricsGoalsTable<K extends string>({
       <tbody>
         <tr style={rowStyle}>
           <td style={cellStyle}>Daily Goal</td>
-          {columns.map((column) => (
-            <GoalInputCell
-              key={`daily_goal_${column.key}`}
-              value={dailyGoals[column.key]}
-              isEditing={isEditing}
-              onChange={(rawValue) => onGoalChange(column.key, rawValue)}
-              cellStyle={cellStyle}
-              formatValue={column.formatGoal}
-              step={column.goalStep}
-            />
-          ))}
+          {columns.map((column) => {
+            const dailyValue = getDerivedDailyGoal?.(column.key, dailyGoals) ?? dailyGoals[column.key];
+            if (readOnlyKeys.has(column.key)) {
+              return (
+                <td key={`daily_goal_${column.key}`} style={cellStyle}>
+                  {column.formatGoal(dailyValue)}
+                </td>
+              );
+            }
+            return (
+              <GoalInputCell
+                key={`daily_goal_${column.key}`}
+                value={dailyValue}
+                isEditing={isEditing}
+                onChange={(rawValue) => onGoalChange(column.key, rawValue)}
+                cellStyle={cellStyle}
+                formatValue={column.formatGoal}
+                step={column.goalStep}
+              />
+            );
+          })}
         </tr>
         <tr style={rowStyle}>
           <td style={cellStyle}>Monthly Goal</td>
           {columns.map((column) => {
-            const monthlyValue = getComputedMonthlyGoal(
-              dailyGoals[column.key],
-              monthlyGoals[column.key],
-              docCount
-            );
+            const monthlyValue = getDerivedMonthlyGoal?.(column.key, dailyGoals, monthlyGoals, docCount)
+              ?? getComputedMonthlyGoal(
+                dailyGoals[column.key],
+                monthlyGoals[column.key],
+                docCount
+              );
             return (
               <td key={`monthly_goal_${column.key}`} style={cellStyle}>
                 {column.formatGoal(monthlyValue)}
@@ -1242,6 +1347,19 @@ function GoalsTablesSection({
           dailyGoals={officeDailyGoals}
           isEditing={isEditing}
           onGoalChange={onOfficeGoalChange}
+          readOnlyGoalKeys={['firstReviewProduction', 'mailedProduction']}
+          getDerivedDailyGoal={(key, dailyGoals) => {
+            if (key === 'mailedProduction') return undefined;
+            if (key === 'firstReviewProduction') return getOfficeSummaryTotalDailyGoal(dailyGoals);
+            return undefined;
+          }}
+          getDerivedMonthlyGoal={(key, dailyGoals, monthlyGoals, days) => {
+            if (key === 'mailedProduction') return undefined;
+            if (key === 'firstReviewProduction') {
+              return getOfficeSummaryTotalMonthlyGoal(dailyGoals, monthlyGoals, days);
+            }
+            return undefined;
+          }}
         />
       </TableCard>
       <div style={tableGridStyle}>
@@ -2266,9 +2384,12 @@ function MonthlySummaryPageContent() {
     if (!aggregate) return;
     try {
       setSaveMessage('');
-      const officeGoalsToSave = syncMonthlyGoalsFromDaily(
-        officeSummaryGoalsDraft,
-        OFFICE_SUMMARY_GOAL_KEYS,
+      const officeGoalsToSave = withOfficeSummaryTotalGoals(
+        syncMonthlyGoalsFromDaily(
+          officeSummaryGoalsDraft,
+          OFFICE_SUMMARY_SAVABLE_GOAL_KEYS,
+          aggregate.docCount
+        ),
         aggregate.docCount
       );
       const oeGoalsToSave = syncMonthlyGoalsFromDaily(
@@ -2415,7 +2536,7 @@ function MonthlySummaryPageContent() {
             {saveMessage}
           </StatusMessage>
         )}
-        {!hasSelection && <StatusMessage type="info">Month and office details need to be included in the URL.</StatusMessage>}
+        {!hasSelection && <StatusMessage type="info">Month와 Office 정보가 URL에 필요합니다.</StatusMessage>}
         {hasSelection && loading && <StatusMessage type="info">Loading...</StatusMessage>}
         {hasSelection && error && <StatusMessage type="error">{error}</StatusMessage>}
         {hasSelection && !loading && !error && !aggregate && (
@@ -2445,8 +2566,12 @@ function MonthlySummaryPageContent() {
               oeDailyGoals={activeOeTableGoals.dailyGoal}
               isEditing={isEditing}
               onOfficeGoalChange={(key, rawValue) => {
+                if (key === 'mailedProduction') return;
                 setOfficeSummaryGoalsDraft((prev) =>
-                  updateDailyGoalSection(prev, key, rawValue, aggregate.docCount)
+                  withOfficeSummaryTotalGoals(
+                    updateDailyGoalSection(prev, key, rawValue, aggregate.docCount),
+                    aggregate.docCount
+                  )
                 );
               }}
               onOeGoalChange={(key, rawValue) => {
