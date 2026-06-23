@@ -70,6 +70,8 @@ type ProductionSideMetrics = {
   scheduled?: string;
   seen?: string;
   seenPercent?: string;
+  referral?: string;
+  postcard?: string;
 };
 
 type ExtraInputRow = {
@@ -150,6 +152,8 @@ type ColumnFieldId =
   | 'side.scheduled'
   | 'side.seen'
   | 'side.seenPercent'
+  | 'side.referral'
+  | 'side.postcard'
   | 'actual.orangeJuiceNew'
   | 'actual.orangeJuiceReturn'
   | 'docperf.customer'
@@ -254,13 +258,13 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
   {
     label: 'Production / Visits',
     options: [
-      { id: 'location.pineapple', label: 'Preventative Production' },
-      { id: 'location.rose', label: 'Restorative Production' },
       { id: 'side.add', label: 'Add On' },
       { id: 'side.noShow', label: 'No Shows' },
       { id: 'side.scheduled', label: 'Scheduled' },
       { id: 'side.seen', label: 'Seen' },
       { id: 'side.seenPercent', label: 'Seen %' },
+      { id: 'side.referral', label: 'Referral' },
+      { id: 'side.postcard', label: 'Postcard' },
     ],
   },
   {
@@ -308,15 +312,11 @@ function dedupeFieldOptions(
 const NAME_BUNDLE_METRIC_OPTIONS = dedupeFieldOptions(collectNameBundleMetricOptions());
 const NAME_BUNDLE_MAX_METRICS = 12;
 
-const POSITION_BUNDLE_METRIC_OPTIONS = NAME_BUNDLE_METRIC_OPTIONS;
-
 const DOCPERF_EXTRA_INPUT_SUM_KEYS = new Set([
   'doctorPreventative',
   'doctorRestorative',
   'doctorCraProduction',
 ]);
-
-const POSITION_BUNDLE_MAX_METRICS = 12;
 
 const NUM_SLOTS = 7;
 
@@ -348,7 +348,6 @@ function isOperatingBundle(slot: SlotValue): slot is OperatingBundleId {
   return slot === OPERATING_BUNDLE_ID;
 }
 
-/** Parse "8:30 AM", "17:00", etc. to minutes from midnight. */
 function parseTimeToMinutes(value: string): number | null {
   const s = String(value ?? '').trim();
   if (!s) return null;
@@ -1177,24 +1176,7 @@ export default function SimpleFormsDropdownViewPage() {
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [rows]);
 
-  const uniquePositions = useMemo(() => {
-    const set = new Set<string>();
-    for (const doc of rows) {
-      for (const r of doc.tableRows || []) {
-        const p = String(r.position ?? '').trim();
-        if (p) set.add(p);
-      }
-      for (const r of doc.sugarRows || []) {
-        const p = String(r.position ?? '').trim();
-        if (p) set.add(p);
-      }
-      for (const r of doc.extraInputRows || []) {
-        const p = String(r.position ?? '').trim();
-        if (p) set.add(p);
-      }
-    }
-    return Array.from(set).sort((a, b) => a.localeCompare(b));
-  }, [rows]);
+  const uniquePositions = useMemo(() => collectUniquePositionsFromDocs(rows), [rows]);
 
   const load = useCallback(async () => {
     if (!location.trim() || !month) {
@@ -1842,7 +1824,7 @@ export default function SimpleFormsDropdownViewPage() {
                                   setPositionBundleBySlot((prev) => {
                                     const n = [...prev];
                                     const cur = n[slotIndex];
-                                    if (cur.metrics.length >= POSITION_BUNDLE_MAX_METRICS) return prev;
+                                    if (cur.metrics.length >= NAME_BUNDLE_MAX_METRICS) return prev;
                                     const last = cur.metrics[cur.metrics.length - 1] ?? 'docperf.customer';
                                     n[slotIndex] = { ...cur, metrics: [...cur.metrics, last] };
                                     return n;
@@ -1991,7 +1973,7 @@ export default function SimpleFormsDropdownViewPage() {
                               }}
                               style={metricSelectStyle}
                             >
-                              {POSITION_BUNDLE_METRIC_OPTIONS.map((opt) => (
+                              {NAME_BUNDLE_METRIC_OPTIONS.map((opt) => (
                                 <option key={`pb-${slotIndex}-${mi}-${opt.id}`} value={opt.id}>
                                   {opt.label}
                                 </option>
