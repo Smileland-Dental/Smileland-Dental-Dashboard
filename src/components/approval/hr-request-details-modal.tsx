@@ -57,7 +57,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white w-full max-w-3xl rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+      <div className="bg-white w-full max-w-4xl rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
         
         {/* Header */}
         <div className="py-4 px-6 border-b border-slate-50 flex justify-between items-center bg-slate-100/50">
@@ -146,7 +146,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
         >
           {/* Section 1: Read-Only Employee Info */}
           {/* employee_name, employee_id, employee_title (Read Only) */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-sky-50 rounded-3xl border border-slate-100">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 rounded-3xl border bg-purple-200/50 border-purple-100">
             <div className="space-y-1">
               <label className="text-[9px] font-black text-slate-700 uppercase ml-1">Employee Name</label>
               <p className="text-sm font-bold text-indigo-600 px-1">{absence.employee_name}</p>
@@ -162,7 +162,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
           </div>
           
           {/* employee_comments */}
-          <div className="space-y-3 gap-4 p-4 bg-sky-50 rounded-3xl border border-slate-100">
+          <div className="space-y-3 gap-4 p-4 rounded-3xl border bg-amber-200/50 border-amber-100">
             <label className="text-[10px] font-black text-slate-700 uppercase ml-1 flex items-center gap-1">
               <MessageSquare className="h-3 w-3 text-slate-400"/> Employee Comments
             </label>
@@ -299,7 +299,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
           </div>
 
           {/* Section 4: Excuse Notes Management */}
-          <div className={`space-y-4 p-3 rounded-3xl border transition-all shadow-sm ${ (isChanged('excuse_note') || newFiles.length > 0 || isChanged('excuse_note_submitted')) ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-100' }`}>
+          <div className={`space-y-4 p-3 rounded-3xl border transition-all shadow-sm ${ (isChanged('excuse_note') || newFiles.length > 0 || isChanged('excuse_note_submitted')) ? 'bg-rose-50 border-rose-200' : 'bg-amber-200/50 border-amber-100' }`}>
             <div className="flex justify-between items-center">
               <label className="text-[10px] font-black text-black uppercase ml-1 flex items-center gap-1"><Paperclip className="h-3 w-3" /> Excuse Notes</label>
               <input 
@@ -387,93 +387,117 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             </div>
           </div>
 
-          {/* Section 5: Approval & Notes */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-slate-100">
-          {/* Manager Approval Box */}
-          <div className={`space-y-3 p-3 rounded-2xl border transition-all shadow-sm ${isChanged('manager_approval') ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-200'}`}>
-            <div className="flex justify-between items-center ml-1">
-              <label className="text-[10px] font-black text-black uppercase">Manager Status</label>
-              {tempData.manager_approval_name && (
-                <span className={`text-[9px] font-bold italic transition-colors ${isChanged('manager_approval') ? 'text-rose-600' : 'text-emerald-800'}`}>
-                  Submitted: {tempData.manager_approval_name}
-                </span>
-              )}
+          {/* Section 5: Approvals */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 border-slate-100">
+            {/* Manager Approval Box */}
+            <div className={`space-y-3 p-3 col-span-2 md:col-span-1 rounded-2xl border transition-all shadow-sm ${isChanged('manager_approval') ? 'bg-rose-50 border-rose-200' : 'bg-emerald-200/50 border-emerald-200'}`}>
+              <div className="flex justify-between items-center ml-1">
+                <label className="text-[10px] font-black text-black uppercase">Manager Status</label>
+                {tempData.manager_approval_name && (
+                  <span className={`text-[9px] font-bold italic transition-colors ${isChanged('manager_approval') ? 'text-rose-600' : 'text-emerald-800'}`}>
+                    Submitted: {tempData.manager_approval_name}
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-1.5">
+                {['pending', 'denied', 'approved', 'not_required'].map((status) => (
+                  <button 
+                    key={status} 
+                    type="button" 
+                    onClick={() => {
+                      const isOriginalStatus = status === absence.manager_approval;
+                      const isFinalizing = status === 'approved' || status === 'denied';
+                      
+                      setTempData({ 
+                        ...tempData, 
+                        manager_approval: status as any,
+                        // 1. If back to original: use DB name. 
+                        // 2. If new approval/denial: use current user. 
+                        // 3. Otherwise (pending/skip): clear it.
+                        manager_approval_name: isOriginalStatus 
+                          ? absence.manager_approval_name 
+                          : isFinalizing ? userName : ""
+                      });
+                    }} 
+                    className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${tempData.manager_approval === status ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-400 border-slate-100'}`}
+                  > 
+                    {status === 'not_required' ? 'Skip' : status} 
+                  </button>
+                ))}
+              </div>
             </div>
-            <div className="flex gap-1.5">
-              {['pending', 'approved', 'denied', 'not_required'].map((status) => (
-                <button 
-                  key={status} 
-                  type="button" 
-                  onClick={() => {
-                    const isOriginalStatus = status === absence.manager_approval;
-                    const isFinalizing = status === 'approved' || status === 'denied';
-                    
-                    setTempData({ 
-                      ...tempData, 
-                      manager_approval: status as any,
-                      // 1. If back to original: use DB name. 
-                      // 2. If new approval/denial: use current user. 
-                      // 3. Otherwise (pending/skip): clear it.
-                      manager_approval_name: isOriginalStatus 
-                        ? absence.manager_approval_name 
-                        : isFinalizing ? userName : ""
-                    });
-                  }} 
-                  className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${tempData.manager_approval === status ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-400 border-slate-100'}`}
-                > 
-                  {status === 'not_required' ? 'Skip' : status} 
-                </button>
-              ))}
+            {/* Final Approval Box */}
+            <div className={`space-y-3 p-3 col-span-2 md:col-span-1 rounded-2xl border transition-all shadow-sm ${isChanged('final_approval') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200'}`}>
+              <div className="flex justify-between items-center ml-1">
+                <label className="text-[10px] font-black text-black uppercase ml-1">Final Approval</label>
+                {tempData.final_approval_name && (
+                  <span className={`text-[9px] font-bold italic transition-colors ${isChanged('final_approval') ? 'text-rose-600' : 'text-emerald-800'}`}>
+                    Submitted {tempData.final_approval_name}
+                  </span>
+                )}
+              </div>
+              <div className="flex gap-1.5">
+                {['pending', 'denied', 'approved', 'approved_with_note'].map((status) => (
+                  <button 
+                    key={status} 
+                    type="button" 
+                    onClick={() => {
+                      const isOriginalStatus = status === absence.final_approval;
+                      const isFinalizing = status === 'approved' || status === 'denied';
+
+                      setTempData({ 
+                        ...tempData, 
+                        final_approval: status as any,
+                        // Same logic: Restore DB name if user returns to the original state
+                        final_approval_name: isOriginalStatus 
+                          ? absence.final_approval_name 
+                          : isFinalizing ? userName : ""
+                      });
+                    }} 
+                    className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${tempData.final_approval === status ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-400 border-slate-100'}`}
+                  > 
+                    {status === 'approved_with_note' ? 'Approved w/ Note' : status} 
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
-
-          {/* Final Approval Box */}
-          <div className={`space-y-3 p-3 rounded-2xl border transition-all shadow-sm ${isChanged('final_approval') ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-200'}`}>
-            <div className="flex justify-between items-center ml-1">
-              <label className="text-[10px] font-black text-black uppercase ml-1">Final Approval</label>
-              {tempData.final_approval_name && (
-                <span className={`text-[9px] font-bold italic transition-colors ${isChanged('final_approval') ? 'text-rose-600' : 'text-emerald-800'}`}>
-                  Submitted {tempData.final_approval_name}
-                </span>
-              )}
-            </div>
-            <div className="flex gap-1.5">
-              {['pending', 'approved', 'denied'].map((status) => (
-                <button 
-                  key={status} 
-                  type="button" 
-                  onClick={() => {
-                    const isOriginalStatus = status === absence.final_approval;
-                    const isFinalizing = status === 'approved' || status === 'denied';
-
-                    setTempData({ 
-                      ...tempData, 
-                      final_approval: status as any,
-                      // Same logic: Restore DB name if user returns to the original state
-                      final_approval_name: isOriginalStatus 
-                        ? absence.final_approval_name 
-                        : isFinalizing ? userName : ""
-                    });
-                  }} 
-                  className={`flex-1 py-3 rounded-xl text-[9px] font-black uppercase border-2 transition-all ${tempData.final_approval === status ? 'bg-slate-900 text-white border-slate-900 shadow-md' : 'bg-white text-slate-400 border-slate-100'}`}
-                > 
-                  {status} 
-                </button>
-              ))}
-            </div>
-          </div>
-
+          {/* Section 6: Manager Exemption and DOA Points*/}
+          <div className = "grid grid-cols-1 md:grid-cols-3 gap-6 border-slate-100">
             {/* Manager Exemption Box */}
-            <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between shadow-sm ${ isChanged('skipManagerApproval') ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-200' }`}>
+            <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('skipManagerApproval') ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-200' }`}>
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-lg ${tempData.skipManagerApproval ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-200 text-slate-500'}`}><User className="h-4 w-4" /></div>
-                <div><p className="text-[11px] font-black text-black uppercase leading-none">Manager Exemption</p><p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">Skip Dept Approval</p></div>
+                <div><p className="text-[11px] font-black text-black uppercase leading-none">Manager Exemption</p><p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">Skip Manager Approval</p></div>
               </div>
               <button type="button" onClick={() => setTempData({ ...tempData, skipManagerApproval: !tempData.skipManagerApproval, manager_approval: !tempData.skipManagerApproval ? 'not_required' : 'pending'})} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${tempData.skipManagerApproval ? 'bg-emerald-500' : 'bg-slate-700'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${tempData.skipManagerApproval ? 'translate-x-6' : 'translate-x-1'}`} /></button>
             </div>
 
+            {/* Pending DOA Points Box */}
+            <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('pendingDOAPoints') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${tempData.pendingDOAPoints > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
+                  <AlertCircle className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-black text-black uppercase leading-none">Pending DOA Points</p>
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">Staged Penalty Points</p>
+                </div>
+              </div>
+  
+              <input 
+                type="number" 
+                min="0" 
+                step="any"
+                value={tempData.pendingDOAPoints || ''} 
+                onChange={e => setTempData({...tempData, pendingDOAPoints: parseFloat(e.target.value) || 0})}
+                className="w-20 h-10 text-center font-bold text-lg bg-white rounded-xl border-none shadow-inner focus:ring-2 focus:ring-blue-400"
+                placeholder="0"
+              />
+            </div>
+
             {/* DOA Points Box */}
-            <div className={`p-4 rounded-2xl border transition-all flex items-center justify-between shadow-sm ${ isChanged('DOAPoints') ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-200' }`}>
+            <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('DOAPoints') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-lg ${tempData.DOAPoints > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
                   <AlertCircle className="h-4 w-4" />
@@ -496,7 +520,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             </div>
 
             {/* Notes Box */}
-            <div className={`col-span-2 space-y-1 p-3 rounded-2xl border transition-all shadow-sm ${ isChanged('manager_notes') ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-200' }`}>
+            <div className={`col-span-3 space-y-1 p-3 rounded-2xl border transition-all shadow-sm ${ isChanged('manager_notes') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
               <label className="text-[10px] font-black text-black uppercase ml-1 flex items-center gap-1">Admin Notes</label>
               <textarea 
                 className="w-full bg-transparent border-none text-sm font-bold focus:ring-0 resize-none overflow-hidden" 

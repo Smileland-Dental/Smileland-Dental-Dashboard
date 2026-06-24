@@ -126,6 +126,15 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
         etd: '',
       }));
     }
+    else if (name === 'type_of_request') {
+      setFormData(prev => ({
+        ...prev,
+        [name]: value,
+
+        // Reset Excuse Note to 'not_provided' if switching requests so 'N/A' doesn't exist on Incident Notice
+        excuse_note_submitted: 'not_provided',
+      }))
+    }
     else{
       setFormData(prev => ({ ...prev, [name]: value }));
     }
@@ -325,6 +334,21 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
                     {opt.replace('not_provided', 'Not Providing')}
                   </label>
                 ))}
+
+                {/* Conditionally add the N/A option exclusively for Time Off Requests */}
+                {formData.type_of_request === "Time Off Request" && (
+                  <label className="flex items-center gap-1.5 cursor-pointer uppercase">
+                    <input 
+                      type="radio" 
+                      name="excuse_note_submitted" 
+                      value="na" 
+                      onChange={handleChange} 
+                      checked={formData.excuse_note_submitted === 'na'}
+                      className="accent-blue-600"
+                    />
+                    N/A
+                  </label>
+                )}
               </div>
 
               {formData.excuse_note_submitted === 'submitted' && (

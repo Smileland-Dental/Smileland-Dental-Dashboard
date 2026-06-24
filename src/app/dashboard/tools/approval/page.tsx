@@ -98,10 +98,10 @@ export default function Page() {
   const approvedRequests = useMemo(() => {
     return allRequests.filter(r => {
       if (userRole === 'Manager') {
-        return (r.manager_approval === 'approved' && r.final_approval === 'pending') || (r.manager_approval === 'approved' && r.final_approval === 'approved');
+        return (r.manager_approval === 'approved' && (r.final_approval === 'pending' || r.final_approval === 'approved' || r.final_approval === 'approved_with_note'));
       }
       if (userRole === 'HR' || userRole === 'Director') {
-        return r.final_approval === 'approved';
+        return r.final_approval === 'approved' || r.final_approval === 'approved_with_note';
       }
       return false;
     });
@@ -126,7 +126,7 @@ export default function Page() {
     setManagerNotes('');
   };
 
-  const handleApproval = async (decision: 'approved' | 'denied') => {
+  const handleApproval = async (decision: 'approved' | 'denied' | 'approved_with_note') => {
     if (!selectedRequest || !user) return;
 
     setIsSubmitting(true);

@@ -21,14 +21,13 @@ export async function getAbsenceRequestsByUser(user: User, startDateString: stri
 
   const userRole = user.role || "";
   const managedEmployeeIds: string[] = user.managedEmployeeIds || [];
-  const offices = user.offices || [];
   const absencesRef = collection(db, "absences");
   let queryConstraints = [];
   //console.log("User Role:", userRole);
   //console.log("Managed Employee IDs:", managedEmployeeIds);
   //console.log("Offices:", offices);
-const start = Timestamp.fromDate(new Date(`${startDateString}T00:00:00`));
-const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
+  //const start = Timestamp.fromDate(new Date(`${startDateString}T00:00:00`));
+  //const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
 
 // 1. Basic Permission Guard
   if (!["HR", "Director", "Manager"].includes(userRole)) return [];
@@ -40,7 +39,7 @@ const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
     // This applies to HR/Directors who don't have a specific team assigned.
     // CHANGED: HR/Directors now see all requests across the system, not just their offices, to align with the new requirement.
     if (["HR", "Director"].includes(userRole)) {
-      const globalQuery = query(absencesRef, where("createdAt", ">=", start), where("createdAt", "<=", end));
+      const globalQuery = query(absencesRef, where("incident_start", "<=", endDateString), where("incident_end", ">=", startDateString));
       const snap = await getDocs(globalQuery);
       allRequests = snap.docs.map(doc => ({ 
         id: doc.id, 
@@ -55,7 +54,7 @@ const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
       
       // Execute all queries in parallel
       const queryPromises = chunks.map(chunk => {
-        const q = query(absencesRef, where("employeeFirestoreID", "in", chunk), where("createdAt", ">=", start), where("createdAt", "<=", end), where("skipManagerApproval", "==", false));
+        const q = query(absencesRef, where("employeeFirestoreID", "in", chunk), where("incident_start", "<=", endDateString), where("incident_end", ">=", startDateString), where("skipManagerApproval", "==", false));
         return getDocs(q); 
       });
 
@@ -73,9 +72,9 @@ const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
     // 4. Sort (Oldest first)
     // Using .toMillis() for Firestore Timestamps and new Date() for strings
     return allRequests.sort((a, b) => {
-      const dateA = a.createdAt?.toMillis() || 0;
-      const dateB = b.createdAt?.toMillis() || 0;
-      return dateA - dateB;
+      const dateA = a.incident_start || "";
+      const dateB = b.incident_end || "";
+      return dateA.localeCompare(dateB);
     });
 
   } catch (error) {
@@ -83,3 +82,14 @@ const end = Timestamp.fromDate(new Date(`${endDateString}T23:59:59`));
     return [];
   }
 }
+
+// Helper to derive the visible text status from an object
+export const getRequestStatusText = (req: AbsenceRequest): string => {
+  if (req.manager_approval === 'denied' && req.final_approval === 'pending') return "Manager Denied";
+  if (req.manager_approval === 'denied' || req.final_approval === 'denied') return "Denied";
+  if (req.final_approval === 'approved') return "Approved";
+  if (req.final_approval === 'approved_with_note') return "Approved With Note"
+  if (req.manager_approval === 'approved') return "Manager Approved";
+  if (req.manager_approval === 'not_required' && req.final_approval === 'pending') return "Pending Final Approval";
+  return "Pending Manager Approval";
+};
