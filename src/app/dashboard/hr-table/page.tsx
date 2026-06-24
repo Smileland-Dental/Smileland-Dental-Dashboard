@@ -5,17 +5,21 @@ import { collection, doc, updateDoc, addDoc, Timestamp, deleteDoc } from 'fireba
 import { ref, deleteObject } from "firebase/storage";
 import { useAuth } from '@/contexts/AuthContext';
 import { AbsenceRequest } from "@/lib/types";
-import { getAbsenceRequestsByUser } from '@/components/approval/approval';
+import { getAbsenceRequestsByUser, getRequestStatusText } from '@/components/approval/approval';
+import { StatusBadge } from "@/components/ui/status-badge";
 
 // UI Components
-import { Search, ChevronLeft, ChevronRight, Edit3, Calendar, FileDown, Plus, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import { Search, ChevronLeft, ChevronRight, Edit3, Calendar, FileDown, Plus } from 'lucide-react';
 import { HRRequestDetailsModal } from "@/components/approval/hr-request-details-modal";
 import { HRCreateAbsenceModal } from "@/components/forms/absence-request/hr-absence";
 import * as XLSX from 'xlsx';
 
+import { useSort } from '@/hooks/custom-hooks'
+import { SortIcon } from '@/components/ui/table-sort'
+
 import { OFFICES } from '@/lib/constants';
 const itemsPerPage = 20;
-const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift", "Cancel Cell"];
+//const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift", "Cancel Cell"];
 
 export default function Page() {
   const { user, loading: authLoading } = useAuth();
@@ -36,8 +40,11 @@ export default function Page() {
   const [searchTerm, setSearchTerm] = useState('');
   const [officeFilter, setOfficeFilter] = useState('all');
   const [activeFilter, setActiveFilter] = useState('active');
+  const [pendingNotesOnly, setPendingNotesOnly] = useState(false);
+
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedAbsence, setSelectedAbsence] = useState<AbsenceRequest | null>(null);
+
   const [isAdding, setIsAdding] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -65,10 +72,13 @@ export default function Page() {
     }
   }, [user, authLoading, startDate, endDate]);
 
+  
+  const { sortConfig, handleSort } = useSort();
+
   // --- Client-Side Search (Operating on the server-filtered set) ---
   const filteredRequests = useMemo(() => {
     const term = searchTerm.toLowerCase().trim();
-    return absences.filter((a) =>
+    let result = absences.filter((a) =>
 
       ((a.status || 'active') === activeFilter) &&
       (officeFilter === 'all' || a.office === officeFilter) && (
@@ -76,7 +86,36 @@ export default function Page() {
         String(a.employee_id || '').toLowerCase().includes(term)
       )
     );
-  }, [absences, searchTerm, officeFilter, activeFilter]);
+
+    if (sortConfig.direction !== 'none' && sortConfig.key) {
+      result = [...result].sort((a, b) => {
+        let valA = a[sortConfig.key as keyof AbsenceRequest];
+        let valB = b[sortConfig.key as keyof AbsenceRequest];
+
+        // Format custom fields safely for evaluation
+        if (sortConfig.key === 'createdAt') {
+          valA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+          valB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+        }
+
+        // --- ADDED TRAP DOOR FOR STATUS BADGE ---
+        if (sortConfig.key === 'statusBadge') {
+          valA = getRequestStatusText(a);
+          valB = getRequestStatusText(b);
+        }
+
+        // Handle fallback conversions for missing types or empty values safely
+        const strA = String(valA ?? '').toLowerCase();
+        const strB = String(valB ?? '').toLowerCase();
+
+        if (strA < strB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (strA > strB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return result;
+  }, [absences, searchTerm, officeFilter, activeFilter, sortConfig]);
 
   const paginated = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
@@ -169,7 +208,7 @@ export default function Page() {
       </div>
 
       {/* Control Bar: Search + Offices + Active Status + Dates */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-4 bg-white p-4 rounded-[2rem] shadow-sm border border-slate-100">
+      <div className="grid grid-cols-2 md:grid-cols-7 gap-4 bg-white p-4 rounded-[2rem] shadow-sm border border-slate-100">
         <div className="col-span-2 md:col-span-2 relative">
           <Search className="absolute left-4 top-3 text-gray-400 h-5 w-5" />
           <input 
@@ -179,9 +218,9 @@ export default function Page() {
             onChange={e => setSearchTerm(e.target.value)} 
           />
         </div>
-        <div className="flex grid-cols-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+        <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
           <select
-            className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0"
+            className="bg-transparent border-none text-s font-bold focus:ring-0 p-0"
             value={activeFilter}
             onChange={e => setActiveFilter(e.target.value)}
           >
@@ -189,9 +228,9 @@ export default function Page() {
             <option value="archived">Archived</option>
           </select>
         </div>
-        <div className="flex grid-cols-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+        <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
           <select 
-            className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0" 
+            className="bg-transparent border-none text-s font-bold focus:ring-0 p-0" 
             value={officeFilter} 
             onChange={e => setOfficeFilter(e.target.value)}
           >
@@ -203,20 +242,35 @@ export default function Page() {
             ))}
           </select>
         </div>
-        <div className="flex grid-cols-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+        <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
           {/*<Calendar className="h-4 w-4 text-slate-400" />*/}
           <div className="flex flex-col w-full">
             <span className="text-[9px] font-black text-slate-400 uppercase">From</span>
             <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0" />
           </div>
         </div>
-        <div className="flex grid-cols-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+        <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
           {/*<Calendar className="h-4 w-4 text-slate-400" />*/}
           <div className="flex flex-col w-full">
             <span className="text-[9px] font-black text-slate-400 uppercase">To</span>
             <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0" />
           </div>
         </div>
+        {/*<label 
+          htmlFor="pending-notes-toggle"
+          className={`flex col-span-2 md:col-span-1 items-center justify-between gap-3 bg-slate-50 px-4 py-2.5 rounded-xl border border-slate-100 cursor-pointer select-none transition-colors hover:bg-slate-100/80 ${
+            pendingNotesOnly ? "bg-amber-50/50 border-amber-100" : ""
+          }`}
+        >
+          <span className="text-xs font-bold text-slate-700">Pending Notes</span>
+          <input
+            id="pending-notes-toggle"
+            type="checkbox"
+            checked={pendingNotesOnly}
+            onChange={e => setPendingNotesOnly(e.target.checked)}
+            className="h-4 w-4 rounded text-indigo-600 border-gray-300 focus:ring-indigo-500 cursor-pointer accent-indigo-600"
+          />
+        </label>*/}
       </div>
 
       {/* Results Table */}
@@ -225,13 +279,13 @@ export default function Page() {
         <table className="w-full text-left">
           <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
             <tr>
-              <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Employee</th>
-              <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Type</th>
-              <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Office</th>
-              <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Dates</th>
-              <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Submitted</th>
-              <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
-              <th className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider">DOA</th>
+              <th onClick={() => handleSort('employee_name')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Employee<SortIcon columnKey="employee_name" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('type_of_incident')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Type<SortIcon columnKey="type_of_incident" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('office')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Office<SortIcon columnKey="office" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('incident_start')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Dates<SortIcon columnKey="incident_start" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('createdAt')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Submitted<SortIcon columnKey="createdAt" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('statusBadge')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Status<SortIcon columnKey="statusBadge" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('DOAPoints')} className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">DOA<SortIcon columnKey="DOAPoints" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
               <th className="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Edit</th>
             </tr>
           </thead>
@@ -241,11 +295,11 @@ export default function Page() {
             ) : paginated.length > 0 ? (
               paginated.map(a => (
               <tr key={a.id} className="hover:bg-slate-50/50 group transition-colors">
-                <td className="px-6 py-4">
+                <td className="px-6 py-4 hover:cursor-pointer" onClick={() => setSelectedAbsence(a)}>
                   <div className="font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">{a.employee_name}</div>
                   <div className="text-[10px] font-mono text-slate-400">ID: {a.employee_id}</div>
                 </td>
-                <td className="px-4 py-4 text-sm font-medium text-slate-600">
+                <td className="px-4 py-4 text-sm font-medium text-slate-600 whitespace-nowrap">
                   <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded-md">
                     {a.type_of_incident === "Leave and Come Back" ? "Leave & CB" : a.type_of_incident}  
                     {/* a.type_of_incident */}
@@ -320,40 +374,5 @@ export default function Page() {
       <HRCreateAbsenceModal isOpen={isAdding} onClose={() => setIsAdding(false)} onSave={fetchDocs} />
       </div>
     </div>
-  );
-};
-
-const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
-  if (req.manager_approval === 'denied' && req.final_approval === 'pending') {
-    return <Badge color="red" text="Manager Denied" />;
-  }
-  else if (req.manager_approval === 'denied' || req.final_approval === 'denied') {
-    return <Badge color="red" text="Denied" />;
-  }
-  else if (req.final_approval === 'approved') {
-    return <Badge color="green" text="Approved" />;
-  }
-  else if (req.manager_approval === 'approved') {
-    return <Badge color="yellow" text="Manager Approved" />;
-  }
-  else if (req.manager_approval === 'not_required' && req.final_approval === 'pending') {
-    return <Badge color="yellow" text="Pending Final Approval" />;
-  }
-  else{
-    return <Badge color="gray" text="Pending" />;
-  }
-};
-
-const Badge = ({ color, text }: { color: string; text: string }) => {
-  const styles: Record<string, string> = {
-    green: 'bg-emerald-100 text-emerald-700 ring-emerald-600/20',
-    red: 'bg-rose-100 text-rose-700 ring-rose-600/20',
-    yellow: 'bg-amber-100 text-amber-700 ring-amber-600/20',
-    gray: 'bg-slate-100 text-slate-600 ring-slate-600/10',
-  };
-  return (
-    <span className={`inline-flex items-center rounded-full px-2 py-1 text-xs font-black text-[10px] uppercase ring-1 ring-inset ${styles[color]}`}>
-      {text}
-    </span>
   );
 };

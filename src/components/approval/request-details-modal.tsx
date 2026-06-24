@@ -1,6 +1,6 @@
 import React from 'react';
 import { AbsenceRequest } from '@/lib/types'; // Import the type from our new central file
-import { ExternalLink, FileText } from 'lucide-react';
+import { ExternalLink, FileText, Check, X } from 'lucide-react';
 
 interface RequestDetailsModalProps {
   selectedRequest: AbsenceRequest;
@@ -9,7 +9,7 @@ interface RequestDetailsModalProps {
   isSubmitting: boolean;
   setManagerNotes: (notes: string) => void;
   handleCloseModal: () => void;
-  handleApproval: (status: 'approved' | 'denied') => void;
+  handleApproval: (status: 'approved' | 'denied' | 'approved_with_note') => void;
 }
 
 const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
@@ -21,10 +21,12 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
   handleCloseModal,
   handleApproval,
 }) => {
+
+  const higherRoleUser = (userRole === 'Director' || userRole === 'HR');
   
   const canTakeAction = 
     (userRole === 'Manager' && selectedRequest.manager_approval === 'pending' && !selectedRequest.skipManagerApproval) ||
-    ((userRole === 'HR' || userRole === 'Director') && selectedRequest.final_approval === 'pending' && (selectedRequest.manager_approval === 'approved' || selectedRequest.skipManagerApproval === true));
+    ((higherRoleUser) && selectedRequest.final_approval === 'pending' && (selectedRequest.manager_approval === 'approved' || selectedRequest.skipManagerApproval === true || selectedRequest.manager_approval === 'not_required'));
 
   // Helper to calculate days between dates
   //const getDuration = () => {
@@ -160,11 +162,11 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
             </div>
               {!(selectedRequest.type_of_request === "HR Call In" && userRole === 'Manager') && !((selectedRequest.final_approval === 'approved' || selectedRequest.final_approval === 'denied') && userRole === 'Manager') && (
                 <div>
-              <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Admin Notes</h4>
-              <p className="text-sm text-gray-700 bg-white p-3 border rounded-md italic">
-                {selectedRequest.manager_notes || "No notes provided."}
-              </p>
-              </div>
+                  <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Admin Notes</h4>
+                  <p className="text-sm text-gray-700 bg-white p-3 border rounded-md italic">
+                    {selectedRequest.manager_notes || "No notes provided."}
+                  </p>
+                </div>
               )}
           </section>
 
@@ -179,8 +181,8 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
                   <span className="text-xs font-bold text-gray-400 uppercase italic">N/A (Exempt)</span>
                 ) : (
                   <div className="text-right">
-                    <span className={`text-xs font-bold uppercase ${selectedRequest.manager_approval === 'approved' ? 'text-green-600' : selectedRequest.manager_approval === 'denied' ? 'text-red-600' : 'text-amber-500'}`}>
-                      {selectedRequest.manager_approval}
+                    <span className={`text-xs font-bold uppercase ${selectedRequest.manager_approval === 'approved' ? 'text-green-600' : selectedRequest.manager_approval === 'denied' ? 'text-red-600' : selectedRequest.manager_approval === 'not_required' ? 'text-gray-800' :'text-amber-500'}`}>
+                      {selectedRequest.manager_approval === 'not_required'  ? 'Not Required': selectedRequest.manager_approval}
                     </span>
                     {selectedRequest.manager_approval_name && <p className="text-[10px] text-gray-400">{selectedRequest.manager_approval_name}</p>}
                   </div>
@@ -191,8 +193,8 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
               <div className="flex items-center justify-between p-3 rounded-lg border border-gray-200">
                 <span className="text-sm font-medium">Final Approval</span>
                 <div className="text-right">
-                  <span className={`text-xs font-bold uppercase ${selectedRequest.final_approval === 'approved' ? 'text-green-600' : selectedRequest.final_approval === 'denied' ? 'text-red-600' : 'text-amber-500'}`}>
-                    {selectedRequest.final_approval}
+                  <span className={`text-xs font-bold uppercase ${(selectedRequest.final_approval === 'approved' || selectedRequest.final_approval === 'approved_with_note') ? 'text-green-600' : selectedRequest.final_approval === 'denied' ? 'text-red-600' : 'text-amber-500'}`}>
+                    {selectedRequest.final_approval === 'approved_with_note'  ? 'Approved With Note': selectedRequest.final_approval}
                   </span>
                   {selectedRequest.final_approval_name && <p className="text-[10px] text-gray-400">{selectedRequest.final_approval_name}</p>}
                 </div>
@@ -213,13 +215,13 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
               />
             </section>
           )}
-          {!canTakeAction && !(userRole === 'Manager') && (
+          {/*!canTakeAction && !(userRole === 'Manager') && (
 
             <div className="text-center text-sm italic text-gray-500">
               {managerNotes}
             </div>
             )
-          }
+          */}
         </div>
 
         {/* Modal Footer */}
@@ -238,12 +240,12 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
 
             {/* Right Side: Action Buttons */}
             <div className="flex gap-3">
-              <button 
+              {/*<button 
                 onClick={handleCloseModal} 
                 className="px-4 py-2 text-sm font-bold text-gray-500 hover:text-gray-700 transition-colors"
               >
                 Cancel
-              </button>
+              </button>{*/}
               
               {canTakeAction && (
                 <>
@@ -254,7 +256,8 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
                     disabled={isSubmitting}
                     className="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-lg text-sm font-bold disabled:bg-gray-300 transition-colors"
                   >
-                    Deny Request
+                    <span className="block sm:hidden"><X /></span>
+                    <span className="hidden sm:block">Deny</span>
                   </button>
                   
                   <button 
@@ -262,8 +265,20 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
                     disabled={isSubmitting}
                     className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-bold disabled:bg-gray-300 transition-colors shadow-lg shadow-green-600/20"
                   >
-                    Approve Request
+                    <span className="block sm:hidden"><Check /></span>
+                    <span className="hidden sm:block">Approve</span>
                   </button>
+
+                  {(higherRoleUser) && (
+                    <button
+                      onClick={() => handleApproval('approved_with_note')} 
+                      disabled={isSubmitting}
+                      className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg text-sm font-bold disabled:bg-gray-300 transition-colors shadow-lg shadow-green-600/20"
+                  >
+                    <span className="block sm:hidden"><Check /> <FileText/></span>
+                    <span className="hidden sm:block">Approve With Note</span>
+                  </button>
+                  )}
                 </>
               )}
             </div>

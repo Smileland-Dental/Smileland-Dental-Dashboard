@@ -3,6 +3,10 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { AbsenceRequest } from '@/lib/types';
 import { Search, Filter, ChevronRight, Calendar, User as UserIcon } from 'lucide-react';
+import { useSort } from '@/hooks/custom-hooks';
+import { SortIcon } from '@/components/ui/table-sort';
+import { getRequestStatusText } from './approval';
+import { StatusBadge } from '@/components/ui/status-badge'
 
 type RequestTableProps = {
   requests: AbsenceRequest[];
@@ -17,13 +21,16 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 20; // Adjust this number as needed
 
+  // Initialize your shared custom hook
+  const { sortConfig, handleSort } = useSort();
+
   // Reset to page 1 whenever filters or search change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, statusFilter]);
+  }, [searchTerm, statusFilter, sortConfig]);
 
   const filteredRequests = useMemo(() => {
-    return requests.filter((req) => {
+    let result = requests.filter((req) => {
       const searchLower = searchTerm.toLowerCase();
       const matchesSearch = 
         req.employee_name.toLowerCase().includes(searchLower) ||
@@ -37,7 +44,34 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
 
       return matchesSearch && matchesStatus;
     });
-  }, [requests, searchTerm, statusFilter]);
+
+    if (sortConfig.direction !== 'none' && sortConfig.key) {
+      result = [...result].sort((a, b) => {
+        let valA = a[sortConfig.key as keyof AbsenceRequest];
+        let valB = b[sortConfig.key as keyof AbsenceRequest];
+
+        // Format dates safely
+        if (sortConfig.key === 'createdAt') {
+          valA = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
+          valB = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
+        }
+
+        // Process status computed values for sorting
+        if (sortConfig.key === 'statusBadge') {
+          valA = getRequestStatusText(a);
+          valB = getRequestStatusText(b);
+        }
+
+        const strA = String(valA ?? '').toLowerCase();
+        const strB = String(valB ?? '').toLowerCase();
+
+        if (strA < strB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (strA > strB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+    return result;
+  }, [requests, searchTerm, statusFilter, sortConfig]);
 
   const paginatedRequests = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -85,12 +119,12 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
               <tr>
-                <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Employee</th>
-                <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Type</th>
-                <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Office</th>
-                <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Incident Dates</th>
-                <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Submitted</th>
-                <th className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Status</th>
+                <th onClick={() => handleSort('employee_name')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Employee<SortIcon columnKey="employee_name" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('type_of_incident')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Type<SortIcon columnKey="type_of_incident" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('office')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Office<SortIcon columnKey="office" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('incident_start')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Incident Dates<SortIcon columnKey="incident_start" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('createdAt')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Submitted<SortIcon columnKey="createdAt" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('statusBadge')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Status<SortIcon columnKey="statusBadge" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
                 <th className="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
@@ -182,6 +216,7 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
   );
 };
 
+{/*}
 // Refined StatusBadge Component
 const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
   if (req.manager_approval === 'denied' && req.final_approval === 'pending') {
@@ -189,6 +224,9 @@ const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
   }
   else if (req.manager_approval === 'denied' || req.final_approval === 'denied') {
     return <Badge color="red" text="Denied" />;
+  }
+  else if (req.final_approval === 'approved_with_note'){
+    return <Badge color="green" text="Approved With Note" />
   }
   else if (req.final_approval === 'approved') {
     return <Badge color="green" text="Approved" />;
@@ -216,4 +254,4 @@ const Badge = ({ color, text }: { color: string; text: string }) => {
       {text}
     </span>
   );
-};
+};*/}

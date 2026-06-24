@@ -39,7 +39,7 @@ export default function Page() {
       {user ? (
         <div>
           <h1 className="mb-4 text-2xl font-extrabold leading-none tracking-tight text-gray-900 md:text-3xl lg:text-4xl dark:text-white">Welcome to the Smileland Dental Employee Dashboard, 
-            <br/><strong>{user.displayName}</strong>!
+            <strong> {user.displayName}</strong>!
           </h1>
         </div>
       ) : (

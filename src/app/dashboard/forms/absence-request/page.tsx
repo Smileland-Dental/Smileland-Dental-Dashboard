@@ -129,7 +129,7 @@ export default function Page() {
   }, [allAbsences]);
 
   const approvedAbsences = useMemo(() => {
-    return allAbsences.filter(absence => (absence.manager_approval === 'approved' && absence.final_approval === 'approved') || (absence.manager_approval === 'not_required' && absence.final_approval === 'approved'));
+    return allAbsences.filter(absence => (absence.manager_approval === 'approved' && (absence.final_approval === 'approved' || absence.final_approval === 'approved_with_note')) || (absence.manager_approval === 'not_required' && (absence.final_approval === 'approved' || absence.final_approval === 'approved_with_note')));
   }, [allAbsences]);
 
   const deniedAbsences = useMemo(() => {

@@ -13,6 +13,8 @@ const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", 
 //const officeLocations = ["Corporate", "Ming", "Bernard", "California", "Ortho", "Delano", "Tulare", "Visalia", "Fresno"];
 
 export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: { absence: any, onFormSubmit: () => void, onClose: () => void }) {
+
+  if (!absence) return null;
   // --- 1. DEFINE DENIED STATE ---
   const isDenied = absence.manager_approval === 'denied' || absence.final_approval === 'denied';
   const isHRCallIn = absence.type_of_request === "HR Call In";
@@ -52,6 +54,8 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
       formData.eta !== (absence.eta || '') ||
       formData.etd !== (absence.etd || '') ||
       formData.excuse_note_submitted !== (absence.excuse_note_submitted || 'not_provided');
+
+      // CHECK HERE
 
     const hasFileChanges = newExcuseNotes.length > 0 || notesToRemove.length > 0;
     return hasFieldChanges || hasFileChanges;
@@ -247,10 +251,10 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                       value={val} 
                       checked={formData.type_of_request === val} 
                       onChange={handleChange} 
-                      disabled={isDenied || isHRCallIn} // Disable
+                      disabled={isDenied || isHRCallIn || (val === "HR Call In" && formData.type_of_request !== "HR Call In")} // Disable
                       className="accent-amber-600 disabled:opacity-50" 
                     />
-                    <span className={`text-amber-800 ${isDenied ? 'opacity-70' : ''}`}>{val}</span>
+                    <span className={`text-amber-800 ${(isDenied || isHRCallIn || (val === "HR Call In" && formData.type_of_request !== "HR Call In")) ? 'opacity-40' : ''}`}>{val}</span>
                   </label>
                 ))}
               </div>
@@ -380,9 +384,24 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                   id="file-upload" // 👈 Tied to the label above
                   type="file" 
                   multiple 
+                  //disabled={isOptedOut}
                   onChange={handleFileChange}
                   className="hidden" // 👈 Hides the ugly native browser text and "Choose File" button entirely!
                 />
+
+                <label 
+                    htmlFor="opt-out-notes" 
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-white/80 border border-blue-200/60 cursor-pointer select-none text-xs font-bold text-slate-700 hover:bg-white transition shadow-xs"
+                  >
+                    <input 
+                      id="opt-out-notes"
+                      type="checkbox" 
+                      //checked={isOptedOut}
+                      //onChange={(e) => handleOptOutNotesToggle(e.target.checked)}
+                      className="h-3.5 w-3.5 rounded text-blue-600 border-gray-300 focus:ring-blue-500 cursor-pointer accent-blue-600"
+                    />
+                    <span>Do not submit an excuse note</span>
+                  </label>
               </div>
             )}
           </div>

@@ -11,8 +11,8 @@ export type AbsenceRequest = {
   eta?: string;
   etd?: string;
   excuse_note?: string[];
-  excuse_note_submitted: 'pending' | 'submitted' | 'not_provided';
-  final_approval: 'pending' | 'approved' | 'denied';
+  excuse_note_submitted: 'pending' | 'submitted' | 'not_provided' | 'na';
+  final_approval: 'pending' | 'approved' | 'denied' | 'approved_with_note';
   final_approval_name: string;
   incident_start: string;
   incident_end: string;
@@ -25,6 +25,7 @@ export type AbsenceRequest = {
   updatedAt?: Timestamp;
   skipManagerApproval: boolean; // Field to indicate if manager approval is skipped (true/false)
   DOAPoints: number; // Points assigned for the DOA system based on the hours missed
+  pendingDOAPoints: number; // Points that are pending and will be added to DOAPoints if the request is approved
   status: 'active' | 'archived'; // New field to indicate if the request is active or archived
 };
 

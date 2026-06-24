@@ -40,6 +40,7 @@ const initialState = {
   manager_approval_name: '',
   manager_notes: '',
   DOAPoints: 0,
+  pendingDOAPoints: 0,
   status: 'active',
 };
 

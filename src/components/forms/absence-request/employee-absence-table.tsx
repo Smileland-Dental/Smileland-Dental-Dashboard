@@ -3,6 +3,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { AbsenceRequest } from '@/lib/types';
 import { ChevronRight, Calendar, FileText, ArrowUp, ArrowDown, ArrowUpDown, Filter } from 'lucide-react';
+import { StatusBadge } from '@/components/ui/status-badge';
 
 type RequestTableProps = {
   requests: AbsenceRequest[];
@@ -45,8 +46,8 @@ export const AbsenceTable: React.FC<RequestTableProps> = ({ requests, status, on
       const matchesType = typeFilter === 'all' || req.type_of_incident === typeFilter;
       
       // 2. Date Range Filter (Check if incident_start falls within range)
-      const reqDate = req.incident_start; // Assuming YYYY-MM-DD string format
-      const isWithinDate = reqDate >= startDate && reqDate <= endDate;
+      //const reqDate = req.incident_start; // Assuming YYYY-MM-DD string format
+      const isWithinDate = req.incident_start <= endDate && req.incident_end >= startDate;
 
       return matchesType && isWithinDate;
     });
@@ -238,6 +239,7 @@ const NoteBadge = ({ status }: { status: string }) => {
     pending: { bg: 'bg-yellow-50', text: 'text-yellow-700', label: 'Pending' },
     not_provided: { bg: 'bg-rose-50', text: 'text-rose-700', label: 'No Note' },
     submitted: { bg: 'bg-emerald-50', text: 'text-emerald-700', label: 'Submitted' },
+    na:  { bg: 'bg-gray-50', text: 'text-gray-700', label: 'N/A' }
   };
 
   const config = configs[status] || configs.not_provided;
@@ -249,6 +251,7 @@ const NoteBadge = ({ status }: { status: string }) => {
   );
 };
 
+{/*
 // Logic-heavy Status Badge (Manager + Final)
 const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
   if (req.manager_approval === 'denied' || req.final_approval === 'denied') {
@@ -273,3 +276,4 @@ const Badge = ({ color, text }: { color: string; text: string }) => {
     </span>
   );
 };
+*/}
