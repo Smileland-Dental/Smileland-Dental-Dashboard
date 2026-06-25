@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { db, auth } from '@/lib/firebase.config';
-import { doc, setDoc, getDoc, Timestamp, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, Timestamp, deleteDoc } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes } from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
@@ -57,13 +57,7 @@ interface DoctorRow {
 }
 
 export default function AttendanceTrack() {
-  const [loading, setLoading] = useState(false);
   const [staffList, setStaffList] = useState<{ staff: StaffList; doctors: DoctorMember[] } | null>(null);
-  const [attendanceData, setAttendanceData] = useState<{ staffData: AttendanceRow[]; doctorData: DoctorRow[] }>({
-    staffData: [],
-    doctorData: []
-  });
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
   const [userOfficesOptions, setUserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
 
   // 마지막 저장된 데이터 추적 (자동 저장 최적화용)
@@ -75,6 +69,152 @@ export default function AttendanceTrack() {
   const lastApiCallTimeRef = useRef<number>(0);
   const autoSaveCountRef = useRef<number>(0);
   const autoSaveResetTimeRef = useRef<number>(Date.now());
+  const AUTO_SAVE_DEBOUNCE_MS = 1000;
+  const AUTO_SAVE_MIN_INTERVAL_MS = 1000;
+
+  const theme = {
+    bg: '#FFFFFF',
+    card: '#FFFFFF',
+    cardAlt: '#F8F9FA',
+    gray: '#5F6B73',
+    accent: '#4A8F65',
+    text: '#212529',
+    textMuted: '#6C757D',
+    border: '#DEE2E6',
+    borderLight: '#E9ECEF',
+    positionBg: '#F1F3F5',
+    shadow: '0 1px 4px rgba(0, 0, 0, 0.06)',
+    radiusSm: '8px',
+    radiusLg: '12px',
+    font: "'Segoe UI', system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+  };
+
+  const ui = {
+    page: {
+      minHeight: '100vh',
+      padding: '28px 24px',
+      fontFamily: theme.font,
+      background: theme.bg,
+      color: theme.text,
+    },
+    title: {
+      fontSize: '2.25rem',
+      fontWeight: 600,
+      color: '#000000',
+      marginBottom: '8px',
+      textAlign: 'center' as const,
+      letterSpacing: '-0.02em',
+    },
+    subtitle: {
+      marginTop: '4px',
+      marginBottom: '28px',
+      fontSize: '15px',
+      textAlign: 'center' as const,
+      color: theme.textMuted,
+      lineHeight: 1.5,
+    },
+    formCard: {
+      marginBottom: '24px',
+      padding: '20px 24px',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: '20px',
+      flexWrap: 'wrap' as const,
+      background: theme.cardAlt,
+      borderRadius: theme.radiusLg,
+      boxShadow: 'none',
+      border: `1px solid ${theme.borderLight}`,
+    },
+    label: { display: 'flex', alignItems: 'center', gap: '8px', color: theme.text, fontWeight: 500 },
+    input: {
+      padding: '8px 12px',
+      borderRadius: theme.radiusSm,
+      border: `1px solid ${theme.border}`,
+      background: theme.card,
+      color: theme.text,
+      fontSize: '14px',
+    },
+    tableCard: {
+      background: theme.card,
+      borderRadius: theme.radiusLg,
+      overflow: 'hidden',
+      boxShadow: theme.shadow,
+      border: `1px solid ${theme.border}`,
+    },
+    table: {
+      width: '100%',
+      tableLayout: 'fixed' as const,
+      borderCollapse: 'separate' as const,
+      borderSpacing: 0,
+      background: theme.card,
+    },
+    th: {
+      padding: '12px 8px',
+      borderBottom: `1px solid ${theme.border}`,
+      borderRight: '1px solid rgba(255, 255, 255, 0.25)',
+      fontSize: '0.95rem',
+      fontWeight: 600,
+      background: theme.gray,
+      color: '#F5FBFB',
+    },
+    td: {
+      padding: '10px 8px',
+      borderBottom: `1px solid ${theme.borderLight}`,
+      borderRight: `1px solid ${theme.borderLight}`,
+      color: theme.text,
+    },
+    tdCenter: {
+      padding: '10px 8px',
+      borderBottom: `1px solid ${theme.borderLight}`,
+      borderRight: `1px solid ${theme.borderLight}`,
+      textAlign: 'center' as const,
+      color: theme.text,
+    },
+    addBtn: {
+      padding: '6px 14px',
+      background: theme.accent,
+      color: 'white',
+      border: 'none',
+      borderRadius: '20px',
+      cursor: 'pointer',
+      fontSize: '12px',
+      fontWeight: 500,
+      position: 'absolute' as const,
+      right: '12px',
+    },
+    removeBtn: {
+      padding: '0 6px',
+      background: 'transparent',
+      color: theme.textMuted,
+      border: `1px solid ${theme.border}`,
+      borderRadius: '4px',
+      cursor: 'pointer',
+      fontSize: '14px',
+      lineHeight: 1.2,
+    },
+    submitBtn: {
+      padding: '12px 32px',
+      background: theme.gray,
+      color: '#FFFFFF',
+      border: 'none',
+      borderRadius: '24px',
+      cursor: 'pointer',
+      fontSize: '16px',
+      fontWeight: 600,
+      boxShadow: '0 2px 6px rgba(0, 0, 0, 0.12)',
+    },
+    officeBadge: {
+      padding: '8px 14px',
+      borderRadius: theme.radiusSm,
+      border: `1px solid ${theme.border}`,
+      backgroundColor: theme.cardAlt,
+      fontWeight: 500,
+      color: theme.text,
+    },
+    checkbox: { width: '18px', height: '18px', accentColor: theme.gray },
+    cellInput: { width: '100%', border: 'none', background: 'transparent', padding: '2px 0', color: theme.text },
+  };
 
   // 🔒 보안: 입력 검증 및 XSS 방지 함수
   const validateInput = (value: string | undefined | null, maxLength: number = 500): string => {
@@ -99,23 +239,25 @@ export default function AttendanceTrack() {
     return !isNaN(parsedDate.getTime());
   };
 
+  const OFFICE_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'] as const;
+  const INCIDENT_OPTIONS = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'] as const;
+  const POSITION_ORDER = ['Front Office', 'Biller', 'Dental Assistant', 'RDA', 'Sub', 'Extern'] as const;
+  const CUSTOM_ROW_NO_THRESHOLD = 1000;
+
   // 🔒 보안: 오피스 값 검증
-  const validateOffice = (office: string): boolean => {
-    const allowedOffices = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
-    return allowedOffices.includes(office);
-  };
+  const validateOffice = (office: string): boolean =>
+    (OFFICE_OPTIONS as readonly string[]).includes(office);
 
   // 🔒 보안: Position 값 검증
-  const validatePosition = (position: string): boolean => {
-    const allowedPositions = ['Front Office', 'Biller', 'Dental Assistant', 'RDA', 'Sub', 'Extern'];
-    return allowedPositions.includes(position);
-  };
+  const validatePosition = (position: string): boolean =>
+    (POSITION_ORDER as readonly string[]).includes(position);
 
   // 🔒 보안: Incident 값 검증
-  const validateIncident = (incident: string): boolean => {
-    const allowedIncidents = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'];
-    return allowedIncidents.includes(incident);
-  };
+  const validateIncident = (incident: string): boolean =>
+    (INCIDENT_OPTIONS as readonly string[]).includes(incident);
+
+  const getAttendanceDocId = (date: string, office: string) =>
+    `${date}_${office}`.replace(/[^a-zA-Z0-9_-]/g, '');
 
   // --- PDF 생성 관련 상수/스타일 ---
   const pdfStyles = StyleSheet.create({
@@ -123,7 +265,6 @@ export default function AttendanceTrack() {
     header: { marginBottom: 10, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 6, alignItems: 'center' },
     headerTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 4 },
     headerSub: { fontSize: 8 },
-    headerInfo: { fontSize: 7, marginBottom: 8, textAlign: 'center' },
     row: { flexDirection: 'row', borderBottomWidth: 0.5, borderColor: '#333' },
     cell: { padding: 2, fontSize: 6, flex: 1, borderRightWidth: 0.5, borderColor: '#333', justifyContent: 'center', alignItems: 'center' },
     cellBold: { fontWeight: 'bold', backgroundColor: '#e3f2fd' },
@@ -311,12 +452,10 @@ export default function AttendanceTrack() {
     return `${year}-${month}-${day}`;
   });
 
-  const [selectedOffice, setSelectedOffice] = useState(''); // 오피스 선택 필요
-  const [officePasswordVerified, setOfficePasswordVerified] = useState(false); // 오피스 비밀번호 확인 상태
+  const [selectedOffice, setSelectedOffice] = useState(''); // 오피스 선택
   const [filledBy, setFilledBy] = useState('');
   const [checkedBy, setCheckedBy] = useState('');
 
-  // 테이블 데이터 상태 (staff-list 기반)
   const [tableRows, setTableRows] = useState<Array<{
     id: string;
     position: string;
@@ -345,417 +484,298 @@ export default function AttendanceTrack() {
     checkOut: string;
   }>>([]);
 
-  // Office 옵션
-  const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
-  const incidentOptions = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'];
+  const compareByName = (a: { name: string }, b: { name: string }) =>
+    (a.name || '').localeCompare(b.name || '', 'en', { sensitivity: 'base' });
 
-  // Staff List를 기반으로 테이블 행 업데이트 (기존 입력 데이터 보존)
-  const updateTableRowsFromStaffList = useCallback((staffListData: { staff: StaffList; doctors: DoctorMember[] }, preserveExistingData: boolean = true) => {
-    setTableRows(prevRows => {
-      
-      // 타입 정의
-      type TableRow = {
-        id: string;
-        position: string;
-        no: number;
-        name: string;
-        present: boolean;
-        startTardy: string;
-        lateLunch: string;
-        needsAdj: boolean;
-        overtime: string;
-        otCorp: string;
-        subAnother: boolean;
-        incident: string;
-        notes: string;
+  const isCustomStaffRow = (row: { no: number }) => row.no >= CUSTOM_ROW_NO_THRESHOLD;
+
+  const isCustomDoctorRow = (row: { no: number }) => row.no >= CUSTOM_ROW_NO_THRESHOLD;
+
+  const isBlankCustomStaffRow = (row: typeof tableRows[number]) =>
+    isCustomStaffRow(row) &&
+    !(row.name || '').trim() &&
+    !row.present &&
+    !row.subAnother &&
+    !(row.startTardy || '').trim() &&
+    !(row.lateLunch || '').trim() &&
+    !row.needsAdj &&
+    !(row.overtime || '').trim() &&
+    !(row.otCorp || '').trim() &&
+    !(row.incident || '').trim() &&
+    !(row.notes || '').trim();
+
+  const isBlankCustomDoctorRow = (row: typeof doctorRows[number]) =>
+    isCustomDoctorRow(row) &&
+    !(row.name || '').trim() &&
+    !row.present &&
+    !(row.checkIn || '').trim() &&
+    !(row.lunchOut || '').trim() &&
+    !(row.lunchIn || '').trim() &&
+    !(row.checkOut || '').trim();
+
+  const getStaffRowsMissingIncident = (rows: typeof tableRows) =>
+    rows.filter(
+      row =>
+        !isBlankCustomStaffRow(row) &&
+        !row.present &&
+        !row.subAnother &&
+        !(row.incident || '').trim()
+    );
+
+  function buildAttendancePayload(
+    rowsToSave: typeof tableRows,
+    doctorsToSave: typeof doctorRows,
+    date: string,
+    rawFilledBy: string,
+    rawCheckedBy: string
+  ) {
+    const safeFilledBy = validateInput(rawFilledBy, 100);
+    const safeCheckedBy = validateInput(rawCheckedBy, 100);
+
+    const staffData: AttendanceRow[] = rowsToSave
+      .filter(row => !isBlankCustomStaffRow(row))
+      .map(row => {
+      const validatedPosition = validatePosition(row.position) ? row.position : '';
+      const validatedIncident = validateIncident(row.incident || '') ? (row.incident || '') : '';
+      return {
+        date,
+        filledBy: safeFilledBy,
+        checkedBy: safeCheckedBy,
+        position: validatedPosition,
+        count: 0,
+        no: typeof row.no === 'number' && row.no >= 0 && row.no <= 9999 ? row.no : 0,
+        name: validateInput(row.name, 100),
+        present: typeof row.present === 'boolean' ? row.present : false,
+        startTardy: validateInput(row.startTardy, 50),
+        lateLunch: validateInput(row.lateLunch, 50),
+        needsAdj: typeof row.needsAdj === 'boolean' ? row.needsAdj : false,
+        overtime: validateInput(row.overtime, 50),
+        otCorp: validateInput(row.otCorp, 50),
+        subAnother: typeof row.subAnother === 'boolean' ? row.subAnother : false,
+        incident: validatedIncident,
+        notes: validateInput(row.notes, 500)
       };
-      
-      // 임시 row는 preserveExistingData가 true일 때만 보존
-      const tempRows = preserveExistingData ? prevRows.filter(row => row.id.startsWith('temp-')) : [];
-      
-      // 저장된 출석 데이터를 가져오기 (attendanceData에서)
-      const savedRowsMap = new Map<string, TableRow>();
-      if (attendanceData.staffData && attendanceData.staffData.length > 0) {
-        attendanceData.staffData.forEach((row: AttendanceRow) => {
-          const id = `${row.position}-${row.no}`;
-          savedRowsMap.set(id, {
-            id,
-            position: row.position,
-            no: row.no,
-            name: row.name,
-            present: row.present || false,
-            startTardy: row.startTardy || '',
-            lateLunch: row.lateLunch || '',
-            needsAdj: row.needsAdj || false,
-            overtime: row.overtime || '',
-            otCorp: row.otCorp || '',
-            subAnother: row.subAnother || false,
-            incident: row.incident || '',
-            notes: row.notes || ''
-          });
-        });
-      }
-      
-      // staff-list를 기반으로 테이블 행 생성
-      const newRows: TableRow[] = [];
-      
-      // Position 순서 정의
-      const positionOrder = ['Front Office', 'Biller', 'Dental Assistant', 'RDA', 'Sub', 'Extern'];
-      
-      // 기존 테이블 행 데이터를 맵으로 변환 (입력 데이터 보존용)
-      const existingRowsMap = new Map<string, TableRow>();
-      if (preserveExistingData) {
-        prevRows.forEach(row => {
-          existingRowsMap.set(row.id, row);
-        });
-      }
-      
-      // 저장된 출석 데이터도 맵에 병합 (저장된 데이터가 우선)
-      savedRowsMap.forEach((savedRow, id) => {
-        if (existingRowsMap.has(id)) {
-          // 기존 행과 저장된 데이터 병합 (저장된 데이터 우선)
-          existingRowsMap.set(id, { ...existingRowsMap.get(id)!, ...savedRow });
-        }
+    });
+
+    const positionCounts: { [key: string]: number } = {};
+    staffData.forEach(row => {
+      if (!positionCounts[row.position]) positionCounts[row.position] = 0;
+      if (row.present) positionCounts[row.position]++;
+    });
+    staffData.forEach(row => {
+      row.count = positionCounts[row.position] || 0;
+    });
+
+    const doctorPresentCount = doctorsToSave.filter(r => r.present && !isBlankCustomDoctorRow(r)).length;
+    const doctorData: DoctorRow[] = doctorsToSave
+      .filter(row => !isBlankCustomDoctorRow(row))
+      .map(row => ({
+      date,
+      filledBy: safeFilledBy,
+      checkedBy: safeCheckedBy,
+      position: 'Doctor',
+      count: doctorPresentCount,
+      no: typeof row.no === 'number' ? row.no : 0,
+      name: validateInput(row.name, 100),
+      present: typeof row.present === 'boolean' ? row.present : false,
+      checkIn: validateInput(row.checkIn, 10),
+      lunchOut: validateInput(row.lunchOut, 10),
+      lunchIn: validateInput(row.lunchIn, 10),
+      checkOut: validateInput(row.checkOut, 10)
+    }));
+
+    return { staffData, doctorData, safeFilledBy, safeCheckedBy };
+  }
+
+  type StaffTableRow = {
+    id: string;
+    position: string;
+    no: number;
+    name: string;
+    present: boolean;
+    startTardy: string;
+    lateLunch: string;
+    needsAdj: boolean;
+    overtime: string;
+    otCorp: string;
+    subAnother: boolean;
+    incident: string;
+    notes: string;
+  };
+
+  type DoctorTableRow = {
+    id: string;
+    no: number;
+    name: string;
+    present: boolean;
+    checkIn: string;
+    lunchOut: string;
+    lunchIn: string;
+    checkOut: string;
+  };
+
+  const buildStaffTableRows = (staff: StaffList, savedStaffData: AttendanceRow[]): StaffTableRow[] => {
+    const savedRowsMap = new Map<string, StaffTableRow>();
+    savedStaffData.forEach((row: AttendanceRow) => {
+      const id = `${row.position}-${row.no}`;
+      savedRowsMap.set(id, {
+        id,
+        position: row.position,
+        no: row.no,
+        name: row.name,
+        present: row.present || false,
+        startTardy: row.startTardy || '',
+        lateLunch: row.lateLunch || '',
+        needsAdj: row.needsAdj || false,
+        overtime: row.overtime || '',
+        otCorp: row.otCorp || '',
+        subAnother: row.subAnother || false,
+        incident: row.incident || '',
+        notes: row.notes || ''
       });
-      
-      positionOrder.forEach(position => {
-        const members = staffListData.staff[position] || [];
-        
-        // Active가 true인 것만, 또는 Sub/Extern은 항상 포함
-        const activeMembers = members.filter(m => {
-          // Sub/Extern은 항상 포함
-          if (position === 'Sub' || position === 'Extern') {
-            return true;
-          }
-          // 다른 포지션은 active가 명시적으로 true인 것만 포함
+    });
+
+    const newRows: StaffTableRow[] = [];
+
+    POSITION_ORDER.forEach(position => {
+      const members = staff[position] || [];
+      const activeMembers = members
+        .filter(m => {
+          if (position === 'Sub' || position === 'Extern') return true;
           return m.active === true;
-        });
-        
-        activeMembers.forEach(member => {
-          const rowId = `${position}-${member.no}`;
-          const existingRow = existingRowsMap.get(rowId);
-          
-          // 기존 행이 있으면 입력 데이터를 보존, 저장된 데이터가 있으면 병합
-          const savedRow = savedRowsMap.get(rowId);
-          
-          if (existingRow) {
-            // 기존 행과 저장된 데이터 병합 (저장된 데이터가 우선)
-            const mergedRow = savedRow 
-              ? { ...existingRow, ...savedRow, name: member.name || existingRow.name || savedRow.name || '' }
-              : { ...existingRow, name: member.name || existingRow.name || '' };
-            newRows.push(mergedRow);
-          } else if (savedRow) {
-            // 저장된 데이터가 있으면 그것을 사용, staff-list의 이름으로 업데이트
-            newRows.push({
-              ...savedRow,
-              name: member.name || savedRow.name || '',
-              position, // position은 확실히 설정
-              no: member.no // no도 확실히 설정
-            });
-          } else {
-            newRows.push({
-              id: rowId,
-              position,
-              no: member.no,
-              name: member.name || '',
-              present: false,
-              startTardy: '',
-              lateLunch: '',
-              needsAdj: false,
-              overtime: '',
-              otCorp: '',
-              subAnother: false,
-              incident: '',
-              notes: ''
-            });
-          }
-        });
-      });
-      
-      // staff-list에서 제거된 행은 newRows에 포함되지 않으므로 자동으로 제거됨
-      // 하지만 임시 row는 보존
-      tempRows.forEach(tempRow => {
-        // 이미 포함되어 있지 않으면 추가
-        if (!newRows.find(r => r.id === tempRow.id)) {
-          newRows.push(tempRow);
-        }
-      });
-      
-      // position별로 정렬 (임시 row는 각 position의 마지막에 위치)
-      const sortedRows = positionOrder.flatMap(position => {
-        const positionRows = newRows.filter(r => r.position === position);
-        const regularRows = positionRows.filter(r => !r.id.startsWith('temp-'));
-        const tempRowsForPosition = positionRows.filter(r => r.id.startsWith('temp-'));
-        return [...regularRows, ...tempRowsForPosition];
-      });
-      
-      return sortedRows;
-    });
-  }, [attendanceData]);
+        })
+        .sort(compareByName);
 
-  // 임시 row 추가 (특정 position에)
-  const addTempRow = (position: string) => {
-    // 🔒 보안: Position 값 검증
-    if (!validatePosition(position)) {
-      return;
-    }
-    const positionRows = tableRows.filter(r => r.position === position);
-    const tempRows = positionRows.filter(r => r.id.startsWith('temp-'));
-    const tempNo = 1000 + tempRows.length; // 임시 row는 1000부터 시작
-    
-    const newTempRow = {
-      id: `temp-${position}-${Date.now()}`,
-      position,
-      no: tempNo,
-      name: '',
-      present: false,
-      startTardy: '',
-      lateLunch: '',
-      needsAdj: false,
-      overtime: '',
-      otCorp: '',
-      subAnother: false,
-      incident: '',
-      notes: ''
-    };
-    
-    // 해당 position의 마지막에 추가
-    const positionIndex = tableRows.findIndex(r => r.position === position);
-    if (positionIndex === -1) {
-      // position이 없으면 맨 뒤에 추가
-      setTableRows([...tableRows, newTempRow]);
-    } else {
-      // position의 마지막 row 다음에 추가
-      let insertIndex = positionIndex;
-      for (let i = positionIndex; i < tableRows.length; i++) {
-        if (tableRows[i].position === position) {
-          insertIndex = i + 1;
-        } else {
-          break;
-        }
-      }
-      const newRows = [...tableRows];
-      newRows.splice(insertIndex, 0, newTempRow);
-      setTableRows(newRows);
-    }
-  };
+      activeMembers.forEach(member => {
+        const rowId = `${position}-${member.no}`;
+        const savedRow = savedRowsMap.get(rowId);
 
-  // Doctor 임시 row 추가
-  const addDoctor = () => {
-    const tempDoctors = doctorRows.filter(r => r.id.startsWith('temp-'));
-    const tempNo = 1000 + tempDoctors.length; // 임시 row는 1000부터 시작
-    
-    const newDoctor = {
-      id: `temp-doctor-${Date.now()}`,
-      no: tempNo,
-      name: '',
-      present: false,
-      checkIn: '',
-      lunchOut: '',
-      lunchIn: '',
-      checkOut: ''
-    };
-    
-    setDoctorRows([...doctorRows, newDoctor]);
-  };
-
-  // Doctor 테이블 행 업데이트
-  const updateDoctorRowsFromStaffList = useCallback((doctors: DoctorMember[], preserveExistingData: boolean = true) => {
-    setDoctorRows(prevRows => {
-      // 임시 row는 preserveExistingData가 true일 때만 보존
-      const tempRows = preserveExistingData ? prevRows.filter(row => row.id.startsWith('temp-')) : [];
-      
-      // 저장된 출석 데이터에서 doctor 데이터 가져오기
-      const savedDoctorsMap = new Map<string, {
-        id: string;
-        no: number;
-        name: string;
-        present: boolean;
-        checkIn: string;
-        lunchOut: string;
-        lunchIn: string;
-        checkOut: string;
-      }>();
-      
-      if (attendanceData.doctorData && attendanceData.doctorData.length > 0) {
-        attendanceData.doctorData.forEach((row: DoctorRow) => {
-          const id = `doctor-${row.no}`;
-          savedDoctorsMap.set(id, {
-            id,
-            no: row.no,
-            name: row.name,
-            present: row.present || false,
-            checkIn: row.checkIn || '',
-            lunchOut: row.lunchOut || '',
-            lunchIn: row.lunchIn || '',
-            checkOut: row.checkOut || ''
-          });
-        });
-      }
-      
-      // 기존 행 데이터 맵 (임시 row 제외)
-      const existingRowsMap = new Map<string, typeof savedDoctorsMap extends Map<string, infer V> ? V : never>();
-      prevRows.forEach(row => {
-        if (!row.id.startsWith('temp-')) {
-          existingRowsMap.set(row.id, row);
-        }
-      });
-      
-      const newRows = doctors.map(doctor => {
-        const rowId = `doctor-${doctor.no}`;
-        const existingRow = existingRowsMap.get(rowId);
-        const savedRow = savedDoctorsMap.get(rowId);
-        
-        if (existingRow) {
-          // 기존 행과 저장된 데이터 병합
-          return savedRow 
-            ? { ...existingRow, ...savedRow, name: doctor.name || existingRow.name || savedRow.name || '' }
-            : { ...existingRow, name: doctor.name || existingRow.name || '' };
-        } else if (savedRow) {
-          // 저장된 데이터 사용
-          return {
+        if (savedRow) {
+          newRows.push({
             ...savedRow,
-            name: doctor.name || savedRow.name || ''
-          };
+            name: member.name || savedRow.name || '',
+            position,
+            no: member.no
+          });
         } else {
-          // 새 행 생성
-          return {
+          newRows.push({
             id: rowId,
-            no: doctor.no,
-            name: doctor.name || '',
+            position,
+            no: member.no,
+            name: member.name || '',
             present: false,
-            checkIn: '',
-            lunchOut: '',
-            lunchIn: '',
-            checkOut: ''
-          };
-        }
-      });
-      
-      // 임시 row 추가 (preserveExistingData가 true일 때만)
-      tempRows.forEach(tempRow => {
-        if (!newRows.find(r => r.id === tempRow.id)) {
-          newRows.push(tempRow);
-        }
-      });
-      
-      return newRows;
-    });
-  }, [attendanceData]);
-
-  // 출석 데이터 불러오기
-  const loadAttendanceData = useCallback(async (date: string) => {
-    if (!date || !selectedOffice) {
-      // 오피스가 선택되지 않았으면 빈 데이터로 초기화
-      setAttendanceData({ staffData: [], doctorData: [] });
-      setFilledBy('');
-      setCheckedBy('');
-      return;
-    }
-    
-    // 🔒 보안: 날짜 형식 검증
-    if (!validateDate(date)) {
-      return;
-    }
-
-    // 🔒 보안: 오피스 값 검증
-    if (!validateOffice(selectedOffice)) {
-      return;
-    }
-    
-    try {
-      setLoading(true);
-      // 🔒 보안: 문서 ID 검증 (특수문자 제거)
-      const safeDocId = `${date}_${selectedOffice}`.replace(/[^a-zA-Z0-9_-]/g, '');
-      const docRef = doc(db, 'attendance-data', safeDocId);
-      const docSnap = await getDoc(docRef);
-      
-      if (docSnap.exists()) {
-        const docData = docSnap.data();
-        setAttendanceData({
-          staffData: docData.staffData || [],
-          doctorData: docData.doctorData || []
-        });
-        setFilledBy(docData.filledBy || '');
-        setCheckedBy(docData.checkedBy || '');
-        
-        // Doctor 데이터가 있으면 doctorRows 업데이트
-        if (docData.doctorData && Array.isArray(docData.doctorData) && docData.doctorData.length > 0) {
-          const doctorRowsData = docData.doctorData.map((row: DoctorRow) => ({
-            id: `doctor-${row.no}`,
-            no: row.no,
-            name: row.name,
-            present: row.present || false,
-            checkIn: row.checkIn || '',
-            lunchOut: row.lunchOut || '',
-            lunchIn: row.lunchIn || '',
-            checkOut: row.checkOut || ''
-          }));
-          setDoctorRows(doctorRowsData);
-        }
-        
-        // 저장된 데이터를 임시로 저장 (staff-list가 로드된 후에 적용)
-        if (docData.staffData && Array.isArray(docData.staffData)) {
-          const savedRows = docData.staffData.map((row: AttendanceRow) => ({
-            id: `${row.position}-${row.no}`,
-            position: row.position,
-            no: row.no,
-            name: row.name,
-            present: row.present || false,
-            startTardy: row.startTardy || '',
-            lateLunch: row.lateLunch || '',
-            needsAdj: row.needsAdj || false,
-            overtime: row.overtime || '',
-            otCorp: row.otCorp || '',
-            subAnother: row.subAnother || false,
-            incident: row.incident || '',
-            notes: row.notes || ''
-          }));
-          
-          // staff-list 기반 테이블 행이 생성된 후에 저장된 데이터 적용
-          // updateTableRowsFromStaffList에서 처리하도록 수정
-          setTableRows(prevRows => {
-            if (prevRows.length === 0) {
-              // 테이블 행이 아직 없으면 staff-list가 먼저 로드되어야 함
-              return prevRows;
-            }
-            
-            // 기존 테이블 행과 병합 (위치는 유지, 값만 업데이트)
-            const mergedRows = prevRows.map(prevRow => {
-              const savedRow = savedRows.find(sr => sr.id === prevRow.id);
-              if (savedRow) {
-                return { ...prevRow, ...savedRow };
-              }
-              return prevRow;
-            });
-            
-            return mergedRows;
+            startTardy: '',
+            lateLunch: '',
+            needsAdj: false,
+            overtime: '',
+            otCorp: '',
+            subAnother: false,
+            incident: '',
+            notes: ''
           });
         }
-      } else {
-        // 새 데이터 초기화
-        setAttendanceData({ staffData: [], doctorData: [] });
-        setFilledBy('');
-        setCheckedBy('');
-        // 마지막 저장된 데이터도 초기화
-        lastSavedDataRef.current = '';
+      });
+    });
+
+    savedRowsMap.forEach((savedRow, id) => {
+      if (
+        savedRow.no >= CUSTOM_ROW_NO_THRESHOLD &&
+        !newRows.some(r => r.position === savedRow.position && r.no === savedRow.no)
+      ) {
+        newRows.push({ ...savedRow, id });
       }
-    } catch (error) {
-      // 🔒 보안: 상세한 에러 메시지 노출 최소화
-      alert('Error loading attendance data. Please try again.');
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedOffice]);
+    });
+
+    return POSITION_ORDER.flatMap(position => {
+      const positionRows = newRows.filter(r => r.position === position);
+      const regularRows = positionRows.filter(r => !isCustomStaffRow(r)).sort(compareByName);
+      const customRows = positionRows.filter(r => isCustomStaffRow(r));
+      return [...regularRows, ...customRows];
+    });
+  };
+
+  const buildDoctorTableRows = (doctors: DoctorMember[], savedDoctorData: DoctorRow[]): DoctorTableRow[] => {
+    const savedDoctorsMap = new Map<string, DoctorTableRow>();
+    savedDoctorData.forEach((row: DoctorRow) => {
+      const id = `doctor-${row.no}`;
+      savedDoctorsMap.set(id, {
+        id,
+        no: row.no,
+        name: row.name,
+        present: row.present || false,
+        checkIn: row.checkIn || '',
+        lunchOut: row.lunchOut || '',
+        lunchIn: row.lunchIn || '',
+        checkOut: row.checkOut || ''
+      });
+    });
+
+    const newRows = [...doctors].sort(compareByName).map(doctor => {
+      const rowId = `doctor-${doctor.no}`;
+      const savedRow = savedDoctorsMap.get(rowId);
+
+      if (savedRow) {
+        return { ...savedRow, name: doctor.name || savedRow.name || '' };
+      }
+
+      return {
+        id: rowId,
+        no: doctor.no,
+        name: doctor.name || '',
+        present: false,
+        checkIn: '',
+        lunchOut: '',
+        lunchIn: '',
+        checkOut: ''
+      };
+    });
+
+    savedDoctorsMap.forEach((savedRow, id) => {
+      if (
+        savedRow.no >= CUSTOM_ROW_NO_THRESHOLD &&
+        !newRows.some(r => r.no === savedRow.no)
+      ) {
+        newRows.push({ ...savedRow, id });
+      }
+    });
+
+    const regularRows = newRows.filter(r => !isCustomDoctorRow(r)).sort(compareByName);
+    const customRows = newRows.filter(r => isCustomDoctorRow(r));
+    return [...regularRows, ...customRows];
+  };
+
+  const resetFormAfterSubmit = useCallback(() => {
+    setFilledBy('');
+    setCheckedBy('');
+    setSelectedOffice('');
+    setDoctorRows([]);
+    setTableRows([]);
+    setStaffList(null);
+    isInitialLoadRef.current = true;
+    lastSavedDataRef.current = '';
+  }, []);
 
   // 출석 데이터 저장
-  const saveAttendanceData = useCallback(async (silent: boolean = false) => {
-    // 🔒 보안: Rate limiting - 자동 저장은 최소 2초 간격, 분당 최대 30회
+  const saveAttendanceData = useCallback(async (
+    silent: boolean = false,
+    override?: {
+      tableRows?: typeof tableRows;
+      doctorRows?: typeof doctorRows;
+      immediate?: boolean;
+    }
+  ) => {
+    const rowsToSave = override?.tableRows ?? tableRows;
+    const doctorsToSave = override?.doctorRows ?? doctorRows;
+
+    if (isInitialLoadRef.current && silent && !override?.immediate) {
+      return;
+    }
+
+    // 🔒 보안: Rate limiting - 자동 저장은 최소 1초 간격, 분당 최대 30회
     const now = Date.now();
-    if (silent) {
-      // 자동 저장의 경우 rate limiting 적용
-      if (now - lastAutoSaveTimeRef.current < 2000) {
-        return; // 최소 2초 간격
+    if (silent && !override?.immediate) {
+      if (now - lastAutoSaveTimeRef.current < AUTO_SAVE_MIN_INTERVAL_MS) {
+        return;
       }
       // 분당 30회 제한
       if (now - autoSaveResetTimeRef.current > 60000) {
@@ -793,64 +813,13 @@ export default function AttendanceTrack() {
     }
 
     try {
-      // 자동 저장 시에는 loading 상태를 변경하지 않음 (깜빡임 방지)
-      if (!silent) {
-        setLoading(true);
-      }
-      
-      // 🔒 보안: 입력 검증 및 정리
-      const safeFilledBy = validateInput(filledBy, 100);
-      const safeCheckedBy = validateInput(checkedBy, 100);
-      
-      // 현재 테이블에서 데이터 추출 (입력 검증 포함)
-      const staffData: AttendanceRow[] = tableRows.map(row => {
-        const validatedPosition = validatePosition(row.position) ? row.position : '';
-        const validatedIncident = validateIncident(row.incident || '') ? (row.incident || '') : '';
-        return {
-          date: trackDate,
-          filledBy: safeFilledBy,
-          checkedBy: safeCheckedBy,
-          position: validatedPosition,
-          count: 0, // position별 present 개수는 저장 시 계산
-          no: typeof row.no === 'number' && row.no >= 0 && row.no <= 9999 ? row.no : 0,
-          name: validateInput(row.name, 100),
-          present: typeof row.present === 'boolean' ? row.present : false,
-          startTardy: validateInput(row.startTardy, 50),
-          lateLunch: validateInput(row.lateLunch, 50),
-          needsAdj: typeof row.needsAdj === 'boolean' ? row.needsAdj : false,
-          overtime: validateInput(row.overtime, 50),
-          otCorp: validateInput(row.otCorp, 50),
-          subAnother: typeof row.subAnother === 'boolean' ? row.subAnother : false,
-          incident: validatedIncident,
-          notes: validateInput(row.notes, 500)
-        };
-      });
-
-      // position별 present 개수 계산
-      const positionCounts: { [key: string]: number } = {};
-      staffData.forEach(row => {
-        if (!positionCounts[row.position]) positionCounts[row.position] = 0;
-        if (row.present) positionCounts[row.position]++;
-      });
-      staffData.forEach(row => {
-        row.count = positionCounts[row.position] || 0;
-      });
-
-      // Doctor 데이터 추출 (입력 검증 포함)
-      const doctorData: DoctorRow[] = doctorRows.map(row => ({
-        date: trackDate,
-        filledBy: safeFilledBy,
-        checkedBy: safeCheckedBy,
-        position: 'Doctor',
-        count: doctorRows.filter(r => r.present).length,
-        no: typeof row.no === 'number' ? row.no : 0,
-        name: validateInput(row.name, 100),
-        present: typeof row.present === 'boolean' ? row.present : false,
-        checkIn: validateInput(row.checkIn, 10),
-        lunchOut: validateInput(row.lunchOut, 10),
-        lunchIn: validateInput(row.lunchIn, 10),
-        checkOut: validateInput(row.checkOut, 10)
-      }));
+      const { staffData, doctorData, safeFilledBy, safeCheckedBy } = buildAttendancePayload(
+        rowsToSave,
+        doctorsToSave,
+        trackDate,
+        filledBy,
+        checkedBy
+      );
 
       const data = {
         date: trackDate,
@@ -862,24 +831,105 @@ export default function AttendanceTrack() {
         createdAt: Timestamp.now()
       };
 
-      // 🔒 보안: 문서 ID 검증 (특수문자 제거)
-      const safeDocId = `${trackDate}_${selectedOffice}`.replace(/[^a-zA-Z0-9_-]/g, '');
+      const safeDocId = getAttendanceDocId(trackDate, selectedOffice);
       await setDoc(doc(db, 'attendance-data', safeDocId), data);
       
       // 마지막 저장된 데이터 업데이트 (자동 저장 최적화용)
-      lastSavedDataRef.current = JSON.stringify({ tableRows, doctorRows, filledBy, checkedBy });
+      lastSavedDataRef.current = JSON.stringify({ tableRows: rowsToSave, doctorRows: doctorsToSave, filledBy, checkedBy });
       
     } catch (error) {
       if (!silent) {
         // 🔒 보안: 상세한 에러 메시지 노출 최소화
         alert('Error saving attendance data. Please try again.');
       }
-    } finally {
-      if (!silent) {
-        setLoading(false);
-      }
     }
   }, [trackDate, filledBy, checkedBy, tableRows, doctorRows, selectedOffice]);
+
+  // 임시 row 추가 (특정 position에)
+  const addTempRow = useCallback((position: string) => {
+    if (!validatePosition(position)) {
+      return;
+    }
+    const positionRows = tableRows.filter(r => r.position === position);
+    const customRows = positionRows.filter(r => isCustomStaffRow(r));
+    const tempNo = CUSTOM_ROW_NO_THRESHOLD + customRows.length;
+
+    const newTempRow = {
+      id: `${position}-${tempNo}`,
+      position,
+      no: tempNo,
+      name: '',
+      present: false,
+      startTardy: '',
+      lateLunch: '',
+      needsAdj: false,
+      overtime: '',
+      otCorp: '',
+      subAnother: false,
+      incident: '',
+      notes: ''
+    };
+
+    const positionIndex = tableRows.findIndex(r => r.position === position);
+    let newRows: typeof tableRows;
+    if (positionIndex === -1) {
+      newRows = [...tableRows, newTempRow];
+    } else {
+      let insertIndex = positionIndex;
+      for (let i = positionIndex; i < tableRows.length; i++) {
+        if (tableRows[i].position === position) {
+          insertIndex = i + 1;
+        } else {
+          break;
+        }
+      }
+      newRows = [...tableRows];
+      newRows.splice(insertIndex, 0, newTempRow);
+    }
+
+    setTableRows(newRows);
+    if (trackDate && selectedOffice && !isInitialLoadRef.current) {
+      saveAttendanceData(true, { tableRows: newRows, immediate: true });
+    }
+  }, [tableRows, trackDate, selectedOffice, saveAttendanceData]);
+
+  const addDoctor = useCallback(() => {
+    const customDoctors = doctorRows.filter(r => isCustomDoctorRow(r));
+    const tempNo = CUSTOM_ROW_NO_THRESHOLD + customDoctors.length;
+
+    const newDoctor = {
+      id: `doctor-${tempNo}`,
+      no: tempNo,
+      name: '',
+      present: false,
+      checkIn: '',
+      lunchOut: '',
+      lunchIn: '',
+      checkOut: ''
+    };
+
+    const newDoctorRows = [...doctorRows, newDoctor];
+    setDoctorRows(newDoctorRows);
+    if (trackDate && selectedOffice && !isInitialLoadRef.current) {
+      saveAttendanceData(true, { doctorRows: newDoctorRows, immediate: true });
+    }
+  }, [doctorRows, trackDate, selectedOffice, saveAttendanceData]);
+
+  const removeCustomStaffRow = useCallback((rowId: string) => {
+    const newRows = tableRows.filter(r => r.id !== rowId);
+    setTableRows(newRows);
+    if (trackDate && selectedOffice && !isInitialLoadRef.current) {
+      saveAttendanceData(true, { tableRows: newRows, immediate: true });
+    }
+  }, [tableRows, trackDate, selectedOffice, saveAttendanceData]);
+
+  const removeCustomDoctorRow = useCallback((rowId: string) => {
+    const newRows = doctorRows.filter(r => r.id !== rowId);
+    setDoctorRows(newRows);
+    if (trackDate && selectedOffice && !isInitialLoadRef.current) {
+      saveAttendanceData(true, { doctorRows: newRows, immediate: true });
+    }
+  }, [doctorRows, trackDate, selectedOffice, saveAttendanceData]);
 
   // Submit (데이터 저장 + PDF 생성)
   const handleSubmit = useCallback(async () => {
@@ -906,74 +956,33 @@ export default function AttendanceTrack() {
       return;
     }
 
+    const rowsMissingIncident = getStaffRowsMissingIncident(tableRows);
+    if (rowsMissingIncident.length > 0) {
+      const labels = rowsMissingIncident
+        .map(r => r.name?.trim() || `${r.position} #${r.no}`)
+        .join(', ');
+      alert(`Please select an Incident Description for each staff member not marked Present.\n\nMissing: ${labels}`);
+      return;
+    }
+
     try {
-      setLoading(true);
-      
-      // 🔒 보안: 입력 검증 및 정리
-      const safeFilledBy = validateInput(filledBy, 100);
-      const safeCheckedBy = validateInput(checkedBy, 100);
-      
       // 🔒 보안: Rate limiting - API 호출은 최소 5초 간격
       const currentTime = Date.now();
       if (currentTime - lastApiCallTimeRef.current < 5000) {
         alert('Please wait a moment before submitting again.');
-        setLoading(false);
         return;
       }
       lastApiCallTimeRef.current = currentTime;
 
-      // 1. 현재 테이블 데이터를 Firestore에 저장 (입력 검증 포함)
-      const staffData: AttendanceRow[] = tableRows.map(row => {
-        const validatedPosition = validatePosition(row.position) ? row.position : '';
-        const validatedIncident = validateIncident(row.incident || '') ? (row.incident || '') : '';
-        return {
-          date: trackDate,
-          filledBy: safeFilledBy,
-          checkedBy: safeCheckedBy,
-          position: validatedPosition,
-          count: 0,
-          no: typeof row.no === 'number' && row.no >= 0 && row.no <= 9999 ? row.no : 0,
-          name: validateInput(row.name, 100),
-          present: typeof row.present === 'boolean' ? row.present : false,
-          startTardy: validateInput(row.startTardy, 50),
-          lateLunch: validateInput(row.lateLunch, 50),
-          needsAdj: typeof row.needsAdj === 'boolean' ? row.needsAdj : false,
-          overtime: validateInput(row.overtime, 50),
-          otCorp: validateInput(row.otCorp, 50),
-          subAnother: typeof row.subAnother === 'boolean' ? row.subAnother : false,
-          incident: validatedIncident,
-          notes: validateInput(row.notes, 500)
-        };
-      });
+      const { staffData, doctorData, safeFilledBy, safeCheckedBy } = buildAttendancePayload(
+        tableRows,
+        doctorRows,
+        trackDate,
+        filledBy,
+        checkedBy
+      );
 
-      // position별 present 개수 계산
-      const positionCounts: { [key: string]: number } = {};
-      staffData.forEach(row => {
-        if (!positionCounts[row.position]) positionCounts[row.position] = 0;
-        if (row.present) positionCounts[row.position]++;
-      });
-      staffData.forEach(row => {
-        row.count = positionCounts[row.position] || 0;
-      });
-
-      // Doctor 데이터 추출 (입력 검증 포함)
-      const doctorData: DoctorRow[] = doctorRows.map(row => ({
-        date: trackDate,
-        filledBy: safeFilledBy,
-        checkedBy: safeCheckedBy,
-        position: 'Doctor',
-        count: doctorRows.filter(r => r.present).length,
-        no: typeof row.no === 'number' ? row.no : 0,
-        name: validateInput(row.name, 100),
-        present: typeof row.present === 'boolean' ? row.present : false,
-        checkIn: validateInput(row.checkIn, 10),
-        lunchOut: validateInput(row.lunchOut, 10),
-        lunchIn: validateInput(row.lunchIn, 10),
-        checkOut: validateInput(row.checkOut, 10)
-      }));
-
-      // 🔒 보안: 문서 ID 검증 (특수문자 제거)
-      const safeDocId = `${trackDate}_${selectedOffice}`.replace(/[^a-zA-Z0-9_-]/g, '');
+      const safeDocId = getAttendanceDocId(trackDate, selectedOffice);
       await setDoc(doc(db, 'attendance-data', safeDocId), {
         date: trackDate,
         office: selectedOffice,
@@ -1017,7 +1026,6 @@ export default function AttendanceTrack() {
           throw new Error('PDF is empty');
         }
 
-        // PDF를 Firebase Storage에 저장 (endofday-pdfs에만 저장)
         try {
           const storage = getStorage();
           // 캘리포니아 시간으로 짧은 타임스탬프 생성 (예: 230pm)
@@ -1044,107 +1052,83 @@ export default function AttendanceTrack() {
         throw new Error(`An error occurred while submitting. Please try again.: ${pdfError?.message || 'Unknown error'}`);
       }
 
-      alert('Complete!');
+      alert('Submitted Successfully!');
       
-      // 3. database에서 attendance-data 삭제
-      // 🔒 보안: 문서 ID 검증 (위에서 선언한 safeDocId 재사용)
       await deleteDoc(doc(db, 'attendance-data', safeDocId));
       
-      // 폼 리셋
-      setAttendanceData({ staffData: [], doctorData: [] });
-      setFilledBy('');
-      setCheckedBy('');
+      resetFormAfterSubmit();
       
-      // Office 및 비밀번호 상태 초기화
-      setSelectedOffice('');
-      setOfficePasswordVerified(false);
-      
-      // 테이블 데이터 리셋 (staff-list 기반으로 다시 초기화)
-      // 자동 저장이 트리거되지 않도록 먼저 플래그 설정
-      isInitialLoadRef.current = true;
-      lastSavedDataRef.current = '';
-      
-      // doctorRows와 tableRows를 명시적으로 빈 배열로 초기화
-      setDoctorRows([]);
-      setTableRows([]);
-      
-      // staffList가 있으면 나중에 다시 로드될 때 자동으로 채워질 것임
-      // 여기서는 명시적으로 빈 배열로 초기화만 함
-      
-      // 리셋 완료 후 자동 저장 방지를 위한 처리
-      // isInitialLoadRef가 true로 설정되어 있으므로 자동 저장 useEffect가 실행되지 않음
-      // 자동 저장 useEffect의 초기 로드 로직이 1초 후에 현재 상태를 lastSavedDataRef에 저장함
-      // 따라서 별도로 lastSavedDataRef를 업데이트할 필요 없음
     } catch (error) {
       // 🔒 보안: 상세한 에러 메시지 노출 최소화
       alert('An error occurred while submitting. Please try again.');
-    } finally {
-      setLoading(false);
     }
-  }, [trackDate, filledBy, checkedBy, tableRows, doctorRows, selectedOffice, staffList, updateTableRowsFromStaffList, updateDoctorRowsFromStaffList]);
+  }, [trackDate, filledBy, checkedBy, tableRows, doctorRows, selectedOffice, resetFormAfterSubmit]);
 
-  // Staff List 실시간 감지 및 테이블 업데이트
+  // Staff List + 출석 임시 데이터 로드 (오피스/날짜 변경 시 1회, 원자적 적용)
   useEffect(() => {
-    // 🔒 보안: 오피스가 선택되지 않았거나 비밀번호가 확인되지 않았으면 리스너 설정하지 않음
-    if (!selectedOffice || !officePasswordVerified || !validateOffice(selectedOffice)) {
+    if (!selectedOffice || !validateOffice(selectedOffice)) {
       setStaffList({ staff: {}, doctors: [] });
       setTableRows([]);
       setDoctorRows([]);
+      setFilledBy('');
+      setCheckedBy('');
       return;
     }
 
-    const staffListDocRef = doc(db, 'staff-list', selectedOffice);
-    
-    const unsubscribe = onSnapshot(staffListDocRef, (docSnap) => {
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        
-        const staffListData = {
-          staff: data.staff || {},
-          doctors: data.doctors || []
-        };
-        
-        setStaffList(staffListData);
-        
-        // 테이블 행 업데이트 (기존 입력 데이터 보존)
-        updateTableRowsFromStaffList(staffListData, true);
-        
-        // Doctor 테이블 행 업데이트
-        if (staffListData.doctors && staffListData.doctors.length > 0) {
-          updateDoctorRowsFromStaffList(staffListData.doctors, true);
-        }
-      } else {
-        // Staff List가 없으면 빈 데이터로 초기화
-        setStaffList({
-          staff: {},
-          doctors: []
-        });
-        setTableRows([]);
-      }
-    }, (error) => {
-      alert('Error loading staff list. Please try again.');
-    });
-    
-    return () => {
-      unsubscribe();
-    };
-  }, [updateTableRowsFromStaffList, selectedOffice, officePasswordVerified]);
+    let cancelled = false;
+    const loadOffice = selectedOffice;
+    const loadDate = trackDate;
+    const canLoadAttendance = Boolean(loadDate && validateDate(loadDate));
 
-  useEffect(() => {
-    if (trackDate && officePasswordVerified) {
-      // 오피스가 변경되면 초기 로드 플래그 리셋
-      isInitialLoadRef.current = true;
-      lastSavedDataRef.current = '';
-      loadAttendanceData(trackDate);
-    } else if (!officePasswordVerified) {
-      // 비밀번호가 확인되지 않으면 데이터 초기화
-      setAttendanceData({ staffData: [], doctorData: [] });
-      setFilledBy('');
-      setCheckedBy('');
-      setTableRows([]);
-      setDoctorRows([]);
-    }
-  }, [trackDate, selectedOffice, officePasswordVerified, loadAttendanceData]);
+    setStaffList(null);
+    setTableRows([]);
+    setDoctorRows([]);
+    setFilledBy('');
+    setCheckedBy('');
+    isInitialLoadRef.current = true;
+    lastSavedDataRef.current = '';
+
+    (async () => {
+      try {
+        const staffPromise = getDoc(doc(db, 'staff-list', loadOffice));
+        const attendancePromise = canLoadAttendance
+          ? getDoc(doc(db, 'attendance-data', getAttendanceDocId(loadDate, loadOffice)))
+          : Promise.resolve(null);
+
+        const [staffSnap, attendanceSnap] = await Promise.all([staffPromise, attendancePromise]);
+        if (cancelled) return;
+
+        const staff = staffSnap.exists() ? (staffSnap.data().staff || {}) : {};
+        const doctors: DoctorMember[] = staffSnap.exists() ? (staffSnap.data().doctors || []) : [];
+        const staffData: AttendanceRow[] = [];
+        const doctorData: DoctorRow[] = [];
+        let loadedFilledBy = '';
+        let loadedCheckedBy = '';
+
+        if (canLoadAttendance && attendanceSnap?.exists()) {
+          const docData = attendanceSnap.data();
+          staffData.push(...(docData.staffData || []));
+          doctorData.push(...(docData.doctorData || []));
+          loadedFilledBy = docData.filledBy || '';
+          loadedCheckedBy = docData.checkedBy || '';
+        }
+
+        setStaffList({ staff, doctors });
+        setFilledBy(loadedFilledBy);
+        setCheckedBy(loadedCheckedBy);
+        setTableRows(buildStaffTableRows(staff, staffData));
+        setDoctorRows(buildDoctorTableRows(doctors, doctorData));
+      } catch {
+        if (!cancelled) {
+          alert('Error loading data. Please try again.');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedOffice, trackDate]);
 
   // 자동 저장 (debounce 적용, 깜빡임 방지)
   useEffect(() => {
@@ -1167,167 +1151,83 @@ export default function AttendanceTrack() {
       return; // 변경사항이 없으면 저장하지 않음
     }
     
-    // debounce: 3초 후에 저장 (깜빡임 최소화)
+    // debounce: 1초 후에 저장
     const timer = setTimeout(() => {
       if (trackDate && selectedOffice) {
-        // 자동 저장은 조용히 수행 (silent: true, loading 상태 변경 안 함)
         saveAttendanceData(true);
       }
-    }, 3000);
+    }, AUTO_SAVE_DEBOUNCE_MS);
 
     return () => clearTimeout(timer);
-  }, [tableRows, doctorRows, filledBy, checkedBy, trackDate, selectedOffice, officePasswordVerified, saveAttendanceData]);
+  }, [tableRows, doctorRows, filledBy, checkedBy, trackDate, selectedOffice, saveAttendanceData]);
 
-  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
+  // 사용자 offices 정보 로드
   useEffect(() => {
-    // Firebase Auth 상태 변경 감지
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      try {
-        if (!currentUser) {
-          alert('Please log in');
-          setIsAuthorized(false);
-          return;
-        }
+      if (!currentUser) return;
 
-        // Firestore에서 사용자 role 확인
+      try {
         const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (!userDoc.exists()) {
-          alert('User information could not be found.');
-          setIsAuthorized(false);
-          return;
-        }
+        if (!userDoc.exists()) return;
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'Manager' && userData?.role !== 'User') {
-          alert('You do not have access to this page.');
-          setIsAuthorized(false);
-          // 다른 페이지로 리다이렉트하거나 홈으로 이동
-          if (typeof window !== 'undefined') {
-            window.location.href = '/';
-          }
-          return;
-        }
-
-        setIsAuthorized(true);
-
-        // offices 처리: 배열이거나 단일 값일 수 있음
         if (userData?.offices) {
-          const officesArray = Array.isArray(userData.offices) 
-            ? userData.offices 
+          const officesArray = Array.isArray(userData.offices)
+            ? userData.offices
             : [userData.offices];
-          
-          // officeOptions에 포함된 값들만 필터링
-          const validOptions = officesArray.filter((g: string) => officeOptions.includes(g));
-          
+
+          const validOptions = officesArray.filter((g: string) =>
+            (OFFICE_OPTIONS as readonly string[]).includes(g)
+          );
+
           if (validOptions.length > 0) {
             setUserOfficesOptions(validOptions);
-            // 단일 값이면 자동 선택 및 비밀번호 확인 완료 처리
             if (validOptions.length === 1) {
               setSelectedOffice(validOptions[0]);
-              setOfficePasswordVerified(true);
             }
           }
         }
-      } catch (error: any) {
-        alert('An error occurred while verifying authentication.');
-        setIsAuthorized(false);
+      } catch (error) {
+        console.error('Failed to load user offices:', error);
       }
     });
 
-    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
-    if (process.env.NODE_ENV === 'production' && 
-        typeof window !== 'undefined' && 
+    if (process.env.NODE_ENV === 'production' &&
+        typeof window !== 'undefined' &&
         window.location.protocol !== 'https:') {
-      // HTTP로 접속한 경우 HTTPS로 리다이렉트
       window.location.href = window.location.href.replace('http:', 'https:');
     }
 
-    // cleanup 함수
     return () => {
       unsubscribe();
     };
   }, []);
 
-  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
-  if (isAuthorized === null) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        background: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
-        fontFamily: 'Arial, sans-serif'
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
-          <div style={{ fontSize: '18px', color: '#333' }}>Verifying authentication…</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (isAuthorized === false) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        background: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
-        fontFamily: 'Arial, sans-serif'
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
-          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
-          <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
-        </div>
-      </div>
-    );
-  }
-
   return (
-    <div style={{ padding: '20px', fontFamily: 'Arial, sans-serif' }}>
-      <h1 style={{ fontSize: '3rem', fontWeight: 'bold', color: '#2D3748', marginBottom: '20px', textAlign: 'center' }}>
+    <div style={ui.page}>
+      <h1 style={ui.title}>
         Attendance Tract
       </h1>
       
-      <div style={{ marginTop: '20px', marginBottom: '20px', fontSize: '15px', textAlign: 'center', color: '#666', fontStyle: 'italic', lineHeight: '1.5' }}>
+      <div style={ui.subtitle}>
         Management is required to review all staff members' times on Time Clock to fill out the Attendance Tract Sheet accurately and to request any necessary clock adjustments.
       </div>
 
-      <div style={{ 
-        marginBottom: '20px', 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'center',
-        gap: '20px',
-        flexWrap: 'wrap'
-      }}>
+      <div style={ui.formCard}>
         {/* offices 옵션이 있는 경우에만 Office 표시 */}
         {userOfficesOptions.length > 0 && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <strong>Office:</strong>
+          <label style={ui.label}>
+            <span>Office:</span>
             {userOfficesOptions.length === 1 ? (
-              <span style={{
-                padding: '5px 10px',
-                borderRadius: '4px',
-                border: '1px solid #ddd',
-                backgroundColor: '#e9ecef',
-                fontWeight: '600',
-                color: '#2D3748'
-              }}>
+              <span style={ui.officeBadge}>
                 {selectedOffice}
               </span>
             ) : (
               <select
                 value={selectedOffice}
-                onChange={(e) => {
-                  setSelectedOffice(e.target.value);
-                  setOfficePasswordVerified(e.target.value !== '');
-                }}
-                style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ddd' }}
+                onChange={(e) => setSelectedOffice(e.target.value)}
+                style={{ ...ui.input, minWidth: '120px' }}
               >
                 <option value="">Select Office</option>
                 {userOfficesOptions.map(office => (
@@ -1338,65 +1238,50 @@ export default function AttendanceTrack() {
           </label>
         )}
         
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <strong>Date:</strong>
+        <label style={ui.label}>
+          <span>Date:</span>
           <input
             type="date"
             value={trackDate}
             onChange={(e) => setTrackDate(e.target.value)}
-            style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ddd' }}
+            style={ui.input}
           />
         </label>
         
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <strong>Filled Out By:</strong>
+        <label style={ui.label}>
+          <span>Filled Out By:</span>
           <input
             type="text"
             value={filledBy}
             onChange={(e) => {
-              // 🔒 보안: 입력 검증
               const validatedValue = validateInput(e.target.value, 100);
               setFilledBy(validatedValue);
             }}
-            style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ddd', minWidth: '150px' }}
+            style={{ ...ui.input, minWidth: '150px' }}
           />
         </label>
         
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <strong>Management that Checked Times Today on Time Clock:</strong>
+        <label style={ui.label}>
+          <span>Management that Checked Times Today on Time Clock:</span>
           <input
             type="text"
             value={checkedBy}
             onChange={(e) => {
-              // 🔒 보안: 입력 검증
               const validatedValue = validateInput(e.target.value, 100);
               setCheckedBy(validatedValue);
             }}
-            style={{ padding: '5px', borderRadius: '4px', border: '1px solid #ddd', minWidth: '150px' }}
+            style={{ ...ui.input, minWidth: '150px' }}
           />
         </label>
       </div>
 
-      {loading && <div>Loading...</div>}
-
       {/* Staff 테이블 */}
       {staffList && (
         <div style={{ marginTop: '20px', overflowX: 'auto' }}>
-          <div style={{ 
-            background: '#f9fbfd',
-            borderRadius: '12px',
-            overflow: 'hidden',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-          }}>
+          <div style={ui.tableCard}>
             {/* 고정 헤더 테이블 */}
-            <div style={{ position: 'sticky', top: 0, zIndex: 100, background: '#f9fbfd' }}>
-              <table style={{ 
-                width: '100%', 
-                tableLayout: 'fixed',
-                borderCollapse: 'separate',
-                borderSpacing: 0,
-                background: '#f9fbfd'
-              }}>
+            <div style={{ position: 'sticky', top: 0, zIndex: 100, background: theme.card }}>
+              <table style={ui.table}>
                 <colgroup>
                   <col style={{ width: '5%' }} />
                   <col style={{ width: '12%' }} />
@@ -1411,31 +1296,25 @@ export default function AttendanceTrack() {
                   <col style={{ width: '10%' }} />
                 </colgroup>
                 <thead>
-                  <tr style={{ background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)', color: '#fff' }}>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>No.</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Name</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Present</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Start Shift<br />Tardy (Min)</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Late from<br />Lunch (Min)</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Needs Clock Adj.</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Overtime</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>OT Corp Authorized<br />By (Initials)</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Sub. at Another<br />Office</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Incident Description</th>
-                    <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Notes</th>
+                  <tr>
+                    <th style={ui.th}>No.</th>
+                    <th style={ui.th}>Name</th>
+                    <th style={ui.th}>Present</th>
+                    <th style={ui.th}>Start Shift<br />Tardy (Min)</th>
+                    <th style={ui.th}>Late from<br />Lunch (Min)</th>
+                    <th style={ui.th}>Needs Clock Adj.</th>
+                    <th style={ui.th}>Overtime</th>
+                    <th style={ui.th}>OT Corp Authorized<br />By (Initials)</th>
+                    <th style={ui.th}>Sub. at Another<br />Office</th>
+                    <th style={ui.th}>Incident Description</th>
+                    <th style={ui.th}>Notes</th>
                   </tr>
                 </thead>
               </table>
             </div>
             {/* 스크롤 가능한 본문 */}
             <div style={{ maxHeight: '70vh', overflowY: 'auto' }}>
-              <table style={{ 
-                width: '100%', 
-                tableLayout: 'fixed',
-                borderCollapse: 'separate',
-                borderSpacing: 0,
-                background: '#f9fbfd'
-              }}>
+              <table style={ui.table}>
                 <colgroup>
                   <col style={{ width: '5%' }} />
                   <col style={{ width: '12%' }} />
@@ -1451,46 +1330,20 @@ export default function AttendanceTrack() {
                 </colgroup>
                 <tbody>
               {(() => {
-                const positionOrder = ['Front Office', 'Biller', 'Dental Assistant', 'RDA', 'Sub', 'Extern'];
                 const rows: React.ReactElement[] = [];
                 
-                if (tableRows.length === 0) {
-                  return (
-                    <tr>
-                      <td colSpan={11} style={{ padding: '20px', textAlign: 'center' }}>
-                        No staff members found. Please add staff in Staff List Management.
-                      </td>
-                    </tr>
-                  );
-                }
-                
-                // Position별로 그룹화하여 헤더와 버튼 추가
-                positionOrder.forEach(position => {
+                POSITION_ORDER.forEach(position => {
                   const positionRows = tableRows.filter(r => r.position === position);
-                  if (positionRows.length === 0) return;
-                  
                   const presentCount = positionRows.filter(r => r.present).length;
                   
-                  // Position 헤더 행
                   rows.push(
-                    <tr key={`header-${position}`} style={{ background: '#EDF2F7', fontWeight: 'bold' }}>
-                      <td colSpan={11} style={{ padding: '10px', textAlign: 'center', border: '1px solid #ddd', position: 'relative' }}>
+                    <tr key={`header-${position}`} style={{ background: theme.positionBg, fontWeight: 600, color: theme.text }}>
+                      <td colSpan={11} style={{ ...ui.tdCenter, padding: '12px', position: 'relative' }}>
                         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
-                          <span style={{ textAlign: 'center' }}>{position} <span style={{ marginLeft: '10px' }}>{presentCount}</span></span>
+                          <span style={{ textAlign: 'center' }}>{position} <span style={{ marginLeft: '10px', color: theme.gray }}>{presentCount}</span></span>
                           <button
                             onClick={() => addTempRow(position)}
-                            style={{
-                              padding: '4px 8px',
-                              background: '#4CAF50',
-                              color: 'white',
-                              border: 'none',
-                              borderRadius: '4px',
-                              cursor: 'pointer',
-                              fontSize: '12px',
-                              fontWeight: 'normal',
-                              position: 'absolute',
-                              right: '10px'
-                            }}
+                            style={ui.addBtn}
                           >
                             Add Staff
                           </button>
@@ -1500,14 +1353,30 @@ export default function AttendanceTrack() {
                   );
                   
                   // Position별 행들 추가
-                  positionRows.forEach(row => {
+                  positionRows.forEach((row, rowIdx) => {
                   
                   // 데이터 행
                   rows.push(
-                    <tr key={row.id} style={{ background: '#fff' }}>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd', textAlign: 'center' }}>{row.no}</td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd', fontWeight: '600' }}>
-                        {(row.position === 'Sub' || row.position === 'Extern' || row.id.startsWith('temp-')) ? (
+                    <tr key={row.id} style={{ background: rowIdx % 2 === 0 ? theme.card : theme.cardAlt }}>
+                      <td style={ui.tdCenter}>
+                        {isCustomStaffRow(row) ? (
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                            <span>{row.no}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeCustomStaffRow(row.id)}
+                              style={ui.removeBtn}
+                              title="Remove row"
+                            >
+                              ×
+                            </button>
+                          </div>
+                        ) : (
+                          row.no
+                        )}
+                      </td>
+                      <td style={{ ...ui.td, fontWeight: 600 }}>
+                        {(row.position === 'Sub' || row.position === 'Extern' || isCustomStaffRow(row)) ? (
                           <input
                             type="text"
                             value={row.name}
@@ -1521,14 +1390,14 @@ export default function AttendanceTrack() {
                                 setTableRows(newRows);
                               }
                             }}
-                            style={{ width: '100%', border: 'none', background: 'transparent', padding: '0', fontWeight: '600' }}
+                            style={{ ...ui.cellInput, fontWeight: 600 }}
                             placeholder="Enter name"
                           />
                         ) : (
                           row.name
                         )}
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd', textAlign: 'center' }}>
+                      <td style={ui.tdCenter}>
                         <input
                           type="checkbox"
                           checked={row.present}
@@ -1540,10 +1409,10 @@ export default function AttendanceTrack() {
                               setTableRows(newRows);
                             }
                           }}
-                          style={{ width: '20px', height: '20px', accentColor: '#2D3748' }}
+                          style={ui.checkbox}
                         />
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                      <td style={ui.td}>
                         <input
                           type="text"
                           value={row.startTardy}
@@ -1557,10 +1426,10 @@ export default function AttendanceTrack() {
                                 setTableRows(newRows);
                               }
                             }}
-                          style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                          style={ui.cellInput}
                         />
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                      <td style={ui.td}>
                         <input
                           type="text"
                           value={row.lateLunch}
@@ -1574,10 +1443,10 @@ export default function AttendanceTrack() {
                                 setTableRows(newRows);
                               }
                             }}
-                          style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                          style={ui.cellInput}
                         />
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd', textAlign: 'center' }}>
+                      <td style={ui.tdCenter}>
                         <input
                           type="checkbox"
                           checked={row.needsAdj}
@@ -1589,10 +1458,10 @@ export default function AttendanceTrack() {
                               setTableRows(newRows);
                             }
                           }}
-                          style={{ width: '20px', height: '20px', accentColor: '#2D3748' }}
+                          style={ui.checkbox}
                         />
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                      <td style={ui.td}>
                         <input
                           type="text"
                           value={row.overtime}
@@ -1606,10 +1475,10 @@ export default function AttendanceTrack() {
                                 setTableRows(newRows);
                               }
                             }}
-                          style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                          style={ui.cellInput}
                         />
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                      <td style={ui.td}>
                         <input
                           type="text"
                           value={row.otCorp}
@@ -1623,10 +1492,10 @@ export default function AttendanceTrack() {
                                 setTableRows(newRows);
                               }
                             }}
-                          style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                          style={ui.cellInput}
                         />
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd', textAlign: 'center' }}>
+                      <td style={ui.tdCenter}>
                         <input
                           type="checkbox"
                           checked={row.subAnother}
@@ -1638,10 +1507,10 @@ export default function AttendanceTrack() {
                               setTableRows(newRows);
                             }
                           }}
-                          style={{ width: '20px', height: '20px', accentColor: '#2D3748' }}
+                          style={ui.checkbox}
                         />
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                      <td style={ui.td}>
                         <select
                           value={row.incident || ''}
                           onChange={(e) => {
@@ -1657,16 +1526,16 @@ export default function AttendanceTrack() {
                               setTableRows(newRows);
                             }
                           }}
-                          style={{ width: '100%', border: 'none', background: 'transparent', padding: '2px', fontSize: '14px' }}
+                          style={{ ...ui.cellInput, fontSize: '14px' }}
                         >
-                          {incidentOptions.map(option => (
+                          {INCIDENT_OPTIONS.map(option => (
                             <option key={option} value={option}>
                               {option || 'Select...'}
                             </option>
                           ))}
                         </select>
                       </td>
-                      <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                      <td style={ui.td}>
                         <input
                           type="text"
                           value={row.notes}
@@ -1680,7 +1549,7 @@ export default function AttendanceTrack() {
                                 setTableRows(newRows);
                               }
                             }}
-                          style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                          style={ui.cellInput}
                         />
                       </td>
                     </tr>
@@ -1698,44 +1567,26 @@ export default function AttendanceTrack() {
       )}
 
       {/* Doctor 테이블 */}
-      {staffList && officePasswordVerified && staffList.doctors && staffList.doctors.length > 0 && (
-        <div style={{ marginTop: '40px', overflowX: 'auto' }}>
-          <table style={{ 
-            width: '100%', 
-            borderCollapse: 'collapse',
-            background: '#f9fbfd',
-            borderRadius: '12px',
-            overflow: 'hidden',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.1)'
-          }}>
+      {staffList && selectedOffice && staffList.doctors && staffList.doctors.length > 0 && (
+        <div key={`doctor-${selectedOffice}-${trackDate}`} style={{ marginTop: '40px', overflowX: 'auto' }}>
+          <table style={{ ...ui.table, ...ui.tableCard }}>
             <thead>
-              <tr style={{ background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)', color: '#fff' }}>
-                <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>No.</th>
-                <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Name</th>
-                <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Present</th>
-                <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Check In</th>
-                <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Lunch Out</th>
-                <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Lunch In</th>
-                <th style={{ padding: '14px 8px', border: '1px solid #ddd', fontSize: '1.15rem', fontWeight: '700', background: 'linear-gradient(90deg, #2D3748 0%, #4A5568 100%)' }}>Check Out</th>
+              <tr>
+                <th style={ui.th}>No.</th>
+                <th style={ui.th}>Name</th>
+                <th style={ui.th}>Present</th>
+                <th style={ui.th}>Check In</th>
+                <th style={ui.th}>Lunch Out</th>
+                <th style={ui.th}>Lunch In</th>
+                <th style={ui.th}>Check Out</th>
               </tr>
-              <tr style={{ background: '#EDF2F7', fontWeight: 'bold' }}>
-                <td colSpan={7} style={{ padding: '10px', textAlign: 'center', border: '1px solid #ddd', position: 'relative' }}>
+              <tr style={{ background: theme.positionBg, fontWeight: 600, color: theme.text }}>
+                <td colSpan={7} style={{ ...ui.tdCenter, padding: '12px', position: 'relative' }}>
                   <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', position: 'relative' }}>
-                    <span style={{ textAlign: 'center' }}>Doctor <span style={{ marginLeft: '10px' }}>{doctorRows.filter(r => r.present).length}</span></span>
+                    <span style={{ textAlign: 'center' }}>Doctor <span style={{ marginLeft: '10px', color: theme.gray }}>{doctorRows.filter(r => r.present).length}</span></span>
                     <button
                       onClick={addDoctor}
-                      style={{
-                        padding: '4px 8px',
-                        background: '#4CAF50',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '12px',
-                        fontWeight: 'normal',
-                        position: 'absolute',
-                        right: '10px'
-                      }}
+                      style={ui.addBtn}
                     >
                       Add Doctor
                     </button>
@@ -1744,11 +1595,27 @@ export default function AttendanceTrack() {
               </tr>
             </thead>
             <tbody>
-              {doctorRows.map((row) => (
-                <tr key={row.id} style={{ background: '#fff' }}>
-                  <td style={{ padding: '10px 6px', border: '1px solid #ddd', textAlign: 'center' }}>{row.no}</td>
-                  <td style={{ padding: '10px 6px', border: '1px solid #ddd', fontWeight: '600' }}>
-                    {(row.id.startsWith('temp-')) ? (
+              {doctorRows.map((row, rowIdx) => (
+                <tr key={row.id} style={{ background: rowIdx % 2 === 0 ? theme.card : theme.cardAlt }}>
+                  <td style={ui.tdCenter}>
+                    {isCustomDoctorRow(row) ? (
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                        <span>{row.no}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeCustomDoctorRow(row.id)}
+                          style={ui.removeBtn}
+                          title="Remove row"
+                        >
+                          ×
+                        </button>
+                      </div>
+                    ) : (
+                      row.no
+                    )}
+                  </td>
+                  <td style={{ ...ui.td, fontWeight: 600 }}>
+                    {isCustomDoctorRow(row) ? (
                       <input
                         type="text"
                         value={row.name}
@@ -1762,7 +1629,7 @@ export default function AttendanceTrack() {
                             setDoctorRows(newRows);
                           }
                         }}
-                        style={{ width: '100%', border: 'none', background: 'transparent', padding: '0', fontWeight: '600' }}
+                        style={{ ...ui.cellInput, fontWeight: 600 }}
                         placeholder="Enter name"
                         maxLength={100}
                       />
@@ -1770,7 +1637,7 @@ export default function AttendanceTrack() {
                       row.name
                     )}
                   </td>
-                  <td style={{ padding: '10px 6px', border: '1px solid #ddd', textAlign: 'center' }}>
+                  <td style={ui.tdCenter}>
                     <input
                       type="checkbox"
                       checked={row.present}
@@ -1782,10 +1649,10 @@ export default function AttendanceTrack() {
                           setDoctorRows(newRows);
                         }
                       }}
-                      style={{ width: '20px', height: '20px', accentColor: '#1976D2' }}
+                      style={ui.checkbox}
                     />
                   </td>
-                  <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                  <td style={ui.td}>
                     <input
                       type="time"
                       value={row.checkIn}
@@ -1797,10 +1664,10 @@ export default function AttendanceTrack() {
                           setDoctorRows(newRows);
                         }
                       }}
-                      style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                      style={ui.cellInput}
                     />
                   </td>
-                  <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                  <td style={ui.td}>
                     <input
                       type="time"
                       value={row.lunchOut}
@@ -1812,10 +1679,10 @@ export default function AttendanceTrack() {
                           setDoctorRows(newRows);
                         }
                       }}
-                      style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                      style={ui.cellInput}
                     />
                   </td>
-                  <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                  <td style={ui.td}>
                     <input
                       type="time"
                       value={row.lunchIn}
@@ -1827,10 +1694,10 @@ export default function AttendanceTrack() {
                           setDoctorRows(newRows);
                         }
                       }}
-                      style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                      style={ui.cellInput}
                     />
                   </td>
-                  <td style={{ padding: '10px 6px', border: '1px solid #ddd' }}>
+                  <td style={ui.td}>
                     <input
                       type="time"
                       value={row.checkOut}
@@ -1842,7 +1709,7 @@ export default function AttendanceTrack() {
                           setDoctorRows(newRows);
                         }
                       }}
-                      style={{ width: '100%', border: 'none', background: 'transparent', padding: '0' }}
+                      style={ui.cellInput}
                     />
                   </td>
                 </tr>
@@ -1852,13 +1719,12 @@ export default function AttendanceTrack() {
         </div>
       )}
 
-      <div style={{ marginTop: '20px', textAlign: 'center' }}>
+      <div style={{ marginTop: '32px', textAlign: 'center', paddingBottom: '24px' }}>
         <button
           onClick={handleSubmit}
-          disabled={loading}
-          style={{ padding: '10px 20px', background: '#2D3748', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '16px', fontWeight: '600' }}
+          style={ui.submitBtn}
         >
-          {loading ? 'Submitting...' : 'Submit'}
+          Submit
         </button>
       </div>
     </div>

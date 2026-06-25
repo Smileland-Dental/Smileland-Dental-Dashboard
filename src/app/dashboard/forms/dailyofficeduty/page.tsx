@@ -3,7 +3,8 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { doc, setDoc, getDoc, deleteDoc, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes } from 'firebase/storage';
-import { db } from "@/lib/firebase.config";
+import { db, auth } from "@/lib/firebase.config";
+import { onAuthStateChanged } from 'firebase/auth';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 // 🔒 보안: 입력 검증 함수
@@ -203,9 +204,9 @@ const ROW_CONFIGS: RowConfig[] = [
     instructions: [
       '1) Go to phone system website',
       '2) Log in',
-      '4) Ensure your office is selected',
-      '5) Select override office hours',
-      '6) Select "Reset Default Office Hours"',
+      '3) Ensure your office is selected',
+      '4) Select override office hours',
+      '5) Select "Reset Default Office Hours"',
     ],
     deadlineDisplay: 'Deadline: 9:00 AM',
   },
@@ -283,7 +284,7 @@ const ROW_CONFIGS: RowConfig[] = [
     title: 'Check all lab cases for next day',
     details: ["Call lab for next day pick up's"],
   },
-  { num: 17, title: 'N₂O/ Compressor Off' },
+  { num: 17, title: 'N₂O/Compressor Off' },
   {
     num: 18,
     title: 'Did you read the meter on the Oxygen/N₂O/Helium tank?',
@@ -337,7 +338,6 @@ const ROW_CONFIGS: RowConfig[] = [
 
 export default function DailyOfficeDuties() {
   const [loading, setLoading] = useState(false);
-  const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [submitStatus, setSubmitStatus] = useState('');
   const [progress, setProgress] = useState(0);
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
@@ -347,6 +347,7 @@ export default function DailyOfficeDuties() {
   
   // 마지막 저장된 데이터 추적
   const [lastSavedData, setLastSavedData] = useState({});
+  const [userOfficesOptions, setUserOfficesOptions] = useState<string[]>([]);
   
   // 날짜 상태
   const [dutyDate, setDutyDate] = useState(() => {
@@ -420,8 +421,8 @@ export default function DailyOfficeDuties() {
 
   // 마감 시간 정의
   const DEADLINES = {
-    'Row1_Done': { time: '09:00', message: 'Turn Off Answering Service should be done by 9:00 AM' },
-    'Row2_Done': { time: '16:00', message: 'All charts filed back should be done by 4:00 PM' },
+    'Row1_Done': { time: '09:00', message: 'Turning Off Answering Service should be done by 9:00 AM' },
+    'Row2_Done': { time: '16:00', message: 'Filing all charts back should be done by 4:00 PM' },
     'Row3_Done': { time: '12:00', message: 'Charts pulled for next day should be done by 12:00 PM' },
     'Row4_Done': { time: '16:30', message: 'Check eligibility should be done by 4:30 PM' },
     'Row6_Done': { time: '16:30', message: 'Insurance breakdown should be done by 4:30 PM' },
@@ -451,6 +452,28 @@ export default function DailyOfficeDuties() {
     return `${hours}:${minutes.toString().padStart(2, '0')} ${ampm}`;
   };
 
+  const validateInput = (value: string, maxLength: number = 500): string => {
+    if (typeof value !== 'string') return '';
+    return value.slice(0, maxLength).replace(/[<>]/g, '');
+  };
+
+  const resetDutyData = () => {
+    setDutyData(prevData => {
+      const initialData: { [key: string]: string } = {};
+      Object.keys(prevData).forEach(key => {
+        initialData[key] = '';
+      });
+      return initialData as typeof prevData;
+    });
+    setLastSavedData(() => {
+      const initialData: { [key: string]: string } = {};
+      VALID_DUTY_KEYS.forEach(key => {
+        initialData[key] = '';
+      });
+      return initialData;
+    });
+  };
+
   // 자동 저장 함수
   const autoSave = useCallback(async () => {
     if (!dutyDate || !selectedOffice || isUpdatingFromFirebase) return;
@@ -460,34 +483,25 @@ export default function DailyOfficeDuties() {
     if (!hasChanges) return;
 
     try {
-      const dataToSave = {
-        dutyDate,
-        selectedOffice,
-        ...dutyData,
-        timestamp: new Date().toISOString(),
-        autoSaved: true,
-        lastUpdatedBy: userSessionId
-      };
-
-      // 🔒 보안: 저장 전 데이터 검증
       const validatedDutyData: { [key: string]: string } = {};
       for (const [key, value] of Object.entries(dutyData)) {
         validatedDutyData[key] = validateInput(value as string, 500);
       }
-      
-      const validatedDataToSave = {
-        ...dataToSave,
-        ...validatedDutyData
-      };
-      
+
       const docId = `${dutyDate}_${selectedOffice}`;
-      await setDoc(doc(db, "daily-office-duties", docId), validatedDataToSave);
+      await setDoc(doc(db, "daily-office-duties", docId), {
+        dutyDate,
+        selectedOffice,
+        ...validatedDutyData,
+        timestamp: new Date().toISOString(),
+        autoSaved: true,
+        lastUpdatedBy: userSessionId,
+      });
       
       // 저장 성공 시 마지막 저장된 데이터 업데이트
       setLastSavedData({ ...dutyData });
       
     } catch {
-      // auto-save failure is silently ignored; real-time listener will resync
     }
   }, [dutyDate, selectedOffice, dutyData, lastSavedData, isUpdatingFromFirebase, userSessionId]);
 
@@ -499,62 +513,6 @@ export default function DailyOfficeDuties() {
     }
   }, [dutyData]);
 
-  // 데이터 로드
-  const loadData = async () => {
-    if (!dutyDate || !selectedOffice) return;
-
-    try {
-      setSubmitStatus('Loading data...');
-      
-      const docId = `${dutyDate}_${selectedOffice}`;
-      const docSnap = await getDoc(doc(db, "daily-office-duties", docId));
-      
-      if (docSnap.exists()) {
-        const safeData = filterFirebaseData(docSnap.data());
-        
-        // Firebase에서 업데이트되는 동안 자동 저장 방지
-        setIsUpdatingFromFirebase(true);
-        
-        setDutyData(prevData => ({
-          ...prevData,
-          ...safeData
-        }));
-        
-        // 로드된 데이터를 마지막 저장된 데이터로 설정
-        setLastSavedData({ ...safeData });
-        
-        // 짧은 지연 후 Firebase 업데이트 플래그 해제
-        setTimeout(() => {
-          setIsUpdatingFromFirebase(false);
-        }, 100);
-        
-        setSubmitStatus('Data loaded successfully');
-        setTimeout(() => setSubmitStatus(''), 2000);
-      } else {
-        // 데이터가 없으면 초기화
-        const initialData: { [key: string]: string } = {};
-        Object.keys(dutyData).forEach(key => {
-          initialData[key] = '';
-        });
-        setDutyData(initialData as typeof dutyData);
-        setLastSavedData(initialData);
-        setSubmitStatus('No data found - initialized empty form');
-        setTimeout(() => setSubmitStatus(''), 2000);
-      }
-      
-    } catch (error) {
-      setSubmitStatus('Error loading data. Please try again.');
-      setTimeout(() => setSubmitStatus(''), 3000);
-    }
-  };
-
-  // 날짜 또는 오피스 변경 시 데이터 로드
-  useEffect(() => {
-    if (dutyDate && selectedOffice) {
-      loadData();
-    }
-  }, [dutyDate, selectedOffice]);
-
   // 실시간 데이터 동기화
   useEffect(() => {
     if (!dutyDate || !selectedOffice) return;
@@ -564,8 +522,7 @@ export default function DailyOfficeDuties() {
     
     const unsubscribe = onSnapshot(docRef, (docSnap) => {
       if (docSnap.exists()) {
-        const rawData = docSnap.data();
-        const safeData = filterFirebaseData(rawData);
+        const safeData = filterFirebaseData(docSnap.data());
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
@@ -584,19 +541,16 @@ export default function DailyOfficeDuties() {
         setTimeout(() => {
           setIsUpdatingFromFirebase(false);
         }, 100);
-        
-        // 다른 사용자의 업데이트만 표시 (자신의 업데이트는 제외)
-        if (rawData.timestamp && 
-            new Date(rawData.timestamp).getTime() > Date.now() - 5000 && 
-            rawData.lastUpdatedBy && 
-            rawData.lastUpdatedBy !== userSessionId) {
-          setAutoSaveStatus('🔄 Updated from another user');
-          setTimeout(() => setAutoSaveStatus(''), 2000);
-        }
+      } else {
+        // 다른 탭에서 제출되어 문서가 삭제된 경우 폼 초기화
+        setIsUpdatingFromFirebase(true);
+        resetDutyData();
+        setTimeout(() => {
+          setIsUpdatingFromFirebase(false);
+        }, 100);
       }
-    }, (error) => {
-      setAutoSaveStatus('❌ Connection error');
-      setTimeout(() => setAutoSaveStatus(''), 3000);
+    }, () => {
+      // Real-time listener error silently handled
     });
 
     return () => {
@@ -604,7 +558,38 @@ export default function DailyOfficeDuties() {
     };
   }, [dutyDate, selectedOffice]);
 
-  // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!currentUser) return;
+
+      try {
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) return;
+
+        const userData = userDoc.data();
+
+        if (userData?.offices) {
+          const officesArray = Array.isArray(userData.offices)
+            ? userData.offices
+            : [userData.offices];
+
+          const validOptions = officesArray.filter((g: string) => officeOptions.includes(g));
+
+          if (validOptions.length > 0) {
+            setUserOfficesOptions(validOptions);
+            if (validOptions.length === 1) {
+              setSelectedOffice(validOptions[0]);
+            }
+          }
+        }
+      } catch {
+        // 사이트 레벨 인증을 사용하므로 여기서는 조용히 처리
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
+
   useEffect(() => {
     if (process.env.NODE_ENV === 'production' &&
         typeof window !== 'undefined' &&
@@ -613,23 +598,12 @@ export default function DailyOfficeDuties() {
     }
   }, []);
 
-  // 컴포넌트 마운트 시 초기 로드는 dutyDate 변경 시 로드로 대체됨
-
-
-  // 🔒 보안: 입력 검증 함수
-  const validateInput = (value: string, maxLength: number = 500): string => {
-    if (typeof value !== 'string') return '';
-    return value.slice(0, maxLength).replace(/[<>]/g, '');
-  };
-
   const updateDutyData = (field: string, value: string) => {
-    // 🔒 보안: 입력 검증 및 길이 제한
     const validatedValue = validateInput(value, 500);
     
     setDutyData(prev => {
       const newData: { [key: string]: string } = { ...prev, [field]: validatedValue };
       
-      // Done by 필드가 입력되면 시간 자동 기록
       if (field.endsWith('_Done') && validatedValue.trim() !== '' && (prev[field as keyof typeof prev] as string)?.trim() === '') {
         const rowNumber = field.match(/Row(\d+)_Done/)?.[1];
         if (rowNumber) {
@@ -640,7 +614,6 @@ export default function DailyOfficeDuties() {
         }
       }
       
-      // Done by 필드가 비워지면 시간도 비움
       if (field.endsWith('_Done') && validatedValue.trim() === '') {
         const rowNumber = field.match(/Row(\d+)_Done/)?.[1];
         if (rowNumber) {
@@ -649,7 +622,6 @@ export default function DailyOfficeDuties() {
         }
       }
 
-      // Checked by 필드가 입력되면 시간 자동 기록
       if (field.endsWith('_Checked') && validatedValue.trim() !== '' && (prev[field as keyof typeof prev] as string)?.trim() === '') {
         const rowNumber = field.match(/Row(\d+)_Checked/)?.[1];
         if (rowNumber) {
@@ -660,7 +632,6 @@ export default function DailyOfficeDuties() {
         }
       }
 
-      // Checked by 필드가 비워지면 시간도 비움
       if (field.endsWith('_Checked') && validatedValue.trim() === '') {
         const rowNumber = field.match(/Row(\d+)_Checked/)?.[1];
         if (rowNumber) {
@@ -673,7 +644,6 @@ export default function DailyOfficeDuties() {
     });
   };
 
-  // 마감 시간 체크 - 각 행별로 개별 체크
   const isRowOverdue = (rowItemName: keyof typeof DEADLINES) => {
     const californiaTime = getCurrentCaliforniaTime();
     const currentMinutes = californiaTime.getHours() * 60 + californiaTime.getMinutes();
@@ -688,7 +658,6 @@ export default function DailyOfficeDuties() {
     const isCompleted = dutyData[rowItemName as keyof typeof dutyData]?.trim() !== '';
     const isOverdue = currentMinutes > deadlineMinutes;
     
-    // Spore Test는 월요일만 체크
     if (rowItemName === 'Row25_Done' && currentDay !== 1) {
       return false;
     }
@@ -715,7 +684,7 @@ export default function DailyOfficeDuties() {
         setLoading(false);
         return;
       }
-      if (!selectedOffice || !officeOptions.includes(selectedOffice)) {
+      if (!selectedOffice || !userOfficesOptions.includes(selectedOffice)) {
         alert('Invalid office selection.');
         setLoading(false);
         return;
@@ -784,8 +753,6 @@ export default function DailyOfficeDuties() {
           
           // PDF 업로드
           await uploadBytes(storageRef, pdfBlob);
-          
-          setSubmitStatus('✅ PDF saved to archive successfully!');
         } catch (storageError) {
           alert('An error occurred while submitting. Please try again.');
           setSubmitStatus('❌ Submission failed. Please try again.');
@@ -801,13 +768,7 @@ export default function DailyOfficeDuties() {
         await deleteDoc(doc(db, "daily-office-duties", docId));
         
         // 3. 폼 초기화
-        setDutyData(prevData => {
-          const initialData: { [key: string]: string } = {};
-          Object.keys(prevData).forEach(key => {
-            initialData[key] = '';
-          });
-          return initialData as typeof prevData;
-        });
+        resetDutyData();
 
         setSubmitStatus('Complete!');
         setProgress(100);
@@ -822,7 +783,7 @@ export default function DailyOfficeDuties() {
         throw new Error('PDF is empty');
       }
 
-    } catch (error) {
+    } catch {
       setSubmitStatus('❌ Submission failed. Please try again.');
       setProgress(0);
       setTimeout(() => {
@@ -915,26 +876,6 @@ export default function DailyOfficeDuties() {
       fontSize: '16px',
       transition: 'background-color 0.2s'
     },
-    statusMessage: {
-      marginTop: '15px',
-      fontWeight: 'bold',
-      textAlign: 'center' as const,
-      padding: '10px',
-      borderRadius: '4px'
-    },
-    autoSaveStatus: {
-      position: 'absolute',
-      top: '10px',
-      right: '10px',
-      padding: '8px 16px',
-      backgroundColor: '#51cf66',
-      color: 'white',
-      borderRadius: '20px',
-      fontSize: '14px',
-      fontWeight: 'bold',
-      boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
-      zIndex: 1000
-    },
     overdueWarning: {
       color: '#d32f2f',
       fontWeight: 'bold',
@@ -1007,7 +948,7 @@ export default function DailyOfficeDuties() {
         }
       `}</style>
       <div style={styles.body}>
-      {/* 로딩 모달 */}
+
       {loading && (
         <div style={{
           position: "fixed",
@@ -1055,7 +996,7 @@ export default function DailyOfficeDuties() {
             }}>
               {!submitStatus && 'Processing... Please wait'}
             </p>
-            {/* 진행률 바 */}
+
             <div style={{
               width: "100%",
               backgroundColor: "#e9ecef",
@@ -1100,16 +1041,8 @@ export default function DailyOfficeDuties() {
       )}
 
       <div style={styles.container}>
-        {/* 자동 저장 상태 표시 */}
-        {autoSaveStatus && (
-          <div style={styles.autoSaveStatus}>
-            {autoSaveStatus}
-          </div>
-        )}
-
         <h2 style={styles.header}>Daily Office Duty</h2>
 
-        {/* 날짜 및 오피스 선택 */}
         <div style={{ display: 'flex', gap: '20px', marginBottom: '20px', flexWrap: 'wrap' }}>
           <div style={styles.formGroup}>
             <label style={styles.label} htmlFor="dutyDate">Date:</label>
@@ -1123,23 +1056,39 @@ export default function DailyOfficeDuties() {
             />
           </div>
           <div style={styles.formGroup}>
-            <label style={styles.label} htmlFor="selectedOffice">Office:</label>
-            <select
-              id="selectedOffice"
-              value={selectedOffice}
-              onChange={(e) => setSelectedOffice(e.target.value)}
-              style={styles.input}
-              required
-            >
-              <option value="">-- Select Office --</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
+            {userOfficesOptions.length > 0 && (
+              <>
+                <label style={styles.label} htmlFor="selectedOffice">Office:</label>
+                {userOfficesOptions.length === 1 ? (
+                  <span style={{
+                    ...styles.input,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    backgroundColor: '#e9ecef',
+                    fontWeight: '600',
+                    color: '#4a6fa1',
+                  }}>
+                    {selectedOffice}
+                  </span>
+                ) : (
+                  <select
+                    id="selectedOffice"
+                    value={selectedOffice}
+                    onChange={(e) => setSelectedOffice(e.target.value)}
+                    style={styles.input}
+                    required
+                  >
+                    <option value="">-- Select Office --</option>
+                    {userOfficesOptions.map(office => (
+                      <option key={office} value={office}>{office}</option>
+                    ))}
+                  </select>
+                )}
+              </>
+            )}
           </div>
         </div>
 
-        {/* 업무 테이블 */}
         <table style={styles.table}>
           <thead>
             <tr>
@@ -1249,7 +1198,6 @@ export default function DailyOfficeDuties() {
           </tbody>
         </table>
 
-        {/* 제출 버튼 */}
         <div style={{ textAlign: 'center' as const, marginTop: '20px' }}>
           <button
             onClick={handleSubmit}
@@ -1263,22 +1211,6 @@ export default function DailyOfficeDuties() {
             {loading ? 'Submitting...' : 'Submit'}
           </button>
         </div>
-
-        {/* 상태 메시지 */}
-        {submitStatus && (
-          <div style={{
-            ...styles.statusMessage,
-            backgroundColor: submitStatus.includes('failed') || submitStatus.includes('Error') ? '#f8d7da' : 
-                           submitStatus.includes('successfully') ? '#d4edda' : '#d1ecf1',
-            color: submitStatus.includes('failed') || submitStatus.includes('Error') ? '#721c24' : 
-                   submitStatus.includes('successfully') ? '#155724' : '#0c5460',
-            border: submitStatus.includes('failed') || submitStatus.includes('Error') ? '1px solid #f5c6cb' : 
-                    submitStatus.includes('successfully') ? '1px solid #c3e6cb' : '1px solid #bee5eb'
-          }}>
-            {submitStatus}
-          </div>
-        )}
-
       </div>
     </div>
     </>
