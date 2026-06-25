@@ -18,17 +18,13 @@ export default function LobbyInspectionPage() {
   const [isUpdatingFromFirebase, setIsUpdatingFromFirebase] = useState(false);
   const [userSessionId] = useState(() => Math.random().toString(36).substr(2, 9));
   const [lastSavedData, setLastSavedData] = useState<any>({});
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
   const [userOfficesOptions, setUserOfficesOptions] = useState<string[]>([]); // 사용자의 offices 옵션들
 
-  // Rate limiting을 위한 ref (로드·제출만)
   const lastLoadDataCall = useRef<number>(0);
   const lastSubmitCall = useRef<number>(0);
 
-  // 오피스 옵션 (알파벳 순)
   const officeOptions = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
-  // Office별 Check 옵션 정의 (알파벳 순)
   const OFFICE_CHECK_OPTIONS = {
     "Bernard": ["Carmen", "Elisa", "Ranjit"],
     "California": ["Helen", "Kindal"],
@@ -36,11 +32,26 @@ export default function LobbyInspectionPage() {
     "Fresno": ["Cynthia"],
     "Ming": ["Hopie", "Kindal", "Marbella"],
     "Ortho": ["Kindal"],
-    "Tulare": ["Dianne, Melissa, Crystal"],
+    "Tulare": ["Crystal", "Dianne", "Melissa"],
     "Visalia": ["Abby", "Dianne", "Jessica", "Renee"]
   };
 
-  /** Task checkbox columns: Row{N}_Col3 … Row{N}_Col13 */
+  const COLUMN_NAMES = [
+    'Time', 'Check', 'Ipads/Games Working', 'Wipe Ipads/Games', 'Pick Up Litter/Sweep',
+    'Entrance Area', 'Pass Out Water', 'Sweep/Vacuum', 'Wipe Ipads/Games',
+    'Take Out Trash', 'Wipe Desk Tops', 'Wipe Seats', 'Wipe Windows/Door Handles', 'Checked Time',
+  ];
+
+  const ROW_HEADERS = [
+    'Manager Inspection',
+    '8 am', '9 am', '10 am', '11 am',
+    'Manager Inspection',
+    '12 pm', '1 pm', 'Sweep/Mop', '2 pm', '3 pm',
+    'Manager Inspection',
+    '4 pm', '5 pm', '6 pm', 'Sweep/Mop', '7 pm',
+    'Deep Clean Manager Inspection',
+  ];
+
   const LOBBY_TASK_COLUMN_START = 3;
   const LOBBY_TASK_COLUMN_COUNT = 11;
 
@@ -53,23 +64,21 @@ export default function LobbyInspectionPage() {
     }
   };
 
-  // --- PDF 생성 관련 상수/스타일 ---
-  const PDF_COLUMN_NAMES = [
-    'Time', 'Check', 'Ipads/Games Working', 'Wipe Ipads/Games', 'Pick Up Litter/Sweep',
-    'Entrance Area', 'Pass Out Water', 'Sweep/Vacuum', 'Wipe Ipads/Games',
-    'Take Out Trash', 'Wipe Desk Tops', 'Wipe Seats', 'Wipe Windows/Door Handles', 'Checked Time',
-  ];
+  const FIRESTORE_META_KEYS = new Set([
+    'inspectionDate', 'selectedOffice', 'timestamp', 'autoSaved', 'lastUpdatedBy',
+  ]);
 
-  const PDF_ROW_HEADERS = [
-    'Manager Inspection',
-    '8 am', '9 am', '10 am', '11 am',
-    'Manager Inspection',
-    '12 pm', '1 pm', 'Sweep/Mop', '2 pm', '3 pm',
-    'Manager Inspection',
-    '4 pm', '5 pm', '6 pm', 'Sweep/Mop', '7 pm',
-    'Deep Clean Manager Inspection',
-  ];
+  const filterFirebaseData = (data: Record<string, unknown>): Record<string, unknown> => {
+    const filtered: Record<string, unknown> = {};
+    const rowFieldPattern = /^Row\d+_(Check|CheckedTime|Col\d+)$/;
+    for (const [key, value] of Object.entries(data)) {
+      if (FIRESTORE_META_KEYS.has(key) || !rowFieldPattern.test(key)) continue;
+      filtered[key] = value;
+    }
+    return filtered;
+  };
 
+  // --- PDF 생성 관련 스타일 ---
   const pdfStyles = StyleSheet.create({
     page: { padding: 22, fontFamily: 'Helvetica', fontSize: 8 },
     header: { marginBottom: 10, borderBottomWidth: 2, borderColor: '#333', paddingBottom: 6, alignItems: 'center' },
@@ -114,17 +123,17 @@ export default function LobbyInspectionPage() {
 
     // Row 2: Column names (14 columns)
     const row2 = React.createElement(View, { key: 'r2', style: [s.row, s.cellGray] },
-      ...PDF_COLUMN_NAMES.map((name, i) =>
+      ...COLUMN_NAMES.map((name, i) =>
         React.createElement(View, { key: i, style: s.cell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, name))
       ),
     );
 
     // Data rows
-    const dataRows = PDF_ROW_HEADERS.map((header, rowIndex) => {
+    const dataRows = ROW_HEADERS.map((header, rowIndex) => {
       const isSweepMop = header.includes('Sweep/Mop');
       const checkValue = safeStr(lobbyData[`Row${rowIndex + 1}_Check`], 50);
       const checkedTime = safeStr(lobbyData[`Row${rowIndex + 1}_CheckedTime`], 50);
-      const taskCells = PDF_COLUMN_NAMES.slice(2, -1).map((_, colIndex) => {
+      const taskCells = COLUMN_NAMES.slice(2, -1).map((_, colIndex) => {
         if (isSweepMop) return React.createElement(View, { key: colIndex, style: s.cell }, React.createElement(Text, null, ''));
         const v = lobbyData[`Row${rowIndex + 1}_Col${colIndex + 3}`];
         return React.createElement(View, { key: colIndex, style: s.cell }, React.createElement(Text, null, isChecked(v) ? 'O' : ''));
@@ -149,10 +158,6 @@ export default function LobbyInspectionPage() {
     return React.createElement(Document, null,
       React.createElement(Page, { size: 'A4', orientation: 'landscape', style: s.page }, header, table, footer),
     );
-  }
-
-  function sanitizeFilename(filename: string): string {
-    return filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 255);
   }
 
   // 현재 캘리포니아 시간 가져오기
@@ -233,45 +238,35 @@ export default function LobbyInspectionPage() {
         return;
       }
       lastLoadDataCall.current = now;
-
-      setSubmitStatus('Loading data...');
       
       const docId = `${inspectionDate}_${selectedOffice}_lobby`;
       const docSnap = await getDoc(doc(db, "lobby-inspections", docId));
       
       if (docSnap.exists()) {
-        const data = docSnap.data();
+        const safeData = filterFirebaseData(docSnap.data());
         
         // Firebase에서 업데이트되는 동안 자동 저장 방지
         setIsUpdatingFromFirebase(true);
         
         setLobbyData((prevData: any) => ({
           ...prevData,
-          ...data
+          ...safeData
         }));
         
-        // 로드된 데이터를 마지막 저장된 데이터로 설정
-        setLastSavedData({ ...data });
+        setLastSavedData({ ...safeData });
         
         // 짧은 지연 후 Firebase 업데이트 플래그 해제
         setTimeout(() => {
           setIsUpdatingFromFirebase(false);
         }, 100);
-        
-        setSubmitStatus('Data loaded successfully');
-        setTimeout(() => setSubmitStatus(''), 2000);
       } else {
-        // 초기 데이터 설정
         const initialData: any = {};
         setLobbyData(initialData);
         setLastSavedData(initialData);
-        setSubmitStatus('No data found - initialized empty form');
-        setTimeout(() => setSubmitStatus(''), 2000);
       }
       
-    } catch (error: any) {
-      setSubmitStatus('Error loading data: ' + error.message);
-      setTimeout(() => setSubmitStatus(''), 3000);
+    } catch {
+      // Load error silently handled
     }
   };
 
@@ -291,33 +286,28 @@ export default function LobbyInspectionPage() {
     
     const unsubscribe = onSnapshot(docRef, (docSnap: any) => {
       if (docSnap.exists()) {
-        const data = docSnap.data();
-        
-        // 데이터가 실제로 변경되었는지 확인
-        const hasChanges = JSON.stringify(data) !== JSON.stringify(lobbyData);
-        if (!hasChanges) {
-          return;
-        }
-        
-        // Firebase에서 업데이트되는 동안 자동 저장 방지
+        const safeData = filterFirebaseData(docSnap.data());
+
         setIsUpdatingFromFirebase(true);
-        
-        setLobbyData((prevData: any) => {
-          return {
-            ...prevData,
-            ...data
-          };
-        });
-        
-        // 실시간 업데이트된 데이터를 마지막 저장된 데이터로 설정
-        setLastSavedData({ ...data });
-        
-        // 짧은 지연 후 Firebase 업데이트 플래그 해제
+
+        setLobbyData((prevData: any) => ({
+          ...prevData,
+          ...safeData,
+        }));
+
+        setLastSavedData({ ...safeData });
+
         setTimeout(() => {
           setIsUpdatingFromFirebase(false);
         }, 100);
-        
-        // 다른 사용자의 업데이트는 조용히 처리 (알림 없음)
+      } else {
+        // 다른 탭에서 제출되어 문서가 삭제된 경우 폼 초기화
+        setIsUpdatingFromFirebase(true);
+        setLobbyData({});
+        setLastSavedData({});
+        setTimeout(() => {
+          setIsUpdatingFromFirebase(false);
+        }, 100);
       }
     }, (error: any) => {
       // Real-time listener error silently handled
@@ -390,32 +380,6 @@ export default function LobbyInspectionPage() {
       // 1. PDF 생성
       setSubmitStatus('Submitting...');
       setProgress(30);
-      
-      // Firebase Auth에서 현재 사용자 확인
-      const currentUser = auth.currentUser;
-      if (!currentUser) {
-        alert('Please log in.');
-        setLoading(false);
-        setSubmitStatus('');
-        return;
-      }
-
-      // Firestore에서 사용자 role 확인 (Firebase Rules로 보호됨)
-      const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-      if (!userDoc.exists()) {
-        alert('User information could not be found.');
-        setLoading(false);
-        setSubmitStatus('');
-        return;
-      }
-
-      const userData = userDoc.data();
-      if (userData?.role !== 'HR' && userData?.role !== 'Manager' && userData?.role !== 'Employee') {
-        alert('You do not have access to this page.');
-        setLoading(false);
-        setSubmitStatus('');
-        return;
-      }
 
       // 입력 검증
       if (!inspectionDate || !selectedOffice || !lobbyData) {
@@ -699,144 +663,54 @@ export default function LobbyInspectionPage() {
     };
   }, [loading]);
 
-  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
-    // Firebase Auth 상태 변경 감지
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      try {
-        if (!currentUser) {
-          alert('Please log in.');
-          setIsAuthorized(false);
-          return;
-        }
+    setInspectionDate(getCurrentCaliforniaTime());
+  }, []);
 
-        // Firestore에서 사용자 role 확인
+  // 로그인한 사용자의 Office 옵션 불러오기
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      if (!currentUser) return;
+
+      try {
         const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (!userDoc.exists()) {
-          alert('User information could not be found.');
-          setIsAuthorized(false);
-          return;
-        }
+        if (!userDoc.exists()) return;
 
         const userData = userDoc.data();
 
-        if (userData?.role !== 'HR' && userData?.role !== 'Manager' && userData?.role !== 'Employee') {
-          alert('You do not have access to this page.');
-          setIsAuthorized(false);
-          // 다른 페이지로 리다이렉트하거나 홈으로 이동
-          if (typeof window !== 'undefined') {
-            window.location.href = '/';
-          }
-          return;
-        }
-
-        setIsAuthorized(true);
-        setInspectionDate(getCurrentCaliforniaTime());
-
-        // offices 처리: 배열이거나 단일 값일 수 있음
         if (userData?.offices) {
-          const officesArray = Array.isArray(userData.offices) 
-            ? userData.offices 
+          const officesArray = Array.isArray(userData.offices)
+            ? userData.offices
             : [userData.offices];
-          
-          // officeOptions에 포함된 값들만 필터링
+
           const validOptions = officesArray.filter((g: string) => officeOptions.includes(g));
-          
+
           if (validOptions.length > 0) {
             setUserOfficesOptions(validOptions);
-            // 단일 값이면 자동 선택
             if (validOptions.length === 1) {
               setSelectedOffice(validOptions[0]);
             }
           }
         }
-      } catch (error: any) {
-        alert('An error occurred while verifying authentication.');
-        setIsAuthorized(false);
+      } catch {
+        // 사이트 레벨 인증을 사용하므로 여기서는 조용히 처리
       }
     });
 
-    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
-    if (process.env.NODE_ENV === 'production' && 
-        typeof window !== 'undefined' && 
-        window.location.protocol !== 'https:') {
-      // HTTP로 접속한 경우 HTTPS로 리다이렉트
-      window.location.href = window.location.href.replace('http:', 'https:');
-    }
-
-    // cleanup 함수
-    return () => {
-      unsubscribe();
-    };
+    return () => unsubscribe();
   }, []);
 
-  // 컬럼 정의
-  const COLUMN_NAMES = [
-    'Time', 'Check', 'Ipads/Games Working', 'Wipe Ipads/Games', 'Pick Up Litter/Sweep',
-    'Entrance Area', 'Pass Out Water', 'Sweep/Vacuum', 'Wipe Ipads/Games',
-    'Take Out Trash', 'Wipe Desk Tops', 'Wipe Seats', 'Wipe Windows/Door Handles', 'Checked Time'
-  ];
-
-  // 행 헤더 정의
-  const ROW_HEADERS = [
-    'Manager Inspection',
-    '8 am', '9 am', '10 am', '11 am',
-    'Manager Inspection',
-    '12 pm', '1 pm', 'Sweep/Mop', '2 pm', '3 pm',
-    'Manager Inspection',
-    '4 pm', '5 pm', '6 pm', 'Sweep/Mop', '7 pm',
-    'Deep Clean Manager Inspection'
-  ];
-
-
-  // 인증 확인 중이거나 인증 실패 시 로딩 화면 표시
-  if (isAuthorized === null) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        background: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
-        fontFamily: 'Arial, sans-serif'
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🔐</div>
-          <div style={{ fontSize: '18px', color: '#333' }}>Verifying authentication...</div>
-        </div>
-      </div>
-    );
-  }
-
-  if (isAuthorized === false) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        background: 'linear-gradient(135deg, #ffecd2 0%, #fcb69f 100%)',
-        fontFamily: 'Arial, sans-serif'
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '24px', marginBottom: '20px' }}>🚫</div>
-          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
-          <div style={{ fontSize: '14px', color: '#666' }}>You do not have access to this page.</div>
-        </div>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'production' &&
+        typeof window !== 'undefined' &&
+        window.location.protocol !== 'https:') {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+  }, []);
 
   return (
-    <>
-      <style>{`
-        @keyframes spin {
-          0% { transform: rotate(0deg); }
-          100% { transform: rotate(360deg); }
-        }
-      `}</style>
-      <div style={styles.body}>
-        {/* 로딩 모달 */}
+    <div style={styles.body}>
+      
         {loading && (
           <div style={{
             position: "fixed",
@@ -908,7 +782,6 @@ export default function LobbyInspectionPage() {
           <span style={{color:'#4a6fa1'}}>Do not use cavi wipes, use front office wipes.</span>
         </div>
 
-        {/* 정보 입력 섹션 */}
         <div style={styles.infoRow}>
           <label style={styles.label} htmlFor="date">📅 Date:</label>
           <input
@@ -918,7 +791,7 @@ export default function LobbyInspectionPage() {
             onChange={(e: any) => setInspectionDate(e.target.value)}
             style={styles.input}
           />
-          {/* officees 옵션이 있는 경우에만 Office 표시 */}
+
           {userOfficesOptions.length > 0 && (
             <>
               <label style={styles.label} htmlFor="office">🏢 Office:</label>
@@ -950,7 +823,6 @@ export default function LobbyInspectionPage() {
           )}
         </div>
 
-        {/* 테이블 - Date와 Office가 모두 선택되었을 때만 표시 */}
         {inspectionDate && selectedOffice && (
           <div style={styles.tableContainer}>
             <table style={styles.table}>
@@ -1031,7 +903,7 @@ export default function LobbyInspectionPage() {
                         />
                       )}
                     </td>
-                    {COLUMN_NAMES.slice(2, -1).map((columnName, colIndex) => {
+                    {COLUMN_NAMES.slice(2, -1).map((_, colIndex) => {
                       if (isSweepMop) {
                         return <td key={colIndex} style={styles.td}></td>;
                       }
@@ -1060,7 +932,6 @@ export default function LobbyInspectionPage() {
         </div>
         )}
 
-        {/* 제출 버튼 - Date와 Office가 모두 선택되었을 때만 표시 */}
         {inspectionDate && selectedOffice && (
           <div style={{textAlign:'center', marginTop:'18px'}}>
             <button 
@@ -1078,7 +949,6 @@ export default function LobbyInspectionPage() {
           </div>
         )}
       </div>
-      </div>
-    </>
+    </div>
   );
 }
