@@ -240,7 +240,7 @@ export default function AttendanceTrack() {
   };
 
   const OFFICE_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'] as const;
-  const INCIDENT_OPTIONS = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out'] as const;
+  const INCIDENT_OPTIONS = ['', 'Late In', 'Early Out', 'Long Lunch', 'Leave and Come Back', 'Voluntary Early Out', 'Substitute', 'Called In', 'Suspended', 'Requested Off', 'No Call No Show', 'Maternity', 'Disability'] as const;
   const POSITION_ORDER = ['Front Office', 'Biller', 'Dental Assistant', 'RDA', 'Sub', 'Extern'] as const;
   const CUSTOM_ROW_NO_THRESHOLD = 1000;
 
