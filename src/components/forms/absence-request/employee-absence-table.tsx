@@ -7,7 +7,7 @@ import { StatusBadge } from '@/components/ui/status-badge';
 
 type RequestTableProps = {
   requests: AbsenceRequest[];
-  status: 'needed' | 'pending' | 'approved' | 'denied' | 'all' | 'archived';
+  status: 'needed' | 'pending' | 'approved' | 'denied' | 'all' | 'archived' | 'pending_employee';
   onViewDetails: (request: AbsenceRequest) => void;
 };
 
@@ -27,7 +27,7 @@ export const AbsenceTable: React.FC<RequestTableProps> = ({ requests, status, on
   const [typeFilter, setTypeFilter] = useState('all');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc' | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 5;
+  const itemsPerPage = 10;
 
   // Unique types for the dropdown
   const uniqueTypes = useMemo(() => {

@@ -21,7 +21,7 @@ interface HRCreateAbsenceModalProps {
 const initialState = {
   office: '',
   type_of_incident: '',
-  type_of_request: '',
+  type_of_request: 'HR Call In',
   employee_id: '',
   employee_name: '',
   employee_title: '',
@@ -106,7 +106,6 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
           employee_title: data.jobTitle || '',
           employeeFirestoreID: empDoc.id,
           skipManagerApproval: data.skipManagerApproval || false,
-          manager_approval: data.skipManagerApproval ? 'not_required' : 'pending',
         }));
       } else {
         setError("Invalid Employee ID. Please check and try again.");
@@ -127,11 +126,23 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
 
     setIsSubmitting(true);
     try {
+      let finalManagerApproval = formData.manager_approval;
+      if (formData.type_of_request === "HR Call In") {
+        finalManagerApproval = "not_required";
+      } 
+      else {
+        // For Incident Notice or Time Off Request:
+        // Default to 'pending' UNLESS the employee profile explicitly skips manager approval
+        finalManagerApproval = selectedEmployee?.skipManagerApproval ? "not_required" : "pending";
+      }
+
+      const finalStatus = formData.type_of_request === "HR Call In" ? "pending_action" : "active";
+
       await addDoc(collection(db, "absences"), {
         ...formData,
         createdAt: new Date(),
-        type_of_request: "HR Call In",
-        manager_approval: "not_required"
+        manager_approval: finalManagerApproval,
+        status: finalStatus
       });
       setFeedback({ isOpen: true, type: 'success', message: "Record synced successfully." });
     } catch (err) {
@@ -175,7 +186,7 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
           {/* Header */}
           <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
             <h2 className="text-xl font-black flex items-center gap-2">
-              HR Call In Entry
+              HR Absence Entry
             </h2>
             <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-full transition-all"><X /></button>
           </div>
@@ -228,6 +239,27 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
                   >
                     Change
                   </button>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Type of Request</label>
+                    <div className="w-full p-4 bg-slate-50 rounded-xl border-none flex gap-4 text-xs font-bold">
+                    {["HR Call In", "Incident Notice", "Time Off Request"].map((type) => (
+                      <label key={type} className="flex items-center gap-1.5 cursor-pointer select-none">
+                        <input 
+                        type="radio" 
+                        name="type_of_request" 
+                        value={type} 
+                        checked={formData.type_of_request === type} 
+                        onChange={handleChange}
+                        className="accent-indigo-600 h-3.5 w-3.5 cursor-pointer" 
+                      />
+                      <span>{type}</span>
+                    </label>
+                    ))}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Form Fields */}

@@ -26,7 +26,7 @@ export type AbsenceRequest = {
   skipManagerApproval: boolean; // Field to indicate if manager approval is skipped (true/false)
   DOAPoints: number; // Points assigned for the DOA system based on the hours missed
   pendingDOAPoints: number; // Points that are pending and will be added to DOAPoints if the request is approved
-  status: 'active' | 'archived'; // New field to indicate if the request is active or archived
+  status: 'active' | 'archived' | 'pending_action'; // New field to indicate if the request is active or archived, including a way to check if it is an initial 'HR Call In' Request
 };
 
 export interface User {

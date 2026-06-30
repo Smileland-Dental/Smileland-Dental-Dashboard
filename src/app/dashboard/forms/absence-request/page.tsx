@@ -3,7 +3,7 @@
 import NewAbsenceForm from '@/components/forms/absence-request/new-absence';
 import ExistingAbsenceForm from '@/components/forms/absence-request/existing-absence';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 
 import { collection, query, where, getDocs, doc, getDoc } from "firebase/firestore";
 import { db } from '@/lib/firebase.config';
@@ -22,6 +22,7 @@ export default function Page() {
 
   const [allAbsences, setAbsences] = useState<AbsenceRequest[]>([]);
   const [archivedAbsences, setArchivedAbsences] = useState<AbsenceRequest[]>([]);
+  const [pendingEmployeeAbsences, setPendingEmployeeAbsences] = useState<AbsenceRequest[]>([]);
   const [selectedAbsence, setSelectedAbsence] = useState<AbsenceRequest | null>(null);
   const [newAbsence, setNewAbsence] = useState(false);
 
@@ -90,6 +91,63 @@ export default function Page() {
     setYear('')
   };
 
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    let timeoutId: NodeJS.Timeout;
+    let lastActivityTime = Date.now(); // Store exact timestamp of last activity
+    const INACTIVITY_LIMIT = 5 * 60 * 1000; // 5 minutes
+
+    const resetTimer = () => {
+      clearTimeout(timeoutId);
+      lastActivityTime = Date.now(); // Update timestamp
+
+      timeoutId = setTimeout(() => {
+        handleLogout();
+        alert("You have been signed out due to 5 minutes of inactivity.");
+      }, INACTIVITY_LIMIT);
+    };
+
+    // Fix for iOS: Check elapsed time when the user returns to the tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const timeElapsedSinceLastActivity = Date.now() - lastActivityTime;
+          
+        // If they were away longer than 5 minutes, log them out instantly
+        if (timeElapsedSinceLastActivity >= INACTIVITY_LIMIT) {
+          handleLogout();
+          alert("You have been signed out due to 5 minutes of inactivity.");
+        } else {
+          // Otherwise, adjust the timer for the remaining time left
+          clearTimeout(timeoutId);
+          timeoutId = setTimeout(() => {
+            handleLogout();
+            alert("You have been signed out due to 5 minutes of inactivity.");
+          }, INACTIVITY_LIMIT - timeElapsedSinceLastActivity);
+        }
+      }
+    };
+
+    const activityEvents = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart'];
+
+    activityEvents.forEach(event => {
+      window.addEventListener(event, resetTimer);
+    });
+
+    // Listen for when the user locks/unlocks their phone or switches tabs
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    resetTimer();
+
+    return () => {
+      clearTimeout(timeoutId);
+      activityEvents.forEach(event => {
+        window.removeEventListener(event, resetTimer);
+      });
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [isAuthenticated]);
+
   const fetchAbsences = async (id: string) => {
     try {
       setLoading(true);
@@ -98,10 +156,12 @@ export default function Page() {
       const querySnapshot = await getDocs(q);
       const absenceData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AbsenceRequest));
 
-      const activeAbsences = absenceData.filter(absence => absence.status !== 'archived');
+      const activeAbsences = absenceData.filter(absence => (absence.status !== 'archived' && absence.status !== 'pending_action'));
       const archivedAbsences = absenceData.filter(absence => absence.status === 'archived');
+      const pendingActionAbsences = absenceData.filter(absence => absence.status === 'pending_action')
       setAbsences(activeAbsences);
       setArchivedAbsences(archivedAbsences);
+      setPendingEmployeeAbsences(pendingActionAbsences);
     } 
     catch (err) {
       setAbsences([]);
@@ -119,6 +179,10 @@ export default function Page() {
   const handleViewDetails = (absence: AbsenceRequest) => {
     setSelectedAbsence(absence);
   };
+
+  const pendingEmployeeActionAbsences = useMemo (() => {
+    return pendingEmployeeAbsences;
+  }, [allAbsences])
 
   const noteSubmisisonAbsences = useMemo(() => {
     return allAbsences.filter(absence => absence.excuse_note_submitted === 'pending');
@@ -179,6 +243,12 @@ export default function Page() {
           <div className="border-b border-gray-200 mb-2">
             <nav className="-mb-px flex space-x-8" aria-label="Tabs">
               <button
+                onClick={() => setActiveTab('pending_employee')}
+                className={`${activeTab === 'pending_employee' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
+              >
+                Pending Acknowledgement ({pendingEmployeeActionAbsences.length})
+              </button>
+              <button
                 onClick={() => setActiveTab('needed')}
                 className={`${activeTab === 'needed' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
               >
@@ -205,7 +275,7 @@ export default function Page() {
               <button onClick={() => setActiveTab('all')}
                 className={`${activeTab === 'all' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
               >
-                All Requests ({allAbsences.length})
+                All Active Requests ({allAbsences.length})
               </button>
               <button onClick={() => setActiveTab('archived')}
                 className={`${activeTab === 'archived' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
@@ -218,6 +288,9 @@ export default function Page() {
           {/* Absence Table */}
           
           <div className="mt-4">
+            {activeTab === 'pending_employee' && (
+              <AbsenceTable requests={pendingEmployeeActionAbsences} status={'pending_employee'} onViewDetails={handleViewDetails} />
+            )}
             {activeTab === 'needed' && (
               <AbsenceTable requests={noteSubmisisonAbsences} status={'needed'} onViewDetails={handleViewDetails} />
             )}

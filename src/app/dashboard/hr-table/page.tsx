@@ -226,6 +226,7 @@ export default function Page() {
           >
             <option value="active">Active</option>
             <option value="archived">Archived</option>
+            <option value="pending_action">Pending Action</option>
           </select>
         </div>
         <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
@@ -279,13 +280,14 @@ export default function Page() {
         <table className="w-full text-left">
           <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
             <tr>
-              <th onClick={() => handleSort('employee_name')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Employee<SortIcon columnKey="employee_name" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
-              <th onClick={() => handleSort('type_of_incident')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Type<SortIcon columnKey="type_of_incident" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
-              <th onClick={() => handleSort('office')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Office<SortIcon columnKey="office" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
-              <th onClick={() => handleSort('incident_start')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Dates<SortIcon columnKey="incident_start" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
-              <th onClick={() => handleSort('createdAt')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Submitted<SortIcon columnKey="createdAt" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
-              <th onClick={() => handleSort('statusBadge')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">Status<SortIcon columnKey="statusBadge" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
-              <th onClick={() => handleSort('DOAPoints')} className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap">DOA<SortIcon columnKey="DOAPoints" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('employee_name')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider cursor-pointer">Employee<SortIcon columnKey="employee_name" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('type_of_incident')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap cursor-pointer">Type<SortIcon columnKey="type_of_incident" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('office')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap cursor-pointer">Office<SortIcon columnKey="office" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('incident_start')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap cursor-pointer">Dates<SortIcon columnKey="incident_start" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('createdAt')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap cursor-pointer">Submitted<SortIcon columnKey="createdAt" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('statusBadge')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap cursor-pointer">Status<SortIcon columnKey="statusBadge" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('pendingDOAPoints')} className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-normal max-w-[80px] w-20 leading-tight select-none cursor-pointer">Pending DOA<SortIcon columnKey="pendingDOAPoints" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              <th onClick={() => handleSort('DOAPoints')} className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-normal max-w-[60px] w-20 leading-tight select-none cursor-pointer">Final DOA<SortIcon columnKey="DOAPoints" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
               <th className="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Edit</th>
             </tr>
           </thead>
@@ -317,6 +319,9 @@ export default function Page() {
                 </td>
                 <td className="px-5 py-4 whitespace-nowrap">
                   <StatusBadge req={a} />
+                </td>
+                <td className="whitespace-nowrap">
+                  <div className="px-1 text-sm font-bold text-slate-900">{a.pendingDOAPoints ? a.pendingDOAPoints : '0'}</div>
                 </td>
                 <td className="whitespace-nowrap">
                   <div className="px-1 text-sm font-bold text-slate-900">{a.DOAPoints ? a.DOAPoints : '0'}</div>
