@@ -18,6 +18,7 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
   // --- 1. DEFINE DENIED STATE ---
   const isDenied = absence.manager_approval === 'denied' || absence.final_approval === 'denied';
   const isHRCallIn = absence.type_of_request === "HR Call In";
+  const isPendingAction = absence.status === 'pending_action';
 
   const [formData, setFormData] = useState({
     type_of_request: absence.type_of_request || '',
@@ -111,23 +112,6 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
     if (!window.confirm("Are you sure you want to cancel this request?")) return;
     setIsSubmitting(true);
     try {
-      /*
-      // --- 1. CLEAN UP STORAGE ---
-      // Create a reference to the folder containing this absence's notes
-      const folderRef = ref(storage, `excuse-notes/${absence.id}`);
-
-      // List all files in that folder and delete them
-      const fileList = await listAll(folderRef);
-
-      // Delete every file in the folder
-      const deletePromises = fileList.items.map(fileRef => deleteObject(fileRef));
-      await Promise.all(deletePromises);
-
-      // --- 2. DELETE DATABASE RECORD ---
-      //console.log("Deleting absence with ID:", absence.id);
-      await deleteDoc(doc(db, "absences", absence.id));
-      setFeedback({ isOpen: true, type: 'success', message: "Request deleted successfully." });
-      */
       await updateDoc(doc(db, "absences", absence.id), {
         status: 'archived',
         updatedAt: new Date(),
@@ -188,10 +172,11 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
         manager_approval_name: '',
         final_approval: 'pending',
         final_approval_name: '', 
+        status: isPendingAction ? 'active' : (absence.status || 'active'), // 💡 Automatically activates it
         updatedAt: new Date(), 
       });
 
-      setFeedback({ isOpen: true, type: 'success', message: "Request updated successfully!" });
+      setFeedback({ isOpen: true, type: 'success', message: isPendingAction ? "Notice acknowledged successfully!" : "Request updated successfully!" });
       // Reset removal tracking after success
       setNotesToRemove([]);
       setNewExcuseNotes([]);
@@ -202,7 +187,9 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
     }
   };
 
-  const changed = isDataChanged();
+  const changed = isPendingAction ? true : isDataChanged();
+
+  const activeExistingNotesCount = (absence.excuse_note || []).length - notesToRemove.length;
 
   return (
     <>
@@ -219,11 +206,20 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
 
             {/* 2. HIDE DELETE IF DENIED */}
             {!isDenied && absence.status !== 'archived' && (
+              <div className="flex flex-col gap-1.5">
               <button type="button" onClick={handleDelete} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1 rounded border border-red-200 uppercase tracking-tighter disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
                 disabled={absence.type_of_request === "HR Call In" || absence.final_approval === "approved" || absence.final_approval === "denied" || isSubmitting}
               >
                 Cancel Request
               </button>
+
+              {(absence.type_of_request === "HR Call In") && (
+                <p className="text-[10px] text-slate-400 italic">Contact EXEC to cancel HR Call Ins.</p>
+              )}
+              {(absence.type_of_request !== "HR Call In" && (absence.final_approval === "approved" || absence.final_approval === "approved_with_note" || absence.final_approval === "denied" || isSubmitting)) && (
+                <p className="text-[10px] text-slate-400 italic">Contatc EXEC to cancel this request.</p>
+              )}
+              </div>
             )}
           </div>
 
@@ -306,8 +302,20 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
 
             {/* Comments */}
             <div className="space-y-1">
-              <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Comments</label>
-              <textarea name="employee_comments" value={formData.employee_comments} onChange={handleChange} disabled={isDenied} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" rows={2} />
+              <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                Employee Comments
+                {isPendingAction && <span className="text-red-500 font-bold"> *Required</span>}
+              </label>
+              <textarea 
+                name="employee_comments" 
+                value={formData.employee_comments} 
+                onChange={handleChange} 
+                disabled={isDenied} 
+                required={isPendingAction} // 💡 Dynamically requires input
+                placeholder={'Notes and Comments...'}
+                className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 focus:ring-1 focus:ring-blue-500" 
+                rows={2} 
+              />
             </div>
 
           {/* File Management Container */}
@@ -372,40 +380,61 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             )}
 
             {/* 3. Standard File Selector Input Trigger */}
-            {!isDenied && (
-            <div className="relative mt-2">
+            {!isDenied && (    
+              <div className="flex items-center gap-3 mt-2">
                 <label 
                   htmlFor="file-upload" 
-                  className="inline-block text-xs font-bold uppercase bg-blue-600 text-white py-1.5 px-4 rounded cursor-pointer shadow-sm hover:bg-blue-700 transition"
+                  className={`inline-block text-xs font-bold uppercase py-1.5 px-4 rounded shadow-sm transition ${
+                    formData.excuse_note_submitted === 'not_provided'
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed pointer-events-none shadow-none'
+                      : 'bg-blue-600 text-white cursor-pointer hover:bg-blue-700'
+                  }`}
                 >
                   Browse Files
                 </label>
                 <input 
-                  id="file-upload" // 👈 Tied to the label above
+                  id="file-upload" 
                   type="file" 
                   multiple 
-                  //disabled={isOptedOut}
+                  disabled={formData.excuse_note_submitted === 'not_provided'}
                   onChange={handleFileChange}
-                  className="hidden" // 👈 Hides the ugly native browser text and "Choose File" button entirely!
+                  className="hidden" 
                 />
-
+                {/* The "Do not submit an excuse note" markup from Step 1 goes right here */}
+                {activeExistingNotesCount === 0 && (
                 <label 
-                    htmlFor="opt-out-notes" 
-                    className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-white/80 border border-blue-200/60 cursor-pointer select-none text-xs font-bold text-slate-700 hover:bg-white transition shadow-xs"
-                  >
-                    <input 
-                      id="opt-out-notes"
-                      type="checkbox" 
-                      //checked={isOptedOut}
-                      //onChange={(e) => handleOptOutNotesToggle(e.target.checked)}
-                      className="h-3.5 w-3.5 rounded text-blue-600 border-gray-300 focus:ring-blue-500 cursor-pointer accent-blue-600"
-                    />
-                    <span>Do not submit an excuse note</span>
-                  </label>
+                  htmlFor="opt-out-notes" 
+                  className={`flex items-center gap-2 px-3 py-1.5 rounded-md border cursor-pointer select-none text-xs font-bold transition shadow-xs ${
+                    formData.excuse_note_submitted === 'not_provided' 
+                      ? 'bg-blue-100 border-blue-300 text-blue-900' 
+                      : 'bg-white/80 border-blue-200/60 text-slate-700 hover:bg-white'
+                  }`}
+                >
+                  <input 
+                    id="opt-out-notes"
+                    type="checkbox" 
+                    checked={formData.excuse_note_submitted === 'not_provided'}
+                    onChange={(e) => {
+                      const checked = e.target.checked;
+                      setFormData(prev => ({
+                        ...prev,
+                        excuse_note_submitted: checked ? 'not_provided' : 'pending'
+                      }));
+                      // Clear out any new files if they opt out
+                      if (checked) {
+                        setNewExcuseNotes([]);
+                      }
+                      setIsChecked(false);
+                    }}
+                    className="h-3.5 w-3.5 rounded text-blue-600 border-gray-300 focus:ring-blue-500 cursor-pointer accent-blue-600"
+                  />
+                  <span>Do not submit an excuse note</span>
+                </label> )}
               </div>
             )}
           </div>
 
+            {/* Checkbox text modification */}
             {changed && !isDenied && (
               <div className="flex items-start gap-2 px-1 pt-2 animate-in fade-in slide-in-from-top-1 duration-300">
                 <input 
@@ -413,10 +442,14 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                   id="confirm-update" 
                   checked={isChecked} 
                   onChange={(e) => setIsChecked(e.target.checked)} 
-                  className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer" 
+                  className="h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 cursor-pointer" 
                 />
                 <label htmlFor="confirm-update" className="text-xs text-gray-600 leading-tight cursor-pointer">
-                  I confirm these updates are accurate. <span className="font-bold text-gray-800">Note: This will reset the approval status to pending.</span>
+                  {isPendingAction ? (
+                    <span>I have read and acknowledge this absence record.</span>
+                  ) : (
+                    <span>I confirm these updates are accurate. <span className="font-bold text-gray-800">Note: This will reset the approval status to pending.</span></span>
+                  )}
                 </label>
               </div>
             )}
@@ -438,14 +471,14 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                   {isDenied ? 'Close' : 'Cancel'}
                 </button>
                 
+                {/* Submit Button modification */}
                 {!isDenied && (
                   <button 
                     type="submit" 
-                    // Logic: Button is enabled ONLY if data changed AND user checked the box
                     disabled={!changed || !isChecked || isSubmitting} 
                     className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition shadow-sm"
                   >
-                    {isSubmitting ? 'Saving...' : 'Save Changes'}
+                    {isSubmitting ? 'Saving...' : isPendingAction ? 'Acknowledge Notice' : 'Save Changes'}
                   </button>
                 )}
               </div>

@@ -18,6 +18,7 @@ export default function Page() {
   const [loadingRequests, setLoadingRequests] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [allRequests, setAllRequests] = useState<AbsenceRequest[]>([]);
+  const [pendingEmployeeAbsences, setPendingEmployeeAbsences] = useState<AbsenceRequest[]>([]);
   const [activeTab, setActiveTab] = useState('all');
 
   // --- Date Filter State ---
@@ -52,7 +53,8 @@ export default function Page() {
           const requests = await getAbsenceRequestsByUser(
             user, startDate, endDate
           ); // Filter out archived requests at this stage
-          setAllRequests((requests as AbsenceRequest[]).filter(r => r.status !== 'archived'));
+          setAllRequests((requests as AbsenceRequest[]).filter(r => (r.status !== 'archived' && r.status !== 'pending_action')));
+          setPendingEmployeeAbsences((requests as AbsenceRequest[]).filter(r => r.status === 'pending_action'))
         } catch (err: any) {
           console.error("Error fetching requests:", err);
           setError("Failed to load requests. Please try again later.");
@@ -67,6 +69,10 @@ export default function Page() {
       console.log("All Requests:", allRequests);
     }
   }, [user, userOffices, userRole, userName, authLoading, startDate, endDate]);
+
+  const pendingEmployeeActionAbsences = useMemo (() => {
+    return pendingEmployeeAbsences;
+  }, [allRequests, userRole])
 
   // Logic for filtering requests (remain unchanged but use derived userRole)
   const pendingRequests = useMemo(() => {
@@ -225,7 +231,7 @@ export default function Page() {
             onClick={() => setActiveTab('all')}
             className={`${activeTab === 'all' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors flex-shrink-0`}
           >
-            All Requests ({allRequests.length})
+            All Active Requests ({allRequests.length})
           </button>
 
           <button
@@ -257,6 +263,15 @@ export default function Page() {
           >
             Denied ({deniedRequests.length})
           </button>
+
+          {(userRole === 'Director' || userRole === 'HR') && (
+          <button
+            onClick={() => setActiveTab('pending_employee')}
+            className={`${activeTab === 'pending_employee' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors flex-shrink-0`}
+          >
+            Pending Employee Action ({pendingEmployeeActionAbsences.length})
+          </button>
+          )}
           
           {/* Invisible spacer to ensure padding on the far right when scrolled to the end */}
           <div className="flex-shrink-0 w-4 md:hidden" aria-hidden="true" />
@@ -278,6 +293,9 @@ export default function Page() {
         )}
          {activeTab === 'denied' && (
            <RequestTable requests={deniedRequests} userRole={userRole} onViewDetails={handleOpenModal} />
+        )}
+        {activeTab === 'pending_employee' && (
+           <RequestTable requests={pendingEmployeeActionAbsences} userRole={userRole} onViewDetails={handleOpenModal} />
         )}
       </div>
 

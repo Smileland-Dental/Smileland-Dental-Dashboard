@@ -19,7 +19,7 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
   const [statusFilter, setStatusFilter] = useState('all');
 
   const [currentPage, setCurrentPage] = useState(1);
-  const itemsPerPage = 20; // Adjust this number as needed
+  const itemsPerPage = 50; // Adjust this number as needed
 
   // Initialize your shared custom hook
   const { sortConfig, handleSort } = useSort();
@@ -38,7 +38,7 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
       
       const status = 
         req.manager_approval === 'denied' || req.final_approval === 'denied' ? 'denied' :
-        req.final_approval === 'approved' ? 'approved' : 'pending';
+        ((req.final_approval === 'approved') || (req.final_approval === 'approved_with_note')) ? 'approved' : 'pending';
 
       const matchesStatus = statusFilter === 'all' || status === statusFilter;
 
