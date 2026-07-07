@@ -69,13 +69,14 @@ type LocationSummary = {
   mailedProduction?: string;
 };
 
-/** Visits-style metrics beside Production 1 (labels in first column). */
 type ProductionSideMetrics = {
   add?: string;
   noShow?: string;
   scheduled?: string;
   seen?: string;
   seenPercent?: string;
+  referral?: string;
+  postcard?: string;
 };
 
 const PRODUCTION_SIDE_METRIC_ROWS: { key: keyof ProductionSideMetrics; label: string }[] = [
@@ -84,6 +85,8 @@ const PRODUCTION_SIDE_METRIC_ROWS: { key: keyof ProductionSideMetrics; label: st
   { key: 'scheduled', label: 'Scheduled' },
   { key: 'seen', label: 'Seen' },
   { key: 'seenPercent', label: 'Seen %' },
+  { key: 'referral', label: 'Referral' },
+  { key: 'postcard', label: 'Postcard Count' },
 ];
 
 type TableTotals = {
@@ -169,12 +172,10 @@ const REASON_HEADERS = ['Reasoning', 'OE', 'Pro', 'CRA'];
 
 const NOTES_MAX_LENGTH = 300;
 
-/** A4 가로 PDF 본문 너비(pt) — page padding 20×2 기준. */
 const PDF_LANDSCAPE_CONTENT_WIDTH_PT = 841.89 - 40;
 const PDF_NOTES_COLUMN_WIDTH_PT = Math.floor(PDF_LANDSCAPE_CONTENT_WIDTH_PT / 2) - 1;
 const PDF_NOTES_TEXT_WIDTH_PT = PDF_NOTES_COLUMN_WIDTH_PT - 10;
 
-/** 브라우저 number 스텝 화살표 제거 — 직접 입력만 (WebKit / Firefox). */
 const D_PAGE_NUMBER_INPUT_SPINNER_RESET_CSS = `
 .d-page-main input[type="number"]::-webkit-outer-spin-button,
 .d-page-main input[type="number"]::-webkit-inner-spin-button {
@@ -187,7 +188,6 @@ const D_PAGE_NUMBER_INPUT_SPINNER_RESET_CSS = `
 }
 `;
 
-/** 오른쪽 상세 카드의 좌우 `padding`만큼 테이블 영역을 넓혀, 카드 안쪽 면과 표 격자 선이 이어지게 함 */
 const D_PAGE_DETAIL_CARD_PADDING_PX = 12;
 const dPageDetailTableBleedScroll: React.CSSProperties = {
   marginLeft: -D_PAGE_DETAIL_CARD_PADDING_PX,
@@ -240,7 +240,6 @@ function sanitizeFilename(filename: string): string {
   return filename.replace(/[^a-zA-Z0-9._-]/g, '_').replace(/\.\./g, '_').slice(0, 255);
 }
 
-/** Notes / Not Due — 줄바꿈 유지, 칸 너비 안에서 줄 wrap (전체 trim 하지 않음). */
 function safeNotesPdfText(value: unknown, maxLength = NOTES_MAX_LENGTH): string {
   if (value == null) return '';
   return String(value).slice(0, maxLength).replace(/[<>]/g, '');
@@ -274,7 +273,6 @@ function getMultilineFirestoreFields(notes: string, notDue: string) {
   };
 }
 
-/** react-pdf에서 긴 한 줄이 옆 칸으로 넘칠 때를 대비해 폭에 맞게 줄 분할. */
 function wrapNotesLineForPdf(line: string, maxCharsPerLine = 72): string[] {
   if (line.length <= maxCharsPerLine) return [line];
   const chunks: string[] = [];
@@ -360,7 +358,6 @@ function createPdfNotesTable(
   );
 }
 
-/** PDF 섹션 — 제목+내용이 현재 페이지에 다 안 들어가면 통째로 다음 페이지로 이동. */
 function createPdfSection(
   styles: ReturnType<typeof StyleSheet.create>,
   title: string | null,
@@ -729,7 +726,6 @@ function parseNumber(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** 달러 입력: 쉼표·$·공백 제거 후 숫자. */
 function parseMoney(value: unknown): number {
   const s = String(value ?? '')
     .trim()
@@ -744,7 +740,6 @@ function roundToCents(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/** 반올림된 숫자를 표시·저장용 문자열로 (정수면 소수 없음, 소수 있으면 둘째 자리까지·끝자리 0 유지). */
 function formatRoundedNumber(n: number): string {
   if (!Number.isFinite(n)) return '0';
   const cents = Math.round(roundToCents(n) * 100);
@@ -752,7 +747,6 @@ function formatRoundedNumber(n: number): string {
   return (cents / 100).toFixed(2);
 }
 
-/** 금액 입력값을 저장·표시용 문자열로 (빈 값은 '', 있으면 formatRoundedNumber 규칙 적용). */
 function formatMoneyValue(value: unknown): string {
   const s = String(value ?? '').trim();
   if (!s || s === '-') return '';
@@ -814,7 +808,6 @@ function parseTimeToMinutes(timeStr: unknown): number | null {
   return hours * 60 + minutes;
 }
 
-/** Firestore(AM/PM 등) → type="time" 입력용 HH:mm */
 function toTimeInputValue(stored: unknown): string {
   const minutes = parseTimeToMinutes(stored);
   if (minutes == null) return '';
@@ -823,7 +816,6 @@ function toTimeInputValue(stored: unknown): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
-/** type="time" 입력값 → Firestore 저장용 AM/PM */
 function toStoredCheckTime12h(localValue: string): string {
   const trimmed = localValue.trim();
   if (!trimmed) return '';
@@ -832,7 +824,6 @@ function toStoredCheckTime12h(localValue: string): string {
   return formatTime12h(Math.floor(minutes / 60), minutes % 60);
 }
 
-/** Billers Start/End — PDF용 (AM/PM 포함, ISO·datetime-local도 변환). */
 function formatReportDateTimeForPdf(value: unknown): string {
   const raw = String(value ?? '').trim();
   if (!raw) return '';
@@ -865,7 +856,6 @@ function formatMinutesAsHoursLabel(totalMinutes: number): string {
   return parts.length > 0 ? parts.join(' ') : '0 minutes';
 }
 
-/** Hours Open = Check Out − Check In → "5 hours 30 minutes" (익일 퇴근은 +24h). */
 function computeHoursOpen(checkIn: unknown, checkOut: unknown): string {
   const inMin = parseTimeToMinutes(checkIn);
   const outMin = parseTimeToMinutes(checkOut);
@@ -875,7 +865,6 @@ function computeHoursOpen(checkIn: unknown, checkOut: unknown): string {
   return formatMinutesAsHoursLabel(diffMin);
 }
 
-/** UI/PDF 표시 — 저장값이 옛 소수(5.5) 형식이면 변환. */
 function formatHoursOpenLabel(hoursOpen: unknown): string {
   const raw = String(hoursOpen ?? '').trim();
   if (!raw) return '';
@@ -892,7 +881,6 @@ function computeProphyTotal(oe: unknown, tea: unknown, just: unknown): string {
   return String(Math.round(parseNumber(oe) + parseNumber(tea) + parseNumber(just)));
 }
 
-/** Read-only UI/PDF: leading $ when a value is present; empty when blank. 금액은 최대 소수 둘째 자리. */
 function formatCurrencyLabel(value: unknown): string {
   const s = String(value ?? '').trim();
   if (!s || s === '-') return '';
@@ -904,7 +892,6 @@ function formatCurrencyLabel(value: unknown): string {
   return `$${formatRoundedNumber(n)}`;
 }
 
-/** Append % for Seen % display; empty when not computable. */
 function formatSeenPercentDisplay(computed: string): string {
   const t = String(computed ?? '').trim();
   if (!t || t === '-') return '';
@@ -912,7 +899,6 @@ function formatSeenPercentDisplay(computed: string): string {
   return `${n}%`;
 }
 
-/** Seen % = round(Seen ÷ Scheduled × 100); empty when Scheduled is 0. */
 function computeSeenPercentRounded(scheduledRaw: unknown, seenRaw: unknown): string {
   const sch = parseNumber(scheduledRaw);
   if (sch === 0) return '';
@@ -1087,6 +1073,8 @@ function createEmptyProductionSideMetrics(): ProductionSideMetrics {
     scheduled: '',
     seen: '',
     seenPercent: '',
+    referral: '',
+    postcard: '',
   };
 }
 
@@ -1150,7 +1138,6 @@ function computeTableRows(rows: TableRow[]): TableRow[] {
   });
 }
 
-/** Sealant (Billable) = Sealant − Sealant (Redo). */
 function computeSugarRow(row: SugarRow): SugarRow {
   const sealantHasBasis = String(row.sugar ?? '').trim() !== '' || String(row.sugarBad ?? '').trim() !== '';
   const sugarGood = sealantHasBasis ? String(parseNumber(row.sugar) - parseNumber(row.sugarBad)) : '';
@@ -1251,7 +1238,7 @@ export default function ViewPage() {
           .sort((a, b) => `${b.date ?? ''}_${b.location ?? ''}`.localeCompare(`${a.date ?? ''}_${a.location ?? ''}`));
         setDocs(loaded);
       } catch (e: any) {
-        setError(e?.message || '조회 중 오류가 발생했습니다.');
+        setError('Try again please.');
       } finally {
         setLoading(false);
       }
@@ -1402,7 +1389,7 @@ export default function ViewPage() {
   useEffect(() => {
     if (selectedDoc?.pdfSaved && isEditing) {
       setIsEditing(false);
-      setSaveMessage('PDF 저장 완료 문서는 수정할 수 없습니다.');
+      setSaveMessage('You cannot edit anymore.');
     }
   }, [selectedDoc?.pdfSaved, isEditing]);
 
@@ -1596,7 +1583,9 @@ export default function ViewPage() {
         noShow: String(draftSideMetrics.noShow ?? ''),
         scheduled: String(draftSideMetrics.scheduled ?? ''),
         seen: String(draftSideMetrics.seen ?? ''),
-        seenPercent: seenPercentComputed,
+        seenPercent: seenPercentComputed,     
+        referral: String(draftSideMetrics.referral ?? ''),
+        postcard: String(draftSideMetrics.postcard ?? ''),
       };
       const grandTotal = formatMoneyValue(draft.grandTotal);
       const salesWithoutCoffee = computeSalesWithoutCoffee(grandTotal, coffeeSales);
@@ -1648,7 +1637,7 @@ export default function ViewPage() {
       await setDoc(doc(db, 'simple-forms', draft.id), payload, { merge: true });
       setDocs((prev) => prev.map((item) => (item.id === draft.id ? { id: draft.id, ...payload } : item)));
       setIsEditing(false);
-      setSaveMessage('수정 내용이 저장되었습니다.');
+      setSaveMessage('Saved.');
     } catch (e: any) {
       setSaveMessage(`저장 실패: ${e?.message || '알 수 없는 오류'}`);
     }
@@ -1822,11 +1811,10 @@ export default function ViewPage() {
       link.click();
       URL.revokeObjectURL(downloadUrl);
 
-      // PDF 생성 완료 시점에 월/지점별 누적 집계도 함께 저장
       const monthKey = getMonthKey(selectedDoc.date);
       const locationKey = toFirestoreKey(selectedDoc.location);
-      const monthlyDocId = `${monthKey}-${locationKey}`;
-      const monthlyRef = doc(db, 'simple-forms-monthly', monthlyDocId);
+      // const monthlyDocId = `${monthKey}-${locationKey}`;
+      // const monthlyRef = doc(db, 'simple-forms monthly', monthlyDocId);
       const grandTotalValue = parseNumber(visibleGrandTotal);
       const coffeeSalesValue = parseNumber(visibleCoffeeSales);
       const salesWithoutCoffeeValue = parseNumber(visibleSalesWithoutCoffee);
@@ -1838,7 +1826,7 @@ export default function ViewPage() {
       const actualOrangeReturnValue = parseNumber(visibleCoffeeActualTotals.orangeJuiceReturn);
       const pineappleValue = parseNumber(visiblePineappleValue);
       const roseValue = parseNumber(visibleRoseValue);
-
+/*
       await setDoc(
         monthlyRef,
         {
@@ -1862,7 +1850,7 @@ export default function ViewPage() {
         },
         { merge: true }
       );
-
+*/
       await setDoc(
         doc(db, 'simple-forms', selectedDoc.id),
         {
@@ -1882,9 +1870,9 @@ export default function ViewPage() {
             : item
         )
       );
-      setSaveMessage('PDF가 다운로드되었습니다.');
+      setSaveMessage('Downloaded PDF.');
     } catch (e: any) {
-      setSaveMessage(`PDF 생성 실패: ${e?.message || '알 수 없는 오류'}`);
+      setSaveMessage('Cannot download PDF.');
     } finally {
       setIsPdfSaving(false);
     }
@@ -1990,7 +1978,7 @@ export default function ViewPage() {
             </div>
           )}
         </div>
-        {saveMessage && <p style={{ margin: '0 0 10px', color: saveMessage.startsWith('저장 실패') ? '#b91c1c' : '#166534' }}>{saveMessage}</p>}
+        {saveMessage && <p style={{ margin: '0 0 10px', color: saveMessage.startsWith('Failed saving.') ? '#b91c1c' : '#166534' }}>{saveMessage}</p>}
 
         {loading && <p style={{ margin: 0, color: '#6b7280' }}>Loading...</p>}
         {error && <p style={{ margin: 0, color: '#b91c1c' }}>{error}</p>}

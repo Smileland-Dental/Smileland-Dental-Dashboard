@@ -47,6 +47,9 @@ type TableRow = {
   coffeeNew?: string;
   coffeeReturn?: string;
   coffeeYes?: string;
+};
+
+type CoffeeActualTotals = {
   orangeJuiceNew?: string;
   orangeJuiceReturn?: string;
   orangeJuiceTotal?: string;
@@ -70,6 +73,7 @@ type FormDoc = {
   coffeeSales?: string;
   prophyTotal?: string;
   tableRows?: TableRow[];
+  coffeeActualTotals?: CoffeeActualTotals;
   sugarRows?: SugarRow[];
   extraInputRows?: ExtraInputRow[];
   checkIn?: string;
@@ -105,7 +109,10 @@ type Aggregate = {
   visitsPostcard: number;
   visitsReferral: number;
   doctorCustomerTotal: number;
-  coffeeRows: Array<{ position: string; name: string; coffeeNew: number; coffeeReturn: number; coffeeYes: number; orangeJuiceNew: number; orangeJuiceReturn: number; orangeJuiceTotal: number }>;
+  orangeJuiceNew: number;
+  orangeJuiceReturn: number;
+  orangeJuiceTotal: number;
+  coffeeRows: Array<{ position: string; name: string; coffeeNew: number; coffeeReturn: number; coffeeYes: number }>;
   sugarRows: Array<{ position: string; name: string; sugarGood: number }>;
 };
 
@@ -919,6 +926,9 @@ function buildAggregate(monthlyDocs: FormDoc[]): Aggregate | null {
     visitsPostcard: 0,
     visitsReferral: 0,
     doctorCustomerTotal: 0,
+    orangeJuiceNew: 0,
+    orangeJuiceReturn: 0,
+    orangeJuiceTotal: 0,
     coffeeRows: [],
     sugarRows: [],
   };
@@ -945,6 +955,13 @@ function buildAggregate(monthlyDocs: FormDoc[]): Aggregate | null {
       agg.doctorCustomerTotal = addAmount(agg.doctorCustomerTotal, row.customer);
     });
 
+    const coffeeActualTotals = doc.coffeeActualTotals;
+    if (coffeeActualTotals) {
+      agg.orangeJuiceNew = addAmount(agg.orangeJuiceNew, coffeeActualTotals.orangeJuiceNew);
+      agg.orangeJuiceReturn = addAmount(agg.orangeJuiceReturn, coffeeActualTotals.orangeJuiceReturn);
+      agg.orangeJuiceTotal = addAmount(agg.orangeJuiceTotal, coffeeActualTotals.orangeJuiceTotal);
+    }
+
     const coffeeMap = new Map(agg.coffeeRows.map((r) => [personKey(r.position, r.name), r]));
     (doc.tableRows || []).forEach((row) => {
       const pKey = personKey(row.position, row.name);
@@ -954,16 +971,10 @@ function buildAggregate(monthlyDocs: FormDoc[]): Aggregate | null {
         coffeeNew: 0,
         coffeeReturn: 0,
         coffeeYes: 0,
-        orangeJuiceNew: 0,
-        orangeJuiceReturn: 0,
-        orangeJuiceTotal: 0,
       };
       prev.coffeeNew = addAmount(prev.coffeeNew, row.coffeeNew);
       prev.coffeeReturn = addAmount(prev.coffeeReturn, row.coffeeReturn);
       prev.coffeeYes = addAmount(prev.coffeeYes, row.coffeeYes);
-      prev.orangeJuiceNew = addAmount(prev.orangeJuiceNew, row.orangeJuiceNew);
-      prev.orangeJuiceReturn = addAmount(prev.orangeJuiceReturn, row.orangeJuiceReturn);
-      prev.orangeJuiceTotal = addAmount(prev.orangeJuiceTotal, row.orangeJuiceTotal);
       coffeeMap.set(pKey, prev);
     });
     agg.coffeeRows = Array.from(coffeeMap.values()).sort((a, b) => `${a.position}_${a.name}`.localeCompare(`${b.position}_${b.name}`));
@@ -988,8 +999,8 @@ function getGoalsActualMetrics(aggregate: Aggregate, oeTotalAmount: number) {
     craProduction: aggregate.coffeeSales,
     firstReviewProduction: aggregate.pineapple + aggregate.rose + aggregate.coffeeSales,
     mailedProduction: aggregate.mailedProduction,
-    oeNp: sumCoffeeRows(aggregate.coffeeRows, (r) => r.orangeJuiceNew),
-    oeRc: sumCoffeeRows(aggregate.coffeeRows, (r) => r.orangeJuiceReturn),
+    oeNp: aggregate.orangeJuiceNew,
+    oeRc: aggregate.orangeJuiceReturn,
     oeTotal: oeTotalAmount,
     actualProphy: aggregate.prophyTotal,
     sealantRda: sumSugarRowsByPosition(aggregate.sugarRows, ['rda']),
@@ -2270,7 +2281,7 @@ function MonthlySummaryPageContent() {
         const snap = await getDocs(collection(db, 'simple-forms'));
         setDocs(snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<FormDoc, 'id'>) })));
       } catch (e: any) {
-        setError(e?.message || 'Erro. Please try again.');
+        setError(e?.message || 'Error. Please try again.');
       } finally {
         setLoading(false);
       }
@@ -2290,7 +2301,7 @@ function MonthlySummaryPageContent() {
   const aggregate = useMemo(() => buildAggregate(monthlyDocs), [monthlyDocs]);
   const dailyOfficeLogRows = useMemo(() => buildDailyOfficeLogRows(monthlyDocs), [monthlyDocs]);
   const oeTotalAmount = useMemo(
-    () => (aggregate ? sumCoffeeRows(aggregate.coffeeRows, (r) => r.orangeJuiceTotal) : 0),
+    () => (aggregate ? aggregate.orangeJuiceTotal : 0),
     [aggregate]
   );
 
@@ -2536,7 +2547,7 @@ function MonthlySummaryPageContent() {
             {saveMessage}
           </StatusMessage>
         )}
-        {!hasSelection && <StatusMessage type="info">Month와 Office 정보가 URL에 필요합니다.</StatusMessage>}
+        {!hasSelection && <StatusMessage type="info">Need Month and Office.</StatusMessage>}
         {hasSelection && loading && <StatusMessage type="info">Loading...</StatusMessage>}
         {hasSelection && error && <StatusMessage type="error">{error}</StatusMessage>}
         {hasSelection && !loading && !error && !aggregate && (

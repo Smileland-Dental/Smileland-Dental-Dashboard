@@ -1,10 +1,13 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { ref, uploadBytes } from 'firebase/storage';
-import { onAuthStateChanged } from 'firebase/auth';
-import { db, storage, auth } from '@/lib/firebase.config';
+import { useState, useEffect } from 'react';
+import { doc, setDoc } from 'firebase/firestore';
+import { ref, uploadBytes, deleteObject } from 'firebase/storage';
+import { db, storage } from '@/lib/firebase.config';
+
+const RECEIPT_STORAGE_FOLDER = 'receipts';
+
+type ReceiptUploadStatus = 'pending' | 'uploading' | 'failed';
 
 // 🔒 보안: 입력 데이터 sanitization 함수
 const sanitizeInput = (input: string, maxLength: number = 1000): string => {
@@ -38,9 +41,11 @@ function isAllowedReceiptImageFile(file: File): boolean {
   return ALLOWED_RECEIPT_EXT.test(file.name || '');
 }
 
-// Interfaces for type safety
+// Interfaces
 interface ReceiptFile {
   name: string;
+  file?: File;
+  uploadStatus?: ReceiptUploadStatus;
 }
 
 interface Purchase {
@@ -53,12 +58,11 @@ interface Purchase {
 }
 
 const CreditCardReceipts = () => {
-  // State management
   const [formData, setFormData] = useState({
     name: '',
     cardLastFour: '',
-    date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), // 캘리포니아 시간대 오늘 날짜
-    office: '' // Office 선택
+    date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
+    office: '' 
   });
   const [purchases, setPurchases] = useState<Purchase[]>([{
     date: '',
@@ -70,51 +74,8 @@ const CreditCardReceipts = () => {
   }]);
   const [loading, setLoading] = useState(false);
   const [submitStatus, setSubmitStatus] = useState('');
-  const [submissionId, setSubmissionId] = useState('');
-  /** Role(pink/blue/green) 통과 전까지 폼 숨김; 미통과 시 알림 없이 `/`로 이동 */
-  const [pageReady, setPageReady] = useState(false);
-  // Auto-save status removed since auto-save is disabled
 
-  // one-page와 동일: `animal/{uid}` + `role` — 알림/거절 화면 없이 미통과만 리다이렉트
   useEffect(() => {
-    let cancelled = false;
-    const goHome = () => {
-      if (typeof window !== 'undefined') {
-        window.location.replace('/');
-      }
-    };
-
-    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
-      try {
-        if (!currentUser) {
-          goHome();
-          return;
-        }
-
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (!userDoc.exists()) {
-          goHome();
-          return;
-        }
-
-        const userData = userDoc.data();
-        if (
-          userData?.role !== 'Manager' &&
-          userData?.role !== 'HR' &&
-          userData?.role !== 'Director'
-        ) {
-          goHome();
-          return;
-        }
-
-        if (!cancelled) {
-          setPageReady(true);
-        }
-      } catch {
-        goHome();
-      }
-    });
-
     if (
       process.env.NODE_ENV === 'production' &&
       typeof window !== 'undefined' &&
@@ -122,51 +83,93 @@ const CreditCardReceipts = () => {
     ) {
       window.location.href = window.location.href.replace('http:', 'https:');
     }
-
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
   }, []);
 
-  // Office options
   const officeOptions = ['Bernard', 'California', 'Corporate', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
-  // Generate unique submission ID
   const generateSubmissionId = () => {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const randomSuffix = Math.random().toString(36).substring(2, 8);
     return `${timestamp}_${randomSuffix}`;
   };
 
-  // Save data to Firestore
-  const saveData = async (currentSubmissionId: string) => {
+  const deleteUploadedFiles = async (storageFileNames: string[]) => {
+    if (storageFileNames.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      storageFileNames.map((fileName) =>
+        deleteObject(ref(storage, `${RECEIPT_STORAGE_FOLDER}/${fileName}`)).catch(() => undefined)
+      )
+    );
+  };
+
+  const saveData = async (currentSubmissionId: string, purchaseList: Purchase[]) => {
+    const sanitizedName = sanitizeInput(formData.name, 100);
+    const sanitizedCardNumber = sanitizeInput(formData.cardLastFour, 4);
+    const sanitizedOffice = sanitizeInput(formData.office, 50);
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const uniqueId = `${sanitizedName}_${sanitizedCardNumber}_${timestamp}`;
+
+    const docRef = doc(db, 'credit-card-receipts', uniqueId);
+    await setDoc(docRef, {
+      name: sanitizedName,
+      cardNumber: sanitizedCardNumber,
+      date: formData.date,
+      office: sanitizedOffice,
+      submissionId: currentSubmissionId,
+      data: collectFormData(purchaseList),
+      lastUpdated: new Date(),
+      createdAt: new Date()
+    }, { merge: true });
+  };
+
+  const uploadAllReceiptFiles = async (
+    purchaseList: Purchase[],
+    currentSubmissionId: string,
+    onFileStatusChange?: (purchaseIndex: number, fileIndex: number, status: ReceiptUploadStatus) => void
+  ): Promise<Purchase[]> => {
+    const sanitizedName = sanitizeInput(formData.name, 100);
+    const sanitizedCardNumber = sanitizeInput(formData.cardLastFour, 4);
+    const baseTimestamp = Date.now();
+    const uploadedStorageFiles: string[] = [];
+    const updatedPurchases: Purchase[] = [];
+
     try {
-      // Generate unique document ID with timestamp to prevent overwriting
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const uniqueId = `${formData.name}_${formData.cardLastFour}_${timestamp}`;
-      
-      const docRef = doc(db, 'credit-card-receipts', uniqueId);
-      await setDoc(docRef, {
-        name: formData.name,
-        cardNumber: formData.cardLastFour,
-        date: formData.date, // Keep the California date string "YYYY-MM-DD"
-        office: formData.office,
-        submissionId: currentSubmissionId,
-        data: collectFormData(),
-        lastUpdated: new Date(),
-        createdAt: new Date()
-      }, { merge: true });
-      
+      for (let purchaseIndex = 0; purchaseIndex < purchaseList.length; purchaseIndex++) {
+        const purchase = purchaseList[purchaseIndex];
+        const uploadedFiles: ReceiptFile[] = [];
+
+        for (let fileIndex = 0; fileIndex < purchase.receiptFiles.length; fileIndex++) {
+          const receiptFile = purchase.receiptFiles[fileIndex];
+          onFileStatusChange?.(purchaseIndex, fileIndex, 'uploading');
+
+          const sequenceNumber = String(baseTimestamp + purchaseIndex * 1000 + fileIndex).padStart(15, '0');
+          const fileName = `${sanitizedName}_${sanitizedCardNumber}_${currentSubmissionId}_purchase${purchaseIndex + 1}_${sequenceNumber}_${receiptFile.name}`;
+
+          const uploadResult = await uploadFile(receiptFile.file!, fileName);
+          if (!uploadResult?.success || !uploadResult.fileName) {
+            onFileStatusChange?.(purchaseIndex, fileIndex, 'failed');
+            throw new Error(uploadResult?.error || `Failed to upload ${receiptFile.name}`);
+          }
+
+          uploadedStorageFiles.push(uploadResult.fileName);
+          uploadedFiles.push({ name: uploadResult.fileName });
+        }
+
+        updatedPurchases.push({ ...purchase, receiptFiles: uploadedFiles });
+      }
+
+      return updatedPurchases;
     } catch (error) {
-      console.error('Error saving data:', error);
+      await deleteUploadedFiles(uploadedStorageFiles);
+      throw error;
     }
   };
 
-  // Upload file to Firebase Storage
   const uploadFile = async (file: File, fileName: string) => {
     try {
-      // 🔒 보안: 파일 크기 제한 (10MB)
       const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
       if (file.size > MAX_FILE_SIZE) {
         return { success: false, error: 'File size exceeds limit' };
@@ -176,23 +179,20 @@ const CreditCardReceipts = () => {
         return { success: false, error: 'Only JPG, JPEG, or PNG images are allowed' };
       }
       
-      // 🔒 보안: 파일명 sanitization
       const sanitizedFileName = sanitizeFileName(fileName);
       
-      const storageRef = ref(storage, `receipts/${sanitizedFileName}`);
+      const storageRef = ref(storage, `${RECEIPT_STORAGE_FOLDER}/${sanitizedFileName}`);
       await uploadBytes(storageRef, file);
 
       return {
         success: true,
         fileName: sanitizedFileName,
       };
-    } catch (error) {
-      // 🔒 보안: 에러 메시지에서 민감 정보 제외
+    } catch {
       return { success: false, error: 'File upload failed' };
     }
   };
 
-  /** 상단 필드 + 각 구매 행 전체(영수증 이미지 최소 1장) 충족 여부 */
   const isSubmissionComplete = (): boolean => {
     if (!formData.office?.trim() || !formData.date?.trim() || !formData.name?.trim()) {
       return false;
@@ -218,7 +218,32 @@ const CreditCardReceipts = () => {
     return true;
   };
 
-  // Handle form submission
+  const updateReceiptFileStatus = (
+    purchaseIndex: number,
+    fileIndex: number,
+    status: ReceiptUploadStatus
+  ) => {
+    setPurchases((prev) => {
+      const next = [...prev];
+      const receiptFiles = [...next[purchaseIndex].receiptFiles];
+      receiptFiles[fileIndex] = { ...receiptFiles[fileIndex], uploadStatus: status };
+      next[purchaseIndex] = { ...next[purchaseIndex], receiptFiles };
+      return next;
+    });
+  };
+
+  const resetReceiptFileStatuses = () => {
+    setPurchases((prev) =>
+      prev.map((purchase) => ({
+        ...purchase,
+        receiptFiles: purchase.receiptFiles.map((file) => ({
+          ...file,
+          uploadStatus: undefined,
+        })),
+      }))
+    );
+  };
+
   const handleSubmit = async () => {
     if (!isSubmissionComplete()) {
       alert(
@@ -227,25 +252,28 @@ const CreditCardReceipts = () => {
       return;
     }
 
+    let uploadedStorageFiles: string[] = [];
+
     try {
       setLoading(true);
-      setSubmitStatus('📤 Submitting...');
+      setSubmitStatus('📤 Uploading receipts...');
 
-      // Generate submission ID if not already set (in case no files were uploaded)
-      let currentSubmissionId = submissionId;
-      if (!currentSubmissionId) {
-        currentSubmissionId = generateSubmissionId();
-        setSubmissionId(currentSubmissionId);
-        console.log('🆔 Generated submission ID during submit:', currentSubmissionId);
-      }
+      const currentSubmissionId = generateSubmissionId();
+      const purchasesWithUploadedFiles = await uploadAllReceiptFiles(
+        purchases,
+        currentSubmissionId,
+        updateReceiptFileStatus
+      );
 
-      // Save data to Firestore (final save)
-      await saveData(currentSubmissionId);
-      
-      // Reset form
+      uploadedStorageFiles = purchasesWithUploadedFiles.flatMap((purchase) =>
+        purchase.receiptFiles.map((file) => file.name)
+      );
+
+      setSubmitStatus('📤 Saving submission...');
+      await saveData(currentSubmissionId, purchasesWithUploadedFiles);
+
       setFormData({ name: '', cardLastFour: '', date: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }), office: '' });
       setPurchases([{ date: '', vendor: '', reason: '', amount: '', description: '', receiptFiles: [] }]);
-      setSubmissionId(''); // Reset submission ID for next submission
 
       setSubmitStatus('✅ Submitted successfully!');
       
@@ -253,19 +281,38 @@ const CreditCardReceipts = () => {
 
     } catch (error) {
       console.error('Submit error:', error);
-      setSubmitStatus('❌ Submission failed: ' + (error instanceof Error ? error.message : 'Unknown error'));
+
+      if (uploadedStorageFiles.length > 0) {
+        setSubmitStatus('↩️ Cleaning up uploaded files...');
+        await deleteUploadedFiles(uploadedStorageFiles);
+        resetReceiptFileStatuses();
+      } else {
+        setPurchases((prev) =>
+          prev.map((purchase) => ({
+            ...purchase,
+            receiptFiles: purchase.receiptFiles.map((file) => ({
+              ...file,
+              uploadStatus: file.uploadStatus === 'failed' ? 'failed' : 'pending',
+            })),
+          }))
+        );
+      }
+
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      setSubmitStatus(
+        `❌ Submission failed: ${errorMessage}. No data was saved. Please try again.`
+      );
       setTimeout(() => setSubmitStatus(''), 7000);
     } finally {
       setLoading(false);
     }
   };
 
-  // Collect form data
-  const collectFormData = () => {
-    return purchases.map((purchase: Purchase, index: number) => ({
+  const collectFormData = (purchaseList: Purchase[]) => {
+    return purchaseList.map((purchase: Purchase, index: number) => ({
       name: sanitizeInput(formData.name, 100),
       cardLastFour: sanitizeInput(formData.cardLastFour, 4),
-      date: purchase.date, // Use individual purchase date, not form submission date
+      date: purchase.date, 
       office: sanitizeInput(formData.office, 50),
       vendor: sanitizeInput(purchase.vendor, 200),
       reason: sanitizeInput(purchase.reason, 500),
@@ -276,11 +323,8 @@ const CreditCardReceipts = () => {
     }));
   };
 
-  // Populate form functionality removed - one-time submission only
-
-  // Add new purchase row
   const addPurchaseRow = () => {
-    setPurchases([...purchases, {
+    setPurchases((prev) => [...prev, {
       date: '',
       vendor: '',
       reason: '',
@@ -290,32 +334,32 @@ const CreditCardReceipts = () => {
     }]);
   };
 
-  // Remove purchase row
   const removePurchaseRow = (index: number) => {
-    if (purchases.length > 1) {
-      const newPurchases = purchases.filter((_: Purchase, i: number) => i !== index);
-      setPurchases(newPurchases);
-    }
+    setPurchases((prev) => (prev.length > 1 ? prev.filter((_, i) => i !== index) : prev));
   };
 
-  // Update purchase data
-  const updatePurchase = (index: number, field: string, value: any) => {
-    const newPurchases = [...purchases];
-    newPurchases[index] = { ...newPurchases[index], [field]: value };
-    setPurchases(newPurchases);
+  const updatePurchase = (index: number, field: string, value: unknown) => {
+    setPurchases((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: value };
+      return next;
+    });
   };
 
-  // Handle file upload
-  const handleFileUpload = async (index: number, files: FileList) => {
+  const handleFileUpload = (index: number, files: FileList) => {
     if (!files || files.length === 0) {
       return;
     }
 
-    // 🔒 보안: 파일 개수 제한 (최대 10개)
+    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
     const MAX_FILES = 10;
     const fileArray = Array.from(files).slice(0, MAX_FILES);
 
     const imageFiles = fileArray.filter(file => {
+      if (file.size > MAX_FILE_SIZE) {
+        alert(`❌ File "${sanitizeFileName(file.name)}" exceeds the 10MB size limit.`);
+        return false;
+      }
       if (isAllowedReceiptImageFile(file)) {
         return true;
       }
@@ -330,45 +374,14 @@ const CreditCardReceipts = () => {
       return;
     }
 
-    // Generate submission ID if not already set - use immediately
-    let currentSubmissionId = submissionId;
-    if (!currentSubmissionId) {
-      currentSubmissionId = generateSubmissionId();
-      setSubmissionId(currentSubmissionId);
-    }
+    const pendingFiles: ReceiptFile[] = imageFiles.map((file) => ({
+      name: sanitizeFileName(file.name),
+      file,
+      uploadStatus: 'pending',
+    }));
 
-    // 🔒 보안: 입력 데이터 sanitization
-    const sanitizedName = sanitizeInput(formData.name, 100);
-    const sanitizedCardNumber = sanitizeInput(formData.cardLastFour, 4);
-    
-    const uploadPromises = imageFiles.map(async (file: File, fileIndex: number) => {
-      // 🔒 보안: 파일명 sanitization
-      const sanitizedOriginalName = sanitizeFileName(file.name);
-      
-      // Use the current submission ID for all files in this upload
-      const sequenceNumber = String(Date.now() + fileIndex).padStart(15, '0');
-      const fileName = `${sanitizedName}_${sanitizedCardNumber}_${currentSubmissionId}_purchase${index + 1}_${sequenceNumber}_${sanitizedOriginalName}`;
-      
-      const uploadResult = await uploadFile(file, fileName);
-      
-      if (uploadResult?.success) {
-        return { name: uploadResult.fileName };
-      } else {
-        return null;
-      }
-    });
-
-    const uploadedFiles = (await Promise.all(uploadPromises)).filter((file): file is ReceiptFile => file !== null);
-    
-    if (uploadedFiles.length > 0) {
-      // Replace existing files with new ones (don't append)
-      updatePurchase(index, 'receiptFiles', uploadedFiles);
-    }
+    updatePurchase(index, 'receiptFiles', pendingFiles);
   };
-
-  // Auto-load functionality removed - one-time submission only
-
-  // Auto-save removed - data will only be saved when SUBMIT REPORT is clicked
 
   const styles = {
     body: {
@@ -433,18 +446,6 @@ const CreditCardReceipts = () => {
       backgroundColor: '#fff',
       boxSizing: 'border-box' as const
     },
-    textarea: {
-      width: '100%',
-      padding: '12px 15px',
-      border: '2px solid #e9ecef',
-      borderRadius: '8px',
-      fontSize: '16px',
-      transition: 'all 0.3s ease',
-      backgroundColor: '#fff',
-      boxSizing: 'border-box' as const,
-      minHeight: '80px',
-      resize: 'vertical' as const
-    },
     button: {
       backgroundColor: '#4CAF50',
       color: 'white',
@@ -499,11 +500,6 @@ const CreditCardReceipts = () => {
       color: '#2c3e50',
       margin: 0
     },
-    grid: {
-      display: 'grid',
-      gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))',
-      gap: '15px'
-    },
     status: {
       padding: '10px 15px',
       borderRadius: '8px',
@@ -528,17 +524,6 @@ const CreditCardReceipts = () => {
     }
   };
 
-  if (!pageReady) {
-    return (
-      <div
-        style={{
-          minHeight: '100vh',
-          background: 'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
-        }}
-      />
-    );
-  }
-
   return (
     <div style={styles.body}>
       <style>{`
@@ -557,14 +542,12 @@ const CreditCardReceipts = () => {
           <h1 style={styles.title}>Company Credit Card Receipt Form</h1>
         </header>
 
-        {/* Account Description and Basic Info */}
         <div style={{
           display: 'grid',
           gridTemplateColumns: '1fr 1fr',
           gap: '20px',
           marginBottom: '20px'
         }}>
-          {/* Left side - Account Description */}
           <div style={{
             backgroundColor: 'rgba(255, 255, 255, 0.95)',
             padding: '15px',
@@ -592,12 +575,11 @@ const CreditCardReceipts = () => {
                 <strong style={{ color: '#2c3e50' }}>Office Supplies:</strong> Necessities (Distilled Water / Patient Water / etc.)
               </div>
               <div>
-                <strong style={{ color: '#2c3e50' }}>Extra:</strong> Coffee / Food for Doctors. Explain
+                <strong style={{ color: '#2c3e50' }}>Extra:</strong> Coffe / Food for Doctors. Explain
               </div>
             </div>
           </div>
 
-          {/* Right side - Employee Info */}
           <div style={{
             backgroundColor: 'rgba(255, 255, 255, 0.95)',
             padding: '15px',
@@ -684,7 +666,6 @@ const CreditCardReceipts = () => {
           </div>
         </div>
 
-        {/* Status Messages */}
         {submitStatus && (
           <div style={{
             ...styles.status,
@@ -698,10 +679,7 @@ const CreditCardReceipts = () => {
 
         <form style={styles.form} onSubmit={(e) => e.preventDefault()}>
 
-          {/* Purchase Rows */}
           <div style={{marginTop: '20px'}}>
-            
-            
             {purchases.map((purchase, index) => (
               <div key={index} style={{
                 ...styles.purchaseRow,
@@ -837,11 +815,20 @@ const CreditCardReceipts = () => {
                     />
                     {purchase.receiptFiles && purchase.receiptFiles.length > 0 && (
                       <div style={{marginTop: '5px'}}>
-                        {purchase.receiptFiles.map((file, fileIndex) => (
-                          <p key={fileIndex} style={{color: '#28a745', fontSize: '11px', margin: '2px 0'}}>
-                            ✅ {file.name}
-                          </p>
-                        ))}
+                        {purchase.receiptFiles.map((file, fileIndex) => {
+                          const status = file.uploadStatus ?? 'pending';
+                          const statusStyles = {
+                            pending: { icon: '📎', color: '#6c757d', label: 'Selected' },
+                            uploading: { icon: '⏳', color: '#0c5460', label: 'Uploading' },
+                            failed: { icon: '❌', color: '#721c24', label: 'Upload failed' },
+                          }[status];
+
+                          return (
+                            <p key={fileIndex} style={{ color: statusStyles.color, fontSize: '11px', margin: '2px 0' }}>
+                              {statusStyles.icon} {file.name} ({statusStyles.label})
+                            </p>
+                          );
+                        })}
                       </div>
                     )}
                   </div>
@@ -863,7 +850,6 @@ const CreditCardReceipts = () => {
             </button>
           </div>
 
-          {/* Submit Button */}
           <div style={{marginTop: '30px', textAlign: 'center'}}>
             <button
               type="button"
@@ -888,4 +874,3 @@ const CreditCardReceipts = () => {
 };
 
 export default CreditCardReceipts;
-
