@@ -77,15 +77,15 @@ function parseIntegerValue(value: unknown): number | null {
   if (!raw) return null;
   const num = Number(raw);
   if (!Number.isFinite(num)) return null;
-  return Math.trunc(num);
+  return Math.round(num);
 }
 
 function computeColumn4(column3Value: number): number {
-  return Math.trunc(column3Value * 20 * 0.03);
+  return Math.round(column3Value * 20 * 0.03);
 }
 
 function computeColumn6(column4Value: number, sugarGoodValue: number): number {
-  return Math.trunc(sugarGoodValue - column4Value);
+  return Math.round(sugarGoodValue - column4Value);
 }
 
 type OGoalRow = {
