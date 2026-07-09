@@ -29,6 +29,21 @@ export type AbsenceRequest = {
   status: 'active' | 'archived' | 'pending_action'; // New field to indicate if the request is active or archived, including a way to check if it is an initial 'HR Call In' Request
 };
 
+export type VolunteerEarlyOutRequest = {
+  id?: string;
+  employeeFirestoreID: string;
+  employee_id: string;
+  employee_name: string;
+  employee_title: string;
+  office: string;
+  type_of_request: string;
+  supervisor_id: string;
+  supervisor_name: string;
+  created_at?: Timestamp;
+  incident_date: string;
+  incident_time: string;
+}
+
 export interface User {
   id: string; // Firestore document ID for the user
   createdAt?: Timestamp;

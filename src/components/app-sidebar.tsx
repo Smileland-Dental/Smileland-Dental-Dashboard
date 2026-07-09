@@ -9,7 +9,9 @@ import {  Home,
           BookUser, 
           CalendarX,
           UserCog,
-          Sheet
+          Sheet,
+          CalendarClock,
+          ClockArrowDown
 } from "lucide-react" 
 import { Button } from "@/components/ui/button"
 import Link from 'next/link';
@@ -41,14 +43,17 @@ import {
 } from "@/components/ui/collapsible"
 
 import { useAuth } from "@/contexts/AuthContext";
+import { url } from "inspector";
 
 const mainItems = [
   { title: "Overview", url: "/dashboard", icon: Home },
   { title: "Forms", url: "/dashboard/forms", icon: ScrollText },
   { title: "Absence Form", url: "/dashboard/forms/absence-request", icon: CalendarX },
+  { title: "Employee Schedule", url: "/dashboard/tools/employee-schedule", icon: CalendarClock, allowedRoles: ['Manager', 'HR', 'Director'] },
 ];
 
 const toolItems = [
+    { title: "Early Out Departures", url: "/dashboard/tools/volunteer-early-outs", icon: ClockArrowDown, allowedRoles: ['HR', 'Director'] },
   { title: "Approval", url: "/dashboard/tools/approval", icon: SquareCheckBig, allowedRoles: ['Manager', 'HR', 'Director'] },
   { title: "HR Absence Table", url: "/dashboard/hr-table", icon: Sheet, allowedRoles: ['HR', 'Director'] },
   { title: "Company Directory", url: "/dashboard/company-directory", icon: BookUser, allowedRoles: ['HR', 'Director'] },

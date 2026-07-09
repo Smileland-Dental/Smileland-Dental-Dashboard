@@ -10,6 +10,7 @@ import { getAbsenceRequestsByUser } from '@/components/approval/approval';
 import { RequestTable } from '@/components/approval/request-table';
 import { AbsenceRequest } from '@/lib/types';
 import RequestDetailsModal from '@/components/approval/request-details-modal';
+import ProtectedRoute from '@/components/auth/ProtectedRoute';
 
 export default function Page() {
   // Destructure from useAuth context
@@ -190,6 +191,7 @@ export default function Page() {
   }
 
   return (
+    <ProtectedRoute allowedRoles={['HR', 'Director', 'Manager']}>
     <div className="p-2 md:p-4">
       <h1 className="text-3xl font-black mb-4">Approval Dashboard</h1>
 
@@ -311,5 +313,6 @@ export default function Page() {
         />
       )}
     </div>
+    </ProtectedRoute>
   );
 }
