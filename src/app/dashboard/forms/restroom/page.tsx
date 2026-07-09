@@ -49,7 +49,7 @@ export default function RestroomInspection() {
     "Ming": ["Hopie", "Kindal", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Crystal", "Dianne", "Melissa"],
-    "Visalia": ["Abby", "Dianne", "Jessica"]
+    "Visalia": ["Abby", "Dianne", "Jessica", "Alondra", 'Renee']
   };
 
   const RESTROOM_TASK_COLUMN_START = 3;
