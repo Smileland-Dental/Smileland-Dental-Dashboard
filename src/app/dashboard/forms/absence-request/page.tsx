@@ -12,6 +12,9 @@ import { Button } from '@/components/ui/button';
 import { AbsenceRequest } from '@/lib/types';
 import { AbsenceTable } from '@/components/forms/absence-request/employee-absence-table';
 
+import { EarlyOutForm } from '@/components/forms/absence-request/volunteer-early-out';
+import { TruckElectric } from 'lucide-react';
+
 export default function Page() {
   const [employeeFirestoreID, setEmployeeFirestoreID] = useState("");
   const [employeeID, setEmployeeID] = useState("");
@@ -29,7 +32,9 @@ export default function Page() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [employeeInfo, setEmployeeInfo] = useState<any>(null);
-  const [activeTab, setActiveTab] = useState('needed');
+  const [activeTab, setActiveTab] = useState('pending_employee');
+
+  const [selectedEarlyOutForm, setSelectedEarlyOutForm] = useState<boolean>(false);
 
   const handleLogin = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -170,6 +175,11 @@ export default function Page() {
     setLoading(false);
   };
 
+  // Combine both live active groups into an evaluation array for checking conflicts
+  const conflictingRequestsEvaluation = useMemo(() => {
+    return [...allAbsences, ...pendingEmployeeAbsences];
+  }, [allAbsences, pendingEmployeeAbsences]);
+
   const handleFormSubmit = () => {
     setSelectedAbsence(null);
     setNewAbsence(false);
@@ -217,21 +227,36 @@ export default function Page() {
   return (
     <main className="white min-h-screen p-4 sm:p-6 md:p-8">
       {!isAuthenticated ? (
-        <div className="max-w-md mx-auto mt-20">
-          <form onSubmit={handleLogin} className="bg-white p-8 rounded-lg shadow-md">
-            <h2 className="text-2xl font-bold text-center mb-6">Employee Login</h2>
-            <div className="mb-4">
-              <label htmlFor="employeeId" className="block text-gray-700">Employee ID</label>
-              <input type="text" id="employeeId" value={employeeID} onChange={(e) => setEmployeeID(e.target.value)} className="w-full p-2 border rounded" required autoComplete="off"/>
-            </div>
-            <div className="mb-6">
-              <label htmlFor="birthYear" className="block text-gray-700">Birth Year</label>
-              <input type="text" id="birthYear" value={year} onChange={(e) => setYear(e.target.value)} className="w-full p-2 border rounded" required autoComplete="off"/>
-            </div>
-            <button type="submit" className="w-full bg-blue-500 text-white p-2 rounded cursor-pointer">Login</button>
-            {error && <p className="text-red-500 text-center mt-4">{error}</p>}
-          </form>
-        </div>
+      <div className="max-w-md mx-auto mt-20">
+        <form onSubmit={handleLogin} className="bg-white p-8 rounded-lg shadow-md">
+          <h2 className="text-2xl font-bold text-center mb-6">Employee Login</h2>
+          <div className="mb-4">
+            <label htmlFor="employeeId" className="block text-gray-700">Employee ID</label>
+            <input type="text" id="employeeId" value={employeeID} onChange={(e) => setEmployeeID(e.target.value)} className="w-full p-2 border rounded" required autoComplete="off"/>
+          </div>
+          <div className="mb-6">
+            <label htmlFor="birthYear" className="block text-gray-700">Birth Year</label>
+            <input type="text" id="birthYear" value={year} onChange={(e) => setYear(e.target.value)} className="w-full p-2 border rounded" required autoComplete="off"/>
+          </div>
+          <button type="submit" className="w-full bg-blue-500 text-white p-2 rounded cursor-pointer hover:bg-indigo-500 hover:border-indigo-400">Login</button>
+          {error && <p className="text-red-500 text-center mt-4">{error}</p>}
+          
+          <div className="relative my-6 flex items-center justify-center">
+            <div className="absolute inset-0 flex items-center"><span className="w-full border-t border-slate-200"></span></div>
+            <span className="relative bg-white px-3 text-xs text-slate-400 font-bold uppercase">Or</span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setSelectedEarlyOutForm(true)}
+            className="w-full border-2 border-dashed border-indigo-200 text-indigo-600 p-2.5 rounded-lg font-bold hover:bg-indigo-50/50 hover:border-indigo-400 transition-all cursor-pointer text-center text-sm"
+          >
+            Submit Volunteer Early Out
+          </button>
+        </form>
+
+        {selectedEarlyOutForm && <EarlyOutForm onClose={() => setSelectedEarlyOutForm(false)} />}
+      </div>
       ) : (
         <div>
           <div className="flex flex-row gap-5">
@@ -246,7 +271,7 @@ export default function Page() {
                 onClick={() => setActiveTab('pending_employee')}
                 className={`${activeTab === 'pending_employee' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm`}
               >
-                Pending Acknowledgement ({pendingEmployeeActionAbsences.length})
+                Pending Employee ({pendingEmployeeActionAbsences.length})
               </button>
               <button
                 onClick={() => setActiveTab('needed')}
@@ -318,7 +343,7 @@ export default function Page() {
             employeeTitle={employeeTitle} 
             employeeName={employeeName} 
             employeeSkipManagerApproval={employeeInfo.skipManagerApproval}
-            employeeExistingRequests={allAbsences}
+            employeeExistingRequests={conflictingRequestsEvaluation}
             onFormSubmit={handleFormSubmit} 
             onClose={() => setNewAbsence(false)}
             />

@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AbsenceRequest } from "@/lib/types";
 import { getAbsenceRequestsByUser, getRequestStatusText } from '@/components/approval/approval';
 import { StatusBadge } from "@/components/ui/status-badge";
+import ProtectedRoute from '@/components/auth/ProtectedRoute';
 
 // UI Components
 import { Search, ChevronLeft, ChevronRight, Edit3, Calendar, FileDown, Plus } from 'lucide-react';
@@ -18,7 +19,7 @@ import { useSort } from '@/hooks/custom-hooks'
 import { SortIcon } from '@/components/ui/table-sort'
 
 import { OFFICES } from '@/lib/constants';
-const itemsPerPage = 20;
+const itemsPerPage = 50;
 //const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift", "Cancel Cell"];
 
 export default function Page() {
@@ -50,7 +51,7 @@ export default function Page() {
   const [isSaving, setIsSaving] = useState(false);
 
   // --- Server-Side Fetch Logic ---
-  const fetchDocs = async () => {
+  const fetchDocs = async (resetPages = false) => {
     if (!user) return;
     setLoading(true);
     try {
@@ -58,7 +59,9 @@ export default function Page() {
       // which performs the server-side where() queries
       const data = await getAbsenceRequestsByUser(user, startDate, endDate);
       setAbsences(data);
-      setCurrentPage(1); // Reset to page 1 on new fetch
+      if (resetPages) {
+        setCurrentPage(1); // Reset to page 1 on new fetch
+      }
     } catch (err) {
       console.error("Fetch error:", err);
     } finally {
@@ -68,7 +71,7 @@ export default function Page() {
 
   useEffect(() => {
     if (!authLoading) {
-      fetchDocs();
+      fetchDocs(true);
     }
   }, [user, authLoading, startDate, endDate]);
 
@@ -78,14 +81,27 @@ export default function Page() {
   // --- Client-Side Search (Operating on the server-filtered set) ---
   const filteredRequests = useMemo(() => {
     const term = searchTerm.toLowerCase().trim();
-    let result = absences.filter((a) =>
+  
+    let result = absences.filter((a) => {
+      // 1. Resolve fallback status context
+      const currentStatus = a.status || 'active';
 
-      ((a.status || 'active') === activeFilter) &&
-      (officeFilter === 'all' || a.office === officeFilter) && (
-        a.employee_name.toLowerCase().includes(term) || 
-        String(a.employee_id || '').toLowerCase().includes(term)
-      )
-    );
+      // 2. Evaluate the status matching rule based on the selected option
+      let statusMatches = currentStatus === activeFilter;
+      if (activeFilter === 'active_and_pending') {
+        statusMatches = currentStatus === 'active' || currentStatus === 'pending_action';
+      }
+
+      // 3. Return combined verification array checks
+      return (
+        statusMatches &&
+        (officeFilter === 'all' || a.office === officeFilter) && 
+        (
+          a.employee_name.toLowerCase().includes(term) || 
+          String(a.employee_id || '').toLowerCase().includes(term)
+        )
+      );
+    });
 
     if (sortConfig.direction !== 'none' && sortConfig.key) {
       result = [...result].sort((a, b) => {
@@ -138,13 +154,19 @@ export default function Page() {
     // fetchDocs();
     setIsSaving(true);
     try {
-      const docRef = doc(db, "absences", updated.id);
+      // 1. Separate 'id' from the rest of the document data
+      const { id, ...dataToSave } = updated;
+
+      // 2. Use the isolated 'id' to point to the correct document reference
+      const docRef = doc(db, "absences", id);
+
+      // 3. Save only the pure data back to the database
       await updateDoc(docRef, { 
-        ...updated, 
+        ...dataToSave, 
         updatedAt: Timestamp.now() 
       });
       setSelectedAbsence(null);
-      await fetchDocs(); // Refresh table
+      await fetchDocs(false); // Refresh table
     } catch (error) {
       console.error("Update failed:", error);
       alert("Error updating record.");
@@ -191,6 +213,7 @@ export default function Page() {
   if (authLoading) return <div className="p-8 text-center font-bold">Verifying Permissions...</div>;
 
   return (
+    <ProtectedRoute allowedRoles={['HR', 'Director']}>
     <div className="p-4 md:p-8 max-w-screen mx-auto space-y-6 bg-white min-h-screen">
       <div className="flex justify-between items-center">
         <div>
@@ -224,9 +247,10 @@ export default function Page() {
             value={activeFilter}
             onChange={e => setActiveFilter(e.target.value)}
           >
+            <option value="active_and_pending">All</option>
             <option value="active">Active</option>
-            <option value="archived">Archived</option>
             <option value="pending_action">Pending Action</option>
+            <option value="archived">Archived</option>
           </select>
         </div>
         <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
@@ -379,5 +403,6 @@ export default function Page() {
       <HRCreateAbsenceModal isOpen={isAdding} onClose={() => setIsAdding(false)} onSave={fetchDocs} />
       </div>
     </div>
+    </ProtectedRoute>
   );
 };

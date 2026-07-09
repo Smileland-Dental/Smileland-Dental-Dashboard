@@ -68,12 +68,12 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
 
     // Look through array instances currently stored in parent state
     return employeeExistingRequests.some((absence) => {
-      // Ensure we only match overlapping dates for the *same* incident type and active records
-      if (
-        absence.type_of_incident !== formData.type_of_incident || 
-        absence.status === 'archived'
-      ) {
+      if (absence.type_of_incident !== formData.type_of_incident) {
         return false;
+      }
+      const isConflictingStatus = ['active', 'pending_action'].includes(absence.status);
+      if (!isConflictingStatus) {
+        return false; // Skips 'archived'
       }
 
       const existingStart = new Date(absence.incident_start + "T00:00:00").getTime();
