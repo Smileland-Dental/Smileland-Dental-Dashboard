@@ -33,7 +33,7 @@ export default function LobbyInspectionPage() {
     "Ming": ["Hopie", "Kindal", "Marbella"],
     "Ortho": ["Kindal"],
     "Tulare": ["Crystal", "Dianne", "Melissa"],
-    "Visalia": ["Abby", "Dianne", "Jessica", "Renee"]
+    "Visalia": ["Abby", "Dianne", "Jessica", "Renee", "Alondra"]
   };
 
   const COLUMN_NAMES = [

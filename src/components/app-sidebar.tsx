@@ -49,7 +49,7 @@ const mainItems = [
   { title: "Overview", url: "/dashboard", icon: Home },
   { title: "Forms", url: "/dashboard/forms", icon: ScrollText },
   { title: "Absence Form", url: "/dashboard/forms/absence-request", icon: CalendarX },
-  { title: "Employee Schedule", url: "/dashboard/tools/employee-schedule", icon: CalendarClock, allowedRoles: ['Manager', 'HR', 'Director'] },
+  //{ title: "Employee Schedule", url: "/dashboard/tools/employee-schedule", icon: CalendarClock, allowedRoles: ['Manager', 'HR', 'Director'] },
 ];
 
 const toolItems = [
