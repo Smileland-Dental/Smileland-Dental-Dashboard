@@ -36,6 +36,7 @@ export default function Page() {
 
   const [selectedRequest, setSelectedRequest] = useState<AbsenceRequest | null>(null);
   const [managerNotes, setManagerNotes] = useState('');
+  const [finalNotes, setFinalNotes] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Derived values from context to keep code readable
@@ -70,6 +71,15 @@ export default function Page() {
       console.log("All Requests:", allRequests);
     }
   }, [user, userOffices, userRole, userName, authLoading, startDate, endDate]);
+
+  const finalizedAllRequests = useMemo(() => {
+    return allRequests.filter(r => {
+      if (userRole === 'Manager') {
+        return r.manager_approval !== 'not_required';
+      }
+      return allRequests;
+    });
+  }, [allRequests, userRole]);
 
   const pendingEmployeeActionAbsences = useMemo (() => {
     return pendingEmployeeAbsences;
@@ -126,11 +136,13 @@ export default function Page() {
   const handleOpenModal = (request: AbsenceRequest) => {
     setSelectedRequest(request);
     setManagerNotes(request.manager_notes || '');
+    setFinalNotes(request.final_notes || '');
   };
 
   const handleCloseModal = () => {
     setSelectedRequest(null);
     setManagerNotes('');
+    setFinalNotes('');
   };
 
   const handleApproval = async (decision: 'approved' | 'denied' | 'approved_with_note') => {
@@ -152,6 +164,7 @@ export default function Page() {
             final_approval: decision,
             final_approval_name: userName, // Fixed the typo from your snippet
             manager_notes: managerNotes,
+            final_notes: finalNotes
           };
       }
 
@@ -233,7 +246,7 @@ export default function Page() {
             onClick={() => setActiveTab('all')}
             className={`${activeTab === 'all' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors flex-shrink-0`}
           >
-            All Active Requests ({allRequests.length})
+            All Active Requests ({finalizedAllRequests.length})
           </button>
 
           <button
@@ -266,14 +279,12 @@ export default function Page() {
             Denied ({deniedRequests.length})
           </button>
 
-          {(userRole === 'Director' || userRole === 'HR') && (
           <button
             onClick={() => setActiveTab('pending_employee')}
             className={`${activeTab === 'pending_employee' ? 'border-indigo-500 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'} whitespace-nowrap py-4 px-1 border-b-2 font-medium text-sm transition-colors flex-shrink-0`}
           >
             Pending Employee Action ({pendingEmployeeActionAbsences.length})
           </button>
-          )}
           
           {/* Invisible spacer to ensure padding on the far right when scrolled to the end */}
           <div className="flex-shrink-0 w-4 md:hidden" aria-hidden="true" />
@@ -282,7 +293,7 @@ export default function Page() {
            
       <div className="mt-4">
         {activeTab === 'all' && (
-          <RequestTable requests={allRequests} userRole={userRole} onViewDetails={handleOpenModal} />
+          <RequestTable requests={finalizedAllRequests} userRole={userRole} onViewDetails={handleOpenModal} />
         )}
         {activeTab === 'pending' && (
           <RequestTable requests={pendingRequests} userRole={userRole} onViewDetails={handleOpenModal} />
@@ -306,8 +317,10 @@ export default function Page() {
           selectedRequest={selectedRequest}
           userRole={userRole}
           managerNotes={managerNotes}
+          finalNotes={finalNotes}
           isSubmitting={isSubmitting}
           setManagerNotes={setManagerNotes}
+          setFinalNotes={setFinalNotes}
           handleCloseModal={handleCloseModal}
           handleApproval={handleApproval}
         />

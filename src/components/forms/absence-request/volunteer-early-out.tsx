@@ -218,6 +218,7 @@ export const EarlyOutForm = ({ onClose }: EarlyOutFormProps) => {
                 <div className="flex gap-2">
                   <input 
                     autoFocus
+                    type="password"
                     placeholder="Employee ID #"
                     className="flex-1 p-4 bg-slate-100 rounded-2xl border-2 border-transparent focus:border-indigo-500 focus:bg-white outline-none font-bold text-center text-xl transition-all"
                     value={tempID}
@@ -324,6 +325,7 @@ export const EarlyOutForm = ({ onClose }: EarlyOutFormProps) => {
                           placeholder="Supervisor Employee ID #"
                           className="flex-1 p-3 bg-white rounded-xl border border-slate-200 focus:border-indigo-500 outline-none font-bold text-sm transition-all"
                           value={supervisorID}
+                          type="password"
                           disabled={Boolean(supervisorEmployeeName)}
                           onChange={(e) => setSupervisorID(e.target.value)}
                           onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleLookupSupervisor())}

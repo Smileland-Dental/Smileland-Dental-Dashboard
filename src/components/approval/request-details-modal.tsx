@@ -6,8 +6,10 @@ interface RequestDetailsModalProps {
   selectedRequest: AbsenceRequest;
   userRole: string;
   managerNotes: string;
+  finalNotes: string;
   isSubmitting: boolean;
   setManagerNotes: (notes: string) => void;
+  setFinalNotes: (notes: string) => void;
   handleCloseModal: () => void;
   handleApproval: (status: 'approved' | 'denied' | 'approved_with_note') => void;
 }
@@ -16,8 +18,10 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
   selectedRequest,
   userRole,
   managerNotes,
+  finalNotes,
   isSubmitting,
   setManagerNotes,
+  setFinalNotes,
   handleCloseModal,
   handleApproval,
 }) => {
@@ -160,14 +164,22 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
                 {selectedRequest.employee_comments || "No comments provided."}
               </p>
             </div>
-              {!(selectedRequest.type_of_request === "HR Call In" && userRole === 'Manager') && !((selectedRequest.final_approval === 'approved' || selectedRequest.final_approval === 'denied') && userRole === 'Manager') && (
-                <div>
-                  <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Admin Notes</h4>
-                  <p className="text-sm text-gray-700 bg-white p-3 border rounded-md italic">
-                    {selectedRequest.manager_notes || "No notes provided."}
-                  </p>
-                </div>
-              )}
+            {!(selectedRequest.type_of_request === "HR Call In" && userRole === 'Manager') && !((selectedRequest.final_approval === 'approved' || selectedRequest.final_approval === 'denied') && userRole === 'Manager') && (
+              <div>
+                <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Admin Notes</h4>
+                <p className="text-sm text-gray-700 bg-white p-3 border rounded-md italic">
+                  {selectedRequest.manager_notes || "No notes provided."}
+                </p>
+              </div>
+            )}
+            {selectedRequest.final_notes && (
+              <div className="col-span-2">
+                <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Final Notes (Employee Viewable)</h4>
+                <p className="text-sm text-gray-700 bg-white p-3 border rounded-md italic">
+                  {selectedRequest.final_notes || "No notes provided."}
+                </p>
+              </div>
+            )}
           </section>
 
           {/* Section: Approval Workflow */}
@@ -204,24 +216,31 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
 
           {/* Decision Area */}
           {canTakeAction && !(selectedRequest.type_of_request === "HR Call In" && userRole === 'Manager') && !((selectedRequest.final_approval === 'approved' || selectedRequest.final_approval === 'denied') && userRole === 'Manager') && (
-            <section className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
-              <h3 className="text-sm font-bold text-indigo-900 mb-3 uppercase tracking-tighter">Admin Notes</h3>
-              <textarea
-                rows={3}
-                className="block w-full text-sm p-3 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-500 outline-none"
-                placeholder="Add Notes (Optional)..."
-                value={managerNotes}
-                onChange={(e) => setManagerNotes(e.target.value)}
-              />
-            </section>
-          )}
-          {/*!canTakeAction && !(userRole === 'Manager') && (
-
-            <div className="text-center text-sm italic text-gray-500">
-              {managerNotes}
+            <div>
+              <section className="bg-indigo-50 p-4 mb-4 rounded-xl border border-indigo-100">
+                <h3 className="text-sm font-bold text-indigo-900 mb-3 uppercase tracking-tighter">Admin Notes</h3>
+                <textarea
+                  rows={3}
+                  className="block w-full text-sm p-3 rounded-lg border border-indigo-200 focus:ring-2 focus:ring-indigo-500 outline-none"
+                  placeholder="Add Administrator Notes (Optional)..."
+                  value={managerNotes}
+                  onChange={(e) => setManagerNotes(e.target.value)}
+                />
+              </section>
+              {higherRoleUser && (
+              <section className="bg-emerald-50 p-4 rounded-xl border border-emerald-100">
+                <h3 className="text-sm font-bold text-emerald-900 mb-3 uppercase tracking-tighter">Final Notes (Employee Viewable)</h3>
+                <textarea
+                  rows={3}
+                  className="block w-full text-sm p-3 rounded-lg border border-emerald-200 focus:ring-2 focus:ring-emerald-500 outline-none"
+                  placeholder="Add Final Notes (Optional)..."
+                  value={finalNotes}
+                  onChange={(e) => setFinalNotes(e.target.value)}
+                />
+              </section>
+              )}
             </div>
-            )
-          */}
+          )}
         </div>
 
         {/* Modal Footer */}
