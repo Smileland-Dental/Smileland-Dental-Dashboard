@@ -46,14 +46,20 @@ export function LoginForm({
 
   // Function to handle google sign in
   const handleGoogleSignIn = async () => {
+    try {
     const provider = new GoogleAuthProvider();
     provider.setCustomParameters({
       prompt: 'select_account' // Ensures the user selects an account
     })
-    try {
       await signInWithPopup(auth, provider); 
-    } catch (error) {
-      console.error('Error during Google sign-in:', error); 
+    } catch (error: any) {
+      if (error.code === "auth/cancelled-popup-request" || error.code === "auth/popup-closed-by-user") {
+        console.log("User closed or canceled the sign-in popup.");
+        // Soft exit—don't alert the user, they know they closed it!
+        return; 
+      }
+      // Handle real authentication errors normally
+      console.error("Sign-in error:", error);
     }
   };
 

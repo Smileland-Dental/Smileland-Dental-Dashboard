@@ -43,6 +43,8 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
     manager_approval_name: '',
     final_approval: 'pending',
     final_approval_name: '', 
+    final_notes: '',
+    DAP: 0,
     skipManagerApproval: employeeSkipManagerApproval || false,
     DOAPoints: 0,
     status: 'active',

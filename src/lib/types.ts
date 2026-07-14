@@ -21,11 +21,13 @@ export type AbsenceRequest = {
   manager_notes?: string;
   office: string; // Office location associated with the employee making request
   type_of_incident: string; // "Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"
-  type_of_request: string; // Either "Time Off Request" or "Incident Notice" for the User // "HR Call In" for HR created requests
+  type_of_request: string; // Either "Time Off Request" or "Incident Notice" for the User // "HR Call In" for HR created requests // "No Call", "Call In After Shift", "Previously Not Approved"
   updatedAt?: Timestamp;
   skipManagerApproval: boolean; // Field to indicate if manager approval is skipped (true/false)
   DOAPoints: number; // Points assigned for the DOA system based on the hours missed
   pendingDOAPoints: number; // Points that are pending and will be added to DOAPoints if the request is approved
+  DAP: number;
+  final_notes?: string;
   status: 'active' | 'archived' | 'pending_action'; // New field to indicate if the request is active or archived, including a way to check if it is an initial 'HR Call In' Request
 };
 

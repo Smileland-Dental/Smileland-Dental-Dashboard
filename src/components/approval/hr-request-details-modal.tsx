@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo } from 'react';
-import { X, Clock, MessageSquare, Save, Archive, ArchiveRestore, AlertCircle, FileText, User, Plus, Paperclip } from 'lucide-react';
+import { X, Clock, MessageSquare, Save, Archive, ArchiveRestore, AlertCircle, FileText, User, Plus, Paperclip, FileEdit } from 'lucide-react';
 import { AbsenceRequest } from "@/lib/types";
 import { ref, uploadBytes, getDownloadURL, deleteObject} from "firebase/storage";
 import { storage } from '@/lib/firebase.config';
@@ -18,6 +18,7 @@ interface HRDetailsProps {
 
 export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, onArchive, isSaving }: HRDetailsProps) => {
   const [tempData, setTempData] = React.useState<AbsenceRequest>(absence);
+  const [isNotesForcedOpen, setIsNotesForcedOpen] = React.useState<boolean>(false);
 
   const [deleteFiles, setDeleteFiles] = React.useState<string[]>([]);
   const [newFiles, setNewFiles] = React.useState<File[]>([]); // Track files not yet uploaded
@@ -54,6 +55,8 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
   const canEditETD = tempData.type_of_incident === 'Early Out' || tempData.type_of_incident === 'Leave and Come Back';
   const canEditETA = tempData.type_of_incident === 'Late In' || tempData.type_of_incident === 'Leave and Come Back';
 
+  // Condition to show final notes text area (Automatically shows if it has text, or if button was clicked)
+  const showFinalNotes = !!tempData.final_notes || isNotesForcedOpen;
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -228,6 +231,9 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                 <option value="HR Call In">HR Call In</option>
                 <option value="Incident Notice">Incident Notice</option>
                 <option value="Time Off Request">Time Off Request</option>
+                <option value="No Call">No Call</option>
+                <option value="Call In After Shift">Call In After Shift</option>
+                <option value="Previously Not Approved">Previous Not Approved</option>
               </select>
             </div>
           </div>
@@ -323,7 +329,6 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
               {['pending', 'submitted', 'not_provided'].map((status) => {
                 const isSelected = tempData.excuse_note_submitted === status;
                 const fieldChanged = isChanged('excuse_note_submitted');
-
                 // Logic: Disable "Not Provided" if any files exist (staged or database)
                 const hasFiles = (tempData.excuse_note?.length || 0) > 0 || newFiles.length > 0;
                 const notProvidedDisabled = status === 'not_provided' && hasFiles;
@@ -429,7 +434,19 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             {/* Final Approval Box */}
             <div className={`space-y-3 p-3 col-span-2 md:col-span-1 rounded-2xl border transition-all shadow-sm ${isChanged('final_approval') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200'}`}>
               <div className="flex justify-between items-center ml-1">
-                <label className="text-[10px] font-black text-black uppercase ml-1">Final Approval</label>
+                <div className="flex items-center gap-2">
+                  <label className="text-[10px] font-black text-black uppercase ml-1">Final Approval</label>
+                  {/* 💡 📝 Dynamic Notes Trigger Button inside Box */}
+                  {!showFinalNotes && (
+                    <button 
+                      type="button" 
+                      onClick={() => setIsNotesForcedOpen(true)}
+                      className="text-[9px] font-black text-indigo-600 bg-white hover:bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-full uppercase flex items-center gap-1 transition-all"
+                    >
+                      <FileEdit className="h-2.5 w-2.5" /> Add Notes
+                    </button>
+                  )}
+                </div>
                 {tempData.final_approval_name && (
                   <span className={`text-[9px] font-bold italic transition-colors ${isChanged('final_approval') ? 'text-rose-600' : 'text-emerald-800'}`}>
                     Submitted {tempData.final_approval_name}
@@ -462,17 +479,30 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
               </div>
             </div>
           </div>
-          {/* Section 6: Manager Exemption and DOA Points*/}
-          <div className = "grid grid-cols-1 md:grid-cols-3 gap-6 border-slate-100">
-            {/* Manager Exemption Box */}
-            <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('skipManagerApproval') ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-200' }`}>
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${tempData.skipManagerApproval ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-200 text-slate-500'}`}><User className="h-4 w-4" /></div>
-                <div><p className="text-[11px] font-black text-black uppercase leading-none">Manager Exemption</p><p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">Skip Manager Approval</p></div>
-              </div>
-              <button type="button" onClick={() => setTempData({ ...tempData, skipManagerApproval: !tempData.skipManagerApproval, manager_approval: !tempData.skipManagerApproval ? 'not_required' : 'pending'})} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${tempData.skipManagerApproval ? 'bg-emerald-500' : 'bg-slate-700'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${tempData.skipManagerApproval ? 'translate-x-6' : 'translate-x-1'}`} /></button>
-            </div>
 
+          {/* Final Notes for Employee to see, needs to press button to see this part of the form */}
+          {showFinalNotes && (
+            <div className={`space-y-1 p-3 rounded-2xl border transition-all shadow-sm animate-in fade-in slide-in-from-top-2 duration-200 ${ isChanged('final_notes') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
+              <label className="text-[10px] font-black text-black uppercase ml-1 flex items-center gap-1 ">Final Notes</label>
+              <textarea 
+                className="w-full bg-transparent border-none text-sm font-bold focus:ring-0 resize-none overflow-hidden text-slate-800" 
+                placeholder="(Final Notes for Employee Viewing)" 
+                value={tempData.final_notes || ''} 
+                onChange={e => {
+                    setTempData({...tempData, final_notes: e.target.value});
+                    e.target.style.height = 'auto';
+                    e.target.style.height = e.target.scrollHeight + 'px';
+                }}
+                onFocus={(e) => {
+                    e.target.style.height = 'auto';
+                    e.target.style.height = e.target.scrollHeight + 'px';
+                }}
+              />
+            </div>
+          )}
+
+          {/* Section 6: Manager Exemption and DOA Points*/}
+          <div className = "grid grid-cols-2 gap-6 border-slate-100">
             {/* Pending DOA Points Box */}
             <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('pendingDOAPoints') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
               <div className="flex items-center gap-3">
@@ -519,8 +549,40 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
               />
             </div>
 
+            {/* Manager Exemption Box */}
+            <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('skipManagerApproval') ? 'bg-rose-50 border-rose-200' : 'bg-slate-200/50 border-slate-200' }`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${tempData.skipManagerApproval ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-200 text-slate-500'}`}><User className="h-4 w-4" /></div>
+                <div><p className="text-[11px] font-black text-black uppercase leading-none">Manager Exemption</p><p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">Skip Manager Approval</p></div>
+              </div>
+              <button type="button" onClick={() => setTempData({ ...tempData, skipManagerApproval: !tempData.skipManagerApproval, manager_approval: !tempData.skipManagerApproval ? 'not_required' : 'pending'})} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${tempData.skipManagerApproval ? 'bg-emerald-500' : 'bg-slate-700'}`}><span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${tempData.skipManagerApproval ? 'translate-x-6' : 'translate-x-1'}`} /></button>
+            </div>
+
+            {/* DAP Points Box */}
+            <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('DAP') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${tempData.DAP > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
+                  <AlertCircle className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-black text-black uppercase leading-none">Pending DAP</p>
+                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">DAP Points</p>
+                </div>
+              </div>
+  
+              <input 
+                type="number" 
+                min="0" 
+                step="any"
+                value={tempData.DAP || ''} 
+                onChange={e => setTempData({...tempData, DAP: parseFloat(e.target.value) || 0})}
+                className="w-20 h-10 text-center font-bold text-lg bg-white rounded-xl border-none shadow-inner focus:ring-2 focus:ring-blue-400"
+                placeholder="0"
+              />
+            </div>
+
             {/* Notes Box */}
-            <div className={`col-span-3 space-y-1 p-3 rounded-2xl border transition-all shadow-sm ${ isChanged('manager_notes') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
+            <div className={`col-span-2 space-y-1 p-3 rounded-2xl border transition-all shadow-sm ${ isChanged('manager_notes') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
               <label className="text-[10px] font-black text-black uppercase ml-1 flex items-center gap-1">Admin Notes</label>
               <textarea 
                 className="w-full bg-transparent border-none text-sm font-bold focus:ring-0 resize-none overflow-hidden" 

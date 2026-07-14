@@ -40,7 +40,7 @@ export default function Page() {
   const [absences, setAbsences] = useState<AbsenceRequest[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [officeFilter, setOfficeFilter] = useState('all');
-  const [activeFilter, setActiveFilter] = useState('active');
+  const [activeFilter, setActiveFilter] = useState('active_and_pending');
   const [pendingNotesOnly, setPendingNotesOnly] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -312,7 +312,8 @@ export default function Page() {
               <th onClick={() => handleSort('statusBadge')} className="px-6 py-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-nowrap cursor-pointer">Status<SortIcon columnKey="statusBadge" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
               <th onClick={() => handleSort('pendingDOAPoints')} className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-normal max-w-[80px] w-20 leading-tight select-none cursor-pointer">Pending DOA<SortIcon columnKey="pendingDOAPoints" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
               <th onClick={() => handleSort('DOAPoints')} className="text-left text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-normal max-w-[60px] w-20 leading-tight select-none cursor-pointer">Final DOA<SortIcon columnKey="DOAPoints" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
-              <th className="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Edit</th>
+              <th onClick={() => handleSort('DAP')} className="text-right pr-2 text-xs font-bold text-gray-500 uppercase tracking-wider whitespace-normal max-w-[60px] w-20 leading-tight select-none cursor-pointer">DAP<SortIcon columnKey="DAP" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+              {/*<th className="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Edit</th>*/}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-50">
@@ -350,10 +351,11 @@ export default function Page() {
                 <td className="whitespace-nowrap">
                   <div className="px-1 text-sm font-bold text-slate-900">{a.DOAPoints ? a.DOAPoints : '0'}</div>
                 </td>
-                <td className="px-3 py-4 text-right">
-                  <button onClick={() => setSelectedAbsence(a)} className="p-2 text-black hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all">
+                <td className="pr-4 text-right whitespace-nowrap">
+                  <div className="px-1 text-sm font-bold text-slate-900">{a.DAP ? a.DAP : '0'}</div>
+                  {/*<button onClick={() => setSelectedAbsence(a)} className="p-2 text-black hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all">
                     <Edit3 className="h-5 w-5"/>
-                  </button>
+                  </button>*/}
                 </td>
               </tr>
               ))) : (

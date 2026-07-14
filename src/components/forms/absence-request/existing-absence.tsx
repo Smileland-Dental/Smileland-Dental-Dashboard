@@ -10,15 +10,18 @@ import { AlertCircle, Lock } from 'lucide-react'; // Added icons for visual feed
 import { OFFICES } from '@/lib/constants';
 
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"];
-//const officeLocations = ["Corporate", "Ming", "Bernard", "California", "Ortho", "Delano", "Tulare", "Visalia", "Fresno"];
 
 export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: { absence: any, onFormSubmit: () => void, onClose: () => void }) {
-
   if (!absence) return null;
   // --- 1. DEFINE DENIED STATE ---
   const isDenied = absence.manager_approval === 'denied' || absence.final_approval === 'denied';
+  const isApproved = absence.final_approval === 'approved' || absence.final_approval === 'approved_with_note';
   const isHRCallIn = absence.type_of_request === "HR Call In";
   const isPendingAction = absence.status === 'pending_action';
+
+  // Master disabled rules flags
+  const disableCoreInputs = isDenied || isApproved || isHRCallIn;
+  const disableCommentsAndFiles = isDenied;
 
   const [formData, setFormData] = useState({
     type_of_request: absence.type_of_request || '',
@@ -30,6 +33,7 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
     eta: absence.eta || '',
     etd: absence.etd || '',
     excuse_note_submitted: absence.excuse_note_submitted || 'not_provided',
+    final_notes: absence.final_notes || '',
   });
 
   const [newExcuseNotes, setNewExcuseNotes] = useState<File[]>([]);
@@ -65,7 +69,9 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
 const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     if (isDenied) return; // Prevent state updates if denied
     const { name, value } = e.target;
-    // ... (rest of change logic remains same)
+
+    if (isApproved && name !== "employee_comments") return;
+
     if (name === "type_of_incident") {
       if (value === absence.type_of_incident) {
         setFormData(prev => ({ ...prev, [name]: value, eta: absence.eta || '', etd: absence.etd || '' }));
@@ -90,6 +96,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
   };
 
   const handleToggleRemoveExistingNote = (url: string) => {
+    if (disableCommentsAndFiles) return;
     setNotesToRemove(prev => {
       const isRemoving = !prev.includes(url);
       const nextNotesToRemove = isRemoving ? [...prev, url] : prev.filter(u => u !== url);
@@ -162,16 +169,25 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
       const remainingExistingNotes = existingNotes.filter((url: string) => !notesToRemove.includes(url));
       const finalNotes = [...remainingExistingNotes, ...newNoteUrls];
 
-      const managerApprovalStatus = isHRCallIn ? 'not_required' : 'pending';
+      // --- 4. CONDITIONAL APPROVAL STATUS UPDATE ---
+      // 💡 If already approved, do not overwrite the approvals with pending!
+      const approvalPayload = isApproved ? {
+        manager_approval: absence.manager_approval,
+        manager_approval_name: absence.manager_approval_name || '',
+        final_approval: absence.final_approval,
+        final_approval_name: absence.final_approval_name || '',
+      } : {
+        manager_approval: isHRCallIn ? 'not_required' : 'pending',
+        manager_approval_name: '',
+        final_approval: 'pending',
+        final_approval_name: '',
+      };
 
-      // --- 4. UPDATE FIRESTORE ---
+      // --- 5. UPDATE FIRESTORE ---
       await updateDoc(doc(db, "absences", absence.id), {
         ...submissionData,
         excuse_note: finalNotes,
-        manager_approval: managerApprovalStatus,
-        manager_approval_name: '',
-        final_approval: 'pending',
-        final_approval_name: '', 
+        ...approvalPayload,
         status: isPendingAction ? 'active' : (absence.status || 'active'), // 💡 Automatically activates it
         updatedAt: new Date(), 
       });
@@ -188,7 +204,6 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
   };
 
   const changed = isPendingAction ? true : isDataChanged();
-
   const activeExistingNotesCount = (absence.excuse_note || []).length - notesToRemove.length;
 
   return (
@@ -198,7 +213,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
           
           <div className="flex justify-between items-center mb-6">
             <h2 className="text-2xl font-bold text-gray-800">
-              {isDenied ? 'View Absence Request' : 'Edit Absence Request'}
+              {(isDenied || isApproved) ? 'View Absence Request' : 'Edit Absence Request'}
             </h2>
             {absence.status === 'archived' && (
               <h3 className="text-lg font-bold text-red-700 uppercase">Archived</h3>
@@ -213,11 +228,8 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                 Cancel Request
               </button>
 
-              {(absence.type_of_request === "HR Call In") && (
-                <p className="text-[10px] text-slate-400 italic">Contact EXEC to cancel HR Call Ins.</p>
-              )}
-              {(absence.type_of_request !== "HR Call In" && (absence.final_approval === "approved" || absence.final_approval === "approved_with_note" || absence.final_approval === "denied" || isSubmitting)) && (
-                <p className="text-[10px] text-slate-400 italic">Contatc EXEC to cancel this request.</p>
+              {(absence.type_of_request === "HR Call In" || isApproved || absence.final_approval === "denied" || isSubmitting) && (
+                <p className="text-[10px] text-slate-400 italic text-right">Contact EXEC to cancel.</p>
               )}
               </div>
             )}
@@ -233,13 +245,27 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
               </div>
             </div>
           )}
+
+          {isApproved && (
+            <div className="mb-6 p-4 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center gap-3">
+              <Lock className="h-5 w-5 text-emerald-500" />
+              <div>
+                <p className="text-sm font-bold text-emerald-800">Request Approved</p>
+                <p className="text-xs text-emerald-600">The request is locked. You may still write notes or append additional files.</p>
+              </div>
+            </div>
+          )}
           
           <form onSubmit={handleSubmit} className="space-y-5">
             {/* Request Type */}
             <div className="p-4 bg-amber-50 rounded-lg border border-amber-200">
               <label className="block text-sm font-semibold text-amber-900 mb-2">Type Of Request</label>
-              <div className="flex gap-6 text-sm">
-                {["Incident Notice", "Time Off Request", "HR Call In"].map(val => (
+              <div className="flex flex-wrap gap-6 text-sm">
+                {["Incident Notice", "Time Off Request", "HR Call In", "No Call", "Call In After Shift", "Previously Not Approved"].map(val => {
+                  const specialTypes = ["HR Call In", "No Call", "Call In After Shift", "Previously Not Approved"]
+                  const isSpecialType = specialTypes.includes(absence.type_of_request);
+                  const isRadioDisabled = disableCoreInputs || isSpecialType || (specialTypes.includes(val) && !specialTypes.includes(formData.type_of_request));
+                  return (
                   <label key={val} className="flex items-center gap-2 cursor-pointer">
                     <input 
                       type="radio" 
@@ -247,12 +273,13 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                       value={val} 
                       checked={formData.type_of_request === val} 
                       onChange={handleChange} 
-                      disabled={isDenied || isHRCallIn || (val === "HR Call In" && formData.type_of_request !== "HR Call In")} // Disable
+                      disabled={isRadioDisabled} // Disable
                       className="accent-amber-600 disabled:opacity-50" 
                     />
-                    <span className={`text-amber-800 ${(isDenied || isHRCallIn || (val === "HR Call In" && formData.type_of_request !== "HR Call In")) ? 'opacity-40' : ''}`}>{val}</span>
+                    <span className={`text-amber-800 ${(isRadioDisabled) ? 'opacity-40' : ''}`}>{val}</span>
                   </label>
-                ))}
+                );
+                })}
               </div>
             </div>
 
@@ -260,13 +287,13 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Incident Type</label>
-                <select name="type_of_incident" value={formData.type_of_incident} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required>
+                <select name="type_of_incident" value={formData.type_of_incident} onChange={handleChange} disabled={disableCoreInputs} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required>
                   {incidentTypes.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Office Location</label>
-                <select name="office" value={formData.office} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required>
+                <select name="office" value={formData.office} onChange={handleChange} disabled={disableCoreInputs} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required>
                   {OFFICES.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
@@ -276,11 +303,11 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Start Date</label>
-                <input name="incident_start" type="date" value={formData.incident_start} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
+                <input name="incident_start" type="date" value={formData.incident_start} onChange={handleChange} disabled={disableCoreInputs} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">End Date</label>
-                <input name="incident_end" type="date" value={formData.incident_end} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
+                <input name="incident_end" type="date" value={formData.incident_end} onChange={handleChange} disabled={disableCoreInputs} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
               </div>
             </div>
 
@@ -289,13 +316,13 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
               {["Late In", "Leave and Come Back"].includes(formData.type_of_incident) && (
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">ETA (Arrival)</label>
-                  <input name="eta" type="time" value={formData.eta} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
+                  <input name="eta" type="time" value={formData.eta} onChange={handleChange} disabled={disableCoreInputs} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
                 </div>
               )}
               {["Early Out", "Leave and Come Back"].includes(formData.type_of_incident) && (
                 <div className="space-y-1">
                   <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">ETD (Departure)</label>
-                  <input name="etd" type="time" value={formData.etd} onChange={handleChange} disabled={isDenied || isHRCallIn} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
+                  <input name="etd" type="time" value={formData.etd} onChange={handleChange} disabled={disableCoreInputs} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
                 </div>
               )}
             </div>
@@ -310,7 +337,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                 name="employee_comments" 
                 value={formData.employee_comments} 
                 onChange={handleChange} 
-                disabled={isDenied} 
+                disabled={disableCommentsAndFiles} 
                 required={isPendingAction} // 💡 Dynamically requires input
                 placeholder={'Notes and Comments...'}
                 className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 focus:ring-1 focus:ring-blue-500" 
@@ -319,8 +346,8 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             </div>
 
           {/* File Management Container */}
-          <div className={`p-4 rounded-lg space-y-3 mt-1 ${isDenied ? 'bg-slate-50 border border-slate-200' : 'bg-blue-50 border border-blue-200'}`}>
-            <p className={`text-xs font-bold uppercase ${isDenied ? 'text-slate-500' : 'text-blue-800'}`}>Notes & Files</p>
+          <div className={`p-4 rounded-lg space-y-3 mt-1 ${disableCommentsAndFiles ? 'bg-slate-50 border border-slate-200' : 'bg-blue-50 border border-blue-200'}`}>
+            <p className={`text-xs font-bold uppercase ${disableCommentsAndFiles ? 'text-slate-500' : 'text-blue-800'}`}>Notes & Files</p>
 
             {/* 1. Existing Uploaded Files Array */}
             {absence.excuse_note?.map((url: string, i: number) => {
@@ -338,7 +365,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                   >
                     {fileName}
                   </a>
-                  {!isDenied && (
+                  {!disableCommentsAndFiles && (
                     <button type="button" onClick={() => handleToggleRemoveExistingNote(url)} className={`text-[10px] font-bold uppercase ml-2 px-2 py-1 rounded ${isMarkedForDeletion ? 'text-green-600 hover:bg-green-50' : 'text-red-500 hover:bg-red-50'}`}>
                       {isMarkedForDeletion ? 'Undo Delete' : 'Remove'}
                     </button>
@@ -347,7 +374,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
               );
             })}
 
-            {/* 2. Brand New Staged Files Preview List (Crucial Missing Feature!) */}
+            {/* 2. Brand New Staged Files Preview List*/}
             {newExcuseNotes.length > 0 && (
               <div className="space-y-1.5 pt-1 border-t border-blue-100/50">
                 <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider">Staged for Upload:</p>
@@ -380,7 +407,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             )}
 
             {/* 3. Standard File Selector Input Trigger */}
-            {!isDenied && (    
+            {!disableCommentsAndFiles && (    
               <div className="flex items-center gap-3 mt-2">
                 <label 
                   htmlFor="file-upload" 
@@ -434,6 +461,17 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             )}
           </div>
 
+          {formData.final_notes && (
+            <div className="space-y-1">
+              <label className="text-xs font-bold text-rose-700 uppercase tracking-wider">
+                Final Notes
+              </label>
+              <p className="w-full border font-semibold bg-slate-50 border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 focus:ring-1 focus:ring-blue-500">
+                {formData.final_notes} 
+              </p>
+            </div>
+          )}
+
             {/* Checkbox text modification */}
             {changed && !isDenied && (
               <div className="flex items-start gap-2 px-1 pt-2 animate-in fade-in slide-in-from-top-1 duration-300">
@@ -447,6 +485,8 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                 <label htmlFor="confirm-update" className="text-xs text-gray-600 leading-tight cursor-pointer">
                   {isPendingAction ? (
                     <span>I have read and acknowledge this absence record.</span>
+                  ) : isApproved ? (
+                    <span>I confirm these supplemental notes/files are accurate. <span className="font-bold text-gray-800">Note: This will preserve your current approval status.</span></span>
                   ) : (
                     <span>I confirm these updates are accurate. <span className="font-bold text-gray-800">Note: This will reset the approval status to pending.</span></span>
                   )}

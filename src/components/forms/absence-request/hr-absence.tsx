@@ -41,6 +41,8 @@ const initialState = {
   manager_notes: '',
   DOAPoints: 0,
   pendingDOAPoints: 0,
+  final_notes: '',
+  DAP: 0,
   status: 'active',
 };
 
@@ -126,8 +128,10 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
 
     setIsSubmitting(true);
     try {
+      const isSpecialCallIn = ["HR Call In", "No Call", "Call In After Shift"].includes(formData.type_of_request);
+
       let finalManagerApproval = formData.manager_approval;
-      if (formData.type_of_request === "HR Call In") {
+      if (isSpecialCallIn) {
         finalManagerApproval = "not_required";
       } 
       else {
@@ -136,7 +140,7 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
         finalManagerApproval = selectedEmployee?.skipManagerApproval ? "not_required" : "pending";
       }
 
-      const finalStatus = formData.type_of_request === "HR Call In" ? "pending_action" : "active";
+      const finalStatus = isSpecialCallIn ? "pending_action" : "active";
 
       await addDoc(collection(db, "absences"), {
         ...formData,
@@ -244,8 +248,8 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
                 <div className="grid grid-cols-1 gap-4">
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Type of Request</label>
-                    <div className="w-full p-4 bg-slate-50 rounded-xl border-none flex gap-4 text-xs font-bold">
-                    {["HR Call In", "Incident Notice", "Time Off Request"].map((type) => (
+                    <div className="w-full p-4 bg-slate-50 rounded-xl border-none grid grid-cols-3 gap-4 text-xs font-bold">
+                    {["HR Call In", "Incident Notice", "Time Off Request", "No Call", "Call In After Shift"].map((type) => (
                       <label key={type} className="flex items-center gap-1.5 cursor-pointer select-none">
                         <input 
                         type="radio" 
