@@ -41,6 +41,7 @@ export default function Page() {
   const [searchTerm, setSearchTerm] = useState('');
   const [officeFilter, setOfficeFilter] = useState('all');
   const [activeFilter, setActiveFilter] = useState('active_and_pending');
+  const [statusFilter, setStatusFilter] = useState('all')
   const [pendingNotesOnly, setPendingNotesOnly] = useState(false);
 
   const [currentPage, setCurrentPage] = useState(1);
@@ -84,17 +85,41 @@ export default function Page() {
   
     let result = absences.filter((a) => {
       // 1. Resolve fallback status context
-      const currentStatus = a.status || 'active';
+      const requestCurrentStatus = a.status || 'active';
 
       // 2. Evaluate the status matching rule based on the selected option
-      let statusMatches = currentStatus === activeFilter;
+      let requestStatusMatches = requestCurrentStatus === activeFilter;
       if (activeFilter === 'active_and_pending') {
-        statusMatches = currentStatus === 'active' || currentStatus === 'pending_action';
+        requestStatusMatches = requestCurrentStatus === 'active' || requestCurrentStatus === 'pending_action';
+      }
+
+      // This matches for the approval status
+      let statusMatches = true;
+      if (statusFilter !== 'all'){
+        if (statusFilter === 'pending_employee') {
+          statusMatches = a.status === 'pending_action';
+        }
+        else if (statusFilter === 'approved') {
+          // Approved if final_approval is approved (or approved_with_note)
+          statusMatches = a.status !== 'pending_action' && (a.final_approval === 'approved' || a.final_approval === 'approved_with_note');
+        } 
+        else if (statusFilter === 'denied') {
+          // Denied if either final approval or manager approval is denied
+          statusMatches = a.status !== 'pending_action' && (a.manager_approval === 'denied' && a.final_approval === 'pending' || a.manager_approval === 'denied' || a.final_approval === 'denied');
+        }
+        else if (statusFilter === 'pending_manager') {
+          // If you define "Pending Manager" as pending manager approval
+          statusMatches = a.manager_approval === 'pending' && a.status !== 'pending_action';
+        } 
+        else if (statusFilter === 'pending_corporate') {
+          // If you define "Pending Corporate" as pending final approval
+          statusMatches = a.final_approval === 'pending' && a.status !== 'pending_action' && (a.manager_approval === 'approved' || a.manager_approval === 'not_required');
+        }
       }
 
       // 3. Return combined verification array checks
       return (
-        statusMatches &&
+        requestStatusMatches && statusMatches &&
         (officeFilter === 'all' || a.office === officeFilter) && 
         (
           a.employee_name.toLowerCase().includes(term) || 
@@ -131,7 +156,7 @@ export default function Page() {
     }
 
     return result;
-  }, [absences, searchTerm, officeFilter, activeFilter, sortConfig]);
+  }, [absences, searchTerm, officeFilter, activeFilter, statusFilter,sortConfig]);
 
   const paginated = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
@@ -280,6 +305,20 @@ export default function Page() {
             <span className="text-[9px] font-black text-slate-400 uppercase">To</span>
             <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0" />
           </div>
+        </div>
+        <div className="flex col-span-2 md:col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
+          <select
+            className="bg-transparent border-none text-xs font-bold focus:ring-0 p-0"
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+          >
+            <option value="all">All Requests</option>
+            <option value="pending_employee">Pending Employee</option>
+            <option value="pending_corporate">Pending Corporate</option>
+            <option value="pending_manager">Pending Manager</option>
+            <option value="approved">Approved</option>
+            <option value="denied">Denied</option>
+          </select>
         </div>
         {/*<label 
           htmlFor="pending-notes-toggle"
