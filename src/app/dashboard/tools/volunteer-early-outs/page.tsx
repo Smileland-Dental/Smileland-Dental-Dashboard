@@ -11,10 +11,14 @@ import ProtectedRoute from '@/components/auth/ProtectedRoute';
 
 import { OFFICES } from "@/lib/constants";
 
+import { useSort } from '@/hooks/custom-hooks'
+import { SortIcon } from '@/components/ui/table-sort'
+
 const itemsPerPage = 50;
 
 export default function Page() {
   const { user, loading: authLoading } = useAuth();
+  const { sortConfig, handleSort } = useSort();
 
   // --- Date Filters (Default: Last 30 days to Next 30 days) ---
   const [startDate, setStartDate] = useState(() => {
@@ -75,7 +79,7 @@ export default function Page() {
   // --- Client-Side Search and Office Filters ---
   const filteredRequests = useMemo(() => {
     const term = searchTerm.toLowerCase().trim();
-    return submissions.filter((r) => {
+    let result = submissions.filter((r) => {
       const officeMatches = officeFilter === "all" || r.office === officeFilter;
       const searchMatches =
         r.employee_name.toLowerCase().includes(term) ||
@@ -83,7 +87,24 @@ export default function Page() {
 
       return officeMatches && searchMatches;
     });
-  }, [submissions, searchTerm, officeFilter]);
+
+    if (sortConfig.direction !== 'none' && sortConfig.key) {
+      result = [...result].sort((a, b) => {
+        let valA = a[sortConfig.key as keyof VolunteerEarlyOutRequest];
+        let valB = b[sortConfig.key as keyof VolunteerEarlyOutRequest];
+
+        // Handle fallback conversions for missing types or empty values safely
+        const strA = String(valA ?? '').toLowerCase();
+        const strB = String(valB ?? '').toLowerCase();
+
+        if (strA < strB) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (strA > strB) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    return result;
+  }, [submissions, searchTerm, officeFilter, sortConfig]);
 
   // --- Pagination Logic ---
   const paginated = useMemo(() => {
@@ -92,14 +113,6 @@ export default function Page() {
   }, [filteredRequests, currentPage]);
 
   const totalPages = Math.ceil(filteredRequests.length / itemsPerPage) || 1;
-
-  // --- Export to Excel ---
-  {/*const downloadExcel = () => {
-    const worksheet = XLSX.utils.json_to_sheet(filteredRequests);
-    const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Early Outs");
-    XLSX.writeFile(workbook, `Volunteer_EarlyOuts_${startDate}_to_${endDate}.xlsx`);
-  };*/}
 
   if (authLoading) return <div className="p-8 text-center font-bold">Verifying Permissions...</div>;
 
@@ -111,12 +124,6 @@ export default function Page() {
         <div>
           <h1 className="text-3xl font-black text-slate-900 tracking-tight">Volunteer Early Outs</h1>
         </div>
-        {/*<button
-          onClick={downloadExcel}
-          className="bg-white border border-slate-200 text-slate-600 px-4 py-2 rounded-xl font-bold flex items-center gap-2 hover:bg-slate-50 transition-all shadow-sm"
-        >
-          <FileDown className="h-4 w-4" /> Export Excel
-        </button>*/}
       </div>
 
       {/* Filter and Control Bars */}
@@ -177,10 +184,10 @@ export default function Page() {
           <table className="w-full text-left">
             <thead className="bg-slate-50 text-[10px] font-black uppercase text-slate-400">
               <tr>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Employee</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Office</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Early Out Window</th>
-                <th className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Supervisor Contact</th>
+                <th onClick={() => handleSort('employee_name')} className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Employee<SortIcon columnKey="employee_name" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('office')} className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Office<SortIcon columnKey="office" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('incident_date')} className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Early Out Window<SortIcon columnKey="incident_date" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('supervisor_name')} className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Supervisor<SortIcon columnKey="supervisor_name" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
