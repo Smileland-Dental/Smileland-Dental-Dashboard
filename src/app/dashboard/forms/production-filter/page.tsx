@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { db } from '@/lib/firebase.config';
-import { collection, getDocs, query, where } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase.config';
+import { onAuthStateChanged } from 'firebase/auth';
+import { collection, doc, getDoc, getDocs, query, where } from 'firebase/firestore';
 
 const LOCATION_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia', 'Crowns', 'Endo'] as const;
 
@@ -607,6 +608,60 @@ function filterDocsByMonth(docs: SimpleFormDoc[], start: string, end: string): S
   });
 }
 
+type DateDocGroup = { date: string; docs: SimpleFormDoc[] };
+
+function groupDocsByDate(docs: SimpleFormDoc[]): DateDocGroup[] {
+  const map = new Map<string, SimpleFormDoc[]>();
+  for (const doc of docs) {
+    const date = String(doc.date ?? '').trim();
+    if (!date) continue;
+    const existing = map.get(date);
+    if (existing) existing.push(doc);
+    else map.set(date, [doc]);
+  }
+  return Array.from(map.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, groupDocs]) => ({ date, docs: groupDocs }));
+}
+
+function sumFieldAcrossDocs(docs: SimpleFormDoc[], fieldId: ColumnFieldId): { sum: number; hasValue: boolean } {
+  if (fieldId === 'side.seenPercent') {
+    let scheduled = 0;
+    let seen = 0;
+    let hasValue = false;
+    for (const doc of docs) {
+      const side = doc.productionSideMetrics;
+      if (!side || typeof side !== 'object') continue;
+      const schRaw = String(side.scheduled ?? '').trim();
+      const seenRaw = String(side.seen ?? '').trim();
+      if (schRaw !== '' || seenRaw !== '') hasValue = true;
+      scheduled += parseNumber(side.scheduled);
+      seen += parseNumber(side.seen);
+    }
+    if (!hasValue) return { sum: 0, hasValue: false };
+    if (scheduled === 0) return { sum: 0, hasValue: true };
+    return { sum: Math.round((seen / scheduled) * 100), hasValue: true };
+  }
+
+  let sum = 0;
+  let hasValue = false;
+  for (const doc of docs) {
+    const raw = getFieldDisplay(doc, fieldId, resolveTotals(doc));
+    if (String(raw).trim() === '') continue;
+    hasValue = true;
+    sum += parseNumber(raw);
+  }
+  return { sum: roundToTwoDecimals(sum), hasValue };
+}
+
+function formatAggregatedFieldDisplay(fieldId: ColumnFieldId, sum: number, hasValue: boolean): string {
+  if (!hasValue) return '';
+  const rounded = roundToTwoDecimals(sum);
+  if (isPercentField(fieldId)) return formatPercentDisplay(String(rounded));
+  if (isCurrencyField(fieldId)) return formatCurrencyDisplay(String(rounded));
+  return formatNumberWithCommas(rounded);
+}
+
 function docContainsPersonWithPosition(
   doc: SimpleFormDoc,
   position: string,
@@ -692,8 +747,46 @@ async function fetchSimpleFormDocsForMonth(month: string, location?: string): Pr
 
 function parseNumber(value: string | number | undefined): number {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-  const n = Number(value);
+  if (value == null) return 0;
+  const cleaned = String(value).replace(/,/g, '').trim();
+  const n = Number(cleaned);
   return Number.isFinite(n) ? n : 0;
+}
+
+function roundToTwoDecimals(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function formatNumberWithCommas(raw: string | number): string {
+  const s = String(raw ?? '').trim();
+  if (!s || s === '-') return s;
+
+  let prefix = '';
+  let suffix = '';
+  let core = s;
+  if (core.startsWith('$')) {
+    prefix = '$';
+    core = core.slice(1).trim();
+  }
+  if (core.endsWith('%')) {
+    suffix = '%';
+    core = core.slice(0, -1).trim();
+  }
+
+  const cleaned = core.replace(/,/g, '');
+  if (!cleaned || !/^-?\d+(\.\d+)?$/.test(cleaned)) return s;
+
+  const n = Number(cleaned);
+  if (!Number.isFinite(n)) return s;
+  const rounded = roundToTwoDecimals(n);
+  const negative = rounded < 0;
+  const abs = Math.abs(rounded);
+  const fixed = Number.isInteger(abs) ? String(abs) : abs.toFixed(2);
+  const [intPart, decPart] = fixed.split('.');
+  const intWithCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const formatted = decPart !== undefined ? `${intWithCommas}.${decPart}` : intWithCommas;
+  return `${prefix}${negative ? '-' : ''}${formatted}${suffix}`;
 }
 
 function computeSeenPercentRounded(
@@ -733,15 +826,17 @@ function isPercentField(id: ColumnFieldId): boolean {
 function formatCurrencyDisplay(raw: string): string {
   const s = String(raw ?? '').trim();
   if (!s) return '';
-  if (s.startsWith('$')) return s;
-  return `$${s}`;
+  const withoutDollar = s.startsWith('$') ? s.slice(1).trim() : s;
+  const formatted = formatNumberWithCommas(withoutDollar);
+  return formatted ? `$${formatted}` : '';
 }
 
 function formatPercentDisplay(raw: string): string {
   const s = String(raw ?? '').trim();
   if (!s || s === '-') return s;
-  if (s.endsWith('%')) return s;
-  return `${s}%`;
+  const withoutPct = s.endsWith('%') ? s.slice(0, -1).trim() : s;
+  const formatted = formatNumberWithCommas(withoutPct);
+  return formatted ? `${formatted}%` : s;
 }
 
 function formatMetricCellDisplay(metric: ColumnFieldId, raw: string): string {
@@ -749,16 +844,16 @@ function formatMetricCellDisplay(metric: ColumnFieldId, raw: string): string {
   if (!s) return '';
   if (isCurrencyField(metric)) return formatCurrencyDisplay(s);
   if (isPercentField(metric)) return formatPercentDisplay(s);
-  return s;
+  return formatNumberWithCommas(s);
 }
 
 function formatTotalCell(n: number, currency = false, percent = false): string {
   if (!Number.isFinite(n) || n === 0) return '';
   let out: string;
-  if (Number.isInteger(n)) out = String(n);
+  if (Number.isInteger(n)) out = formatNumberWithCommas(n);
   else {
     const rounded = Math.round(n * 100) / 100;
-    out = String(rounded);
+    out = formatNumberWithCommas(rounded);
   }
   if (currency) return `$${out}`;
   if (percent) return `${out}%`;
@@ -862,7 +957,6 @@ function findRowByTrimmedNameAndPosition<T extends { name?: string; position?: s
   );
 }
 
-/** One cell: named row in CRA / sealant / doctors table for the chosen metric. */
 function getNamedPersonRowMetricValue(doc: SimpleFormDoc, personName: string, metric: ColumnFieldId): string {
   const pn = personName.trim();
   if (!pn || !metric) return '';
@@ -919,7 +1013,6 @@ function getPositionPersonRowMetricValue(
   return '';
 }
 
-/** Sorted unique names that appear with `position` in any row (table / sealant / doctors) across `docs`. */
 function collectFixedNamesForPosition(docs: SimpleFormDoc[], position: string): string[] {
   const p = position.trim();
   if (!p) return [];
@@ -1071,7 +1164,7 @@ function getFieldDisplay(
   return '';
 }
 
-type FilterMode = 'office' | 'person';
+type FilterMode = 'month' | 'office' | 'person';
 
 const FILTER_TOOLBAR_INPUT_STYLE: React.CSSProperties = {
   width: '100%',
@@ -1087,10 +1180,7 @@ export default function SimpleFormsDropdownViewPage() {
   const [location, setLocation] = useState('');
   const [filterPosition, setFilterPosition] = useState('');
   const [filterPersonName, setFilterPersonName] = useState('');
-  const [month, setMonth] = useState(() => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-  });
+  const [month, setMonth] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [rows, setRows] = useState<SimpleFormDoc[]>([]);
@@ -1101,6 +1191,56 @@ export default function SimpleFormsDropdownViewPage() {
     () => createEmptyPositionBundleSlotConfigs()
   );
   const [personModeMetrics, setPersonModeMetrics] = useState<ColumnFieldId[]>(['docperf.customer']);
+  const [pageReady, setPageReady] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (userData?.role !== 'HR' && userData?.role !== 'Director' && userData?.role !== 'Manager') {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
+    });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   const resetColumnConfiguration = useCallback(() => {
     setColumnSlots([...EMPTY_COLUMN_SLOTS]);
@@ -1123,6 +1263,7 @@ export default function SimpleFormsDropdownViewPage() {
       setLocation('');
       setFilterPosition('');
       setFilterPersonName('');
+      setMonth('');
       setFilterMode(nextMode);
     },
     [filterMode, resetColumnConfiguration, resetPersonModeMetrics]
@@ -1206,6 +1347,34 @@ export default function SimpleFormsDropdownViewPage() {
     }
   }, [location, month]);
 
+  const loadMonthOnly = useCallback(async () => {
+    if (!month) {
+      setError('Please select a month.');
+      return;
+    }
+    const { start, end } = monthRange(month);
+    if (!start || !end) {
+      setError('Invalid month format.');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    try {
+      const list = await fetchSimpleFormDocsForMonth(month);
+      setRows(list);
+      if (list.length === 0) {
+        setError('No saved data matches this month.');
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : 'Unknown error';
+      setError(`Failed to load: ${msg}`);
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [month]);
+
   const loadMonthPool = useCallback(async () => {
     if (!month) {
       setError('Please select a month.');
@@ -1252,6 +1421,15 @@ export default function SimpleFormsDropdownViewPage() {
   }, [filterPosition, filterPersonName, monthPoolDocs]);
 
   useEffect(() => {
+    if (filterMode !== 'month') {
+      return;
+    }
+    if (month) {
+      void loadMonthOnly();
+    }
+  }, [filterMode, month, loadMonthOnly]);
+
+  useEffect(() => {
     if (filterMode !== 'office') {
       return;
     }
@@ -1292,9 +1470,20 @@ export default function SimpleFormsDropdownViewPage() {
     fontWeight: 600,
   };
 
+  const canReloadMonth = filterMode === 'month' && Boolean(month);
   const canReloadOffice = filterMode === 'office' && Boolean(location.trim() && month);
   const canReloadPerson = filterMode === 'person' && Boolean(month);
-  const canReload = filterMode === 'office' ? canReloadOffice : canReloadPerson;
+  const canReload =
+    filterMode === 'month' ? canReloadMonth : filterMode === 'office' ? canReloadOffice : canReloadPerson;
+  const showColumnTable = (filterMode === 'month' || filterMode === 'office') && rows.length > 0;
+  const hideNameAndOperatingBundles = filterMode === 'month';
+
+  const columnTableGroups = useMemo((): DateDocGroup[] => {
+    if (filterMode === 'month') return groupDocsByDate(rows);
+    return rows.map((doc) => ({ date: String(doc.date ?? '').trim(), docs: [doc] }));
+  }, [filterMode, rows]);
+
+  const dayCountForAverage = filterMode === 'month' ? columnTableGroups.length : rows.length;
 
   const setSlot = (index: number, id: SlotValue) => {
     setColumnSlots((prev) => {
@@ -1324,7 +1513,6 @@ export default function SimpleFormsDropdownViewPage() {
     }
   };
 
-  /** Short proc / Name: 1 sub-header row. Position: 2 (metric groups, then names like Short Procedures). */
   const maxSubHeaderRows = useMemo(() => {
     let m = 0;
     for (const slot of columnSlots) {
@@ -1407,6 +1595,12 @@ export default function SimpleFormsDropdownViewPage() {
     color: '#0f172a',
   };
 
+  const averageRowStyle: React.CSSProperties = {
+    background: '#f1f5f9',
+    fontWeight: 700,
+    color: '#0f172a',
+  };
+
   const thSelectStyle: React.CSSProperties = {
     width: '100%',
     minWidth: FIELD_SELECT_MIN_WIDTH_PX,
@@ -1442,7 +1636,7 @@ export default function SimpleFormsDropdownViewPage() {
               </option>
             ))}
           </optgroup>
-          {gi === 0 ? (
+          {gi === 0 && !hideNameAndOperatingBundles ? (
             <optgroup label="Office Hours">
               <option value={OPERATING_BUNDLE_ID}>Office Hours</option>
             </optgroup>
@@ -1456,9 +1650,11 @@ export default function SimpleFormsDropdownViewPage() {
           </option>
         ))}
       </optgroup>
-      <optgroup label="By name (bundle)">
-        <option value={NAME_BUNDLE_ID}>Name</option>
-      </optgroup>
+      {!hideNameAndOperatingBundles ? (
+        <optgroup label="By name (bundle)">
+          <option value={NAME_BUNDLE_ID}>Name</option>
+        </optgroup>
+      ) : null}
       <optgroup label="By position (bundle)">
         <option value={POSITION_BUNDLE_ID}>Position</option>
       </optgroup>
@@ -1471,6 +1667,10 @@ export default function SimpleFormsDropdownViewPage() {
     fontSize: 14,
     verticalAlign: 'top',
   };
+
+  if (!pageReady) {
+    return null;
+  }
 
   return (
     <main
@@ -1512,6 +1712,14 @@ export default function SimpleFormsDropdownViewPage() {
               <button
                 type="button"
                 role="tab"
+                aria-selected={filterMode === 'month'}
+                onClick={() => switchFilterMode('month')}
+              >
+                Month
+              </button>
+              <button
+                type="button"
+                role="tab"
                 aria-selected={filterMode === 'office'}
                 onClick={() => switchFilterMode('office')}
               >
@@ -1528,121 +1736,134 @@ export default function SimpleFormsDropdownViewPage() {
             </div>
           </div>
 
-          <div>
-            <label style={filterToolbarLabelStyle}>Month</label>
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => {
-                resetColumnConfiguration();
-                resetPersonModeMetrics();
-                setMonth(e.target.value);
-                if (filterMode === 'person') {
-                  setFilterPosition('');
-                  setFilterPersonName('');
-                  setMonthPoolDocs([]);
-                  setRows([]);
-                }
-              }}
-              style={FILTER_TOOLBAR_INPUT_STYLE}
-            />
-          </div>
-
-          {filterMode === 'office' ? (
-            <div>
-              <label style={filterToolbarLabelStyle}>Office</label>
-              <select
-                value={location}
-                onChange={(e) => {
-                  resetColumnConfiguration();
-                  setLocation(e.target.value);
-                }}
-                style={FILTER_TOOLBAR_INPUT_STYLE}
-              >
-                <option value="">Select</option>
-                {LOCATION_OPTIONS.map((loc) => (
-                  <option key={loc} value={loc}>
-                    {loc}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : (
+          {filterMode ? (
             <>
               <div>
-                <label style={filterToolbarLabelStyle}>Position</label>
-                <select
-                  value={filterPosition}
+                <label style={filterToolbarLabelStyle}>Month</label>
+                <input
+                  type="month"
+                  value={month}
                   onChange={(e) => {
+                    resetColumnConfiguration();
                     resetPersonModeMetrics();
-                    setFilterPosition(e.target.value);
-                    setFilterPersonName('');
+                    setMonth(e.target.value);
+                    if (filterMode === 'person') {
+                      setFilterPosition('');
+                      setFilterPersonName('');
+                      setMonthPoolDocs([]);
+                      setRows([]);
+                    }
                   }}
                   style={FILTER_TOOLBAR_INPUT_STYLE}
-                >
-                  <option value="">Select position…</option>
-                  {personModePositions.map((pos) => (
-                    <option key={pos} value={pos}>
-                      {pos}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
+
+              {filterMode === 'office' ? (
+                <div>
+                  <label style={filterToolbarLabelStyle}>Office</label>
+                  <select
+                    value={location}
+                    onChange={(e) => {
+                      resetColumnConfiguration();
+                      setLocation(e.target.value);
+                    }}
+                    style={FILTER_TOOLBAR_INPUT_STYLE}
+                  >
+                    <option value="">Select</option>
+                    {LOCATION_OPTIONS.map((loc) => (
+                      <option key={loc} value={loc}>
+                        {loc}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              ) : filterMode === 'person' ? (
+                <>
+                  <div>
+                    <label style={filterToolbarLabelStyle}>Position</label>
+                    <select
+                      value={filterPosition}
+                      onChange={(e) => {
+                        resetPersonModeMetrics();
+                        setFilterPosition(e.target.value);
+                        setFilterPersonName('');
+                      }}
+                      style={FILTER_TOOLBAR_INPUT_STYLE}
+                    >
+                      <option value="">Select position…</option>
+                      {personModePositions.map((pos) => (
+                        <option key={pos} value={pos}>
+                          {pos}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label style={filterToolbarLabelStyle}>Name</label>
+                    <select
+                      value={filterPersonName}
+                      disabled={!filterPosition.trim()}
+                      onChange={(e) => {
+                        setFilterPersonName(e.target.value);
+                      }}
+                      style={FILTER_TOOLBAR_INPUT_STYLE}
+                    >
+                      <option value="">
+                        {filterPosition.trim() ? 'Select name…' : 'Select position first'}
+                      </option>
+                      {filterPersonNameOptions.map((name) => (
+                        <option key={name} value={name}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              ) : null}
+
               <div>
-                <label style={filterToolbarLabelStyle}>Name</label>
-                <select
-                  value={filterPersonName}
-                  disabled={!filterPosition.trim()}
-                  onChange={(e) => {
-                    setFilterPersonName(e.target.value);
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (filterMode === 'month') void loadMonthOnly();
+                    else if (filterMode === 'office') void load();
+                    else void loadMonthPool();
                   }}
-                  style={FILTER_TOOLBAR_INPUT_STYLE}
+                  disabled={loading || !canReload}
+                  style={{
+                    height: 40,
+                    padding: '0 16px',
+                    borderRadius: 8,
+                    border: '1px solid #2563eb',
+                    background: loading ? '#93c5fd' : canReload ? '#2563eb' : '#e5e7eb',
+                    color: canReload ? '#fff' : '#9ca3af',
+                    fontWeight: 600,
+                    cursor: loading || !canReload ? 'not-allowed' : 'pointer',
+                    borderColor: canReload ? '#2563eb' : '#d1d5db',
+                  }}
                 >
-                  <option value="">
-                    {filterPosition.trim() ? 'Select name…' : 'Select position first'}
-                  </option>
-                  {filterPersonNameOptions.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
+                  {loading ? 'Loading…' : 'Reload'}
+                </button>
               </div>
             </>
-          )}
-
-          <div>
-            <button
-              type="button"
-              onClick={() => {
-                if (filterMode === 'office') void load();
-                else void loadMonthPool();
-              }}
-              disabled={loading || !canReload}
-              style={{
-                height: 40,
-                padding: '0 16px',
-                borderRadius: 8,
-                border: '1px solid #2563eb',
-                background: loading ? '#93c5fd' : canReload ? '#2563eb' : '#e5e7eb',
-                color: canReload ? '#fff' : '#9ca3af',
-                fontWeight: 600,
-                cursor: loading || !canReload ? 'not-allowed' : 'pointer',
-                borderColor: canReload ? '#2563eb' : '#d1d5db',
-              }}
-            >
-              {loading ? 'Loading…' : 'Reload'}
-            </button>
-          </div>
+          ) : null}
         </div>
 
         {error ? <p style={{ color: '#b45309', marginBottom: 12, fontSize: 14 }}>{error}</p> : null}
 
-        {filterMode === 'office' && !location.trim() ? (
+        {filterMode === 'month' && !month ? (
+          <p style={{ color: '#6b7280', fontSize: 14 }}>Select a month to load the table.</p>
+        ) : null}
+
+        {filterMode === 'office' && (!month || !location.trim()) ? (
           <p style={{ color: '#6b7280', fontSize: 14 }}>Select month and office to load the table.</p>
         ) : null}
 
-        {filterMode === 'person' && !filterPosition.trim() ? (
+        {filterMode === 'person' && !month ? (
+          <p style={{ color: '#6b7280', fontSize: 14 }}>Select a month to continue.</p>
+        ) : null}
+
+        {filterMode === 'person' && month && !filterPosition.trim() ? (
           <p style={{ color: '#6b7280', fontSize: 14 }}>Select month and position to continue.</p>
         ) : null}
 
@@ -1650,7 +1871,7 @@ export default function SimpleFormsDropdownViewPage() {
           <p style={{ color: '#6b7280', fontSize: 14 }}>Select a name to load the table.</p>
         ) : null}
 
-        {filterMode === 'office' && rows.length > 0 && (
+        {showColumnTable && (
           <div className="production-filter-table" style={{ overflowX: 'auto' }}>
             <table
               style={{
@@ -2085,29 +2306,43 @@ export default function SimpleFormsDropdownViewPage() {
                 ) : null}
               </thead>
               <tbody>
-                {rows.map((doc) => {
-                  const totals = resolveTotals(doc);
-                  const dateStr = String(doc.date ?? '');
+                {columnTableGroups.map((group) => {
+                  const dateStr = group.date;
+                  const rowKey = filterMode === 'month' ? dateStr : group.docs[0]?.id || dateStr;
                   return (
-                    <tr key={doc.id}>
+                    <tr key={rowKey}>
                       <td style={{ ...cellStyle, fontWeight: 600, color: '#374151' }}>
                         {formatDayColumn(dateStr)}
                       </td>
                       <td style={cellStyle}>{formatDateMDY(dateStr)}</td>
                       {columnSlots.flatMap((slotId, slotIndex) => {
                         if (isShortProcBundle(slotId)) {
-                          return FIXED_REASON_OPTIONS.map((label) => (
-                            <td key={`c-${doc.id}-${slotIndex}-${label}`} style={cellStyle}>
-                              {getReasonCellValue(doc, label, bundleToMetric(slotId))}
-                            </td>
-                          ));
+                          const metric = bundleToMetric(slotId);
+                          return FIXED_REASON_OPTIONS.map((label) => {
+                            let sum = 0;
+                            let hasValue = false;
+                            for (const doc of group.docs) {
+                              const raw = getReasonCellValue(doc, label, metric);
+                              if (String(raw).trim() === '') continue;
+                              hasValue = true;
+                              sum += parseNumber(raw);
+                            }
+                            return (
+                              <td key={`c-${rowKey}-${slotIndex}-${label}`} style={cellStyle}>
+                                {hasValue ? formatNumberWithCommas(sum) : ''}
+                              </td>
+                            );
+                          });
                         }
                         if (isOperatingBundle(slotId)) {
-                          const [checkIn, checkOut, hoursOpen, closer] = getOperatingRowValues(doc);
+                          const doc = group.docs[0];
+                          const [checkIn, checkOut, hoursOpen, closer] = doc
+                            ? getOperatingRowValues(doc)
+                            : ['', '', '', ''];
                           const values = [checkIn, checkOut, hoursOpen, closer];
                           return values.map((val, ci) => (
                             <td
-                              key={`c-op-${doc.id}-${slotIndex}-${ci}`}
+                              key={`c-op-${rowKey}-${slotIndex}-${ci}`}
                               style={operatingColumnTdStyle(ci, cellStyle)}
                             >
                               {String(val).trim() !== '' ? val : '—'}
@@ -2121,11 +2356,17 @@ export default function SimpleFormsDropdownViewPage() {
                           };
                           const metrics = cfg.metrics.length > 0 ? cfg.metrics : (['docperf.customer' as ColumnFieldId]);
                           return metrics.map((metric, mi) => {
-                            const raw = getNamedPersonRowMetricValue(doc, cfg.personName, metric);
-                            const show = String(raw).trim() !== '';
+                            let sum = 0;
+                            let hasValue = false;
+                            for (const doc of group.docs) {
+                              const raw = getNamedPersonRowMetricValue(doc, cfg.personName, metric);
+                              if (String(raw).trim() === '') continue;
+                              hasValue = true;
+                              sum += parseNumber(raw);
+                            }
                             return (
-                              <td key={`c-${doc.id}-${slotIndex}-${mi}`} style={cellStyle}>
-                                {show ? formatMetricCellDisplay(metric, raw) : '—'}
+                              <td key={`c-${rowKey}-${slotIndex}-${mi}`} style={cellStyle}>
+                                {hasValue ? formatMetricCellDisplay(metric, String(sum)) : '—'}
                               </td>
                             );
                           });
@@ -2141,24 +2382,34 @@ export default function SimpleFormsDropdownViewPage() {
                           return metrics.flatMap((metric, mi) =>
                             cols.map((person, pi) => {
                               const emptySlot = people.length === 0;
-                              const raw = emptySlot
-                                ? ''
-                                : getPositionPersonRowMetricValue(doc, cfg.position, person, metric);
-                              const show = String(raw).trim() !== '';
+                              if (emptySlot) {
+                                return (
+                                  <td key={`c-pb-${rowKey}-${slotIndex}-${mi}-${pi}`} style={cellStyle}>
+                                    —
+                                  </td>
+                                );
+                              }
+                              let sum = 0;
+                              let hasValue = false;
+                              for (const doc of group.docs) {
+                                const raw = getPositionPersonRowMetricValue(doc, cfg.position, person, metric);
+                                if (String(raw).trim() === '') continue;
+                                hasValue = true;
+                                sum += parseNumber(raw);
+                              }
                               return (
-                                <td key={`c-pb-${doc.id}-${slotIndex}-${mi}-${pi}`} style={cellStyle}>
-                                  {emptySlot ? '—' : show ? formatMetricCellDisplay(metric, raw) : '—'}
+                                <td key={`c-pb-${rowKey}-${slotIndex}-${mi}-${pi}`} style={cellStyle}>
+                                  {hasValue ? formatMetricCellDisplay(metric, String(sum)) : '—'}
                                 </td>
                               );
                             })
                           );
                         }
                         const fieldId = slotId as ColumnFieldId;
-                        const raw = getFieldDisplay(doc, fieldId, totals);
-                        const show = String(raw).trim() !== '';
+                        const { sum, hasValue } = sumFieldAcrossDocs(group.docs, fieldId);
                         return [
-                          <td key={`c-${doc.id}-${slotIndex}`} style={cellStyle}>
-                            {show ? formatMetricCellDisplay(fieldId, raw) : '—'}
+                          <td key={`c-${rowKey}-${slotIndex}`} style={cellStyle}>
+                            {hasValue ? formatAggregatedFieldDisplay(fieldId, sum, hasValue) : '—'}
                           </td>,
                         ];
                       })}
@@ -2222,6 +2473,63 @@ export default function SimpleFormsDropdownViewPage() {
                       <td key={`ft-${slotIndex}`} style={cellStyle}>
                         {formatTotalCell(
                           fv.total,
+                          isCurrencyField(slotId),
+                          isPercentField(slotId)
+                        )}
+                      </td>,
+                    ];
+                  })}
+                </tr>
+                <tr style={averageRowStyle}>
+                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Average</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  {footerSlotTotals.flatMap((fv, slotIndex) => {
+                    const slotId = columnSlots[slotIndex] as ColumnFieldId;
+                    const denom = dayCountForAverage > 0 ? dayCountForAverage : 1;
+                    if (fv.type === 'empty') {
+                      return [<td key={`fa-${slotIndex}`} style={cellStyle} />];
+                    }
+                    // Short procedures / Name / Position bundles: no average
+                    if (fv.type === 'bundle') {
+                      return fv.values.map((_, ri) => (
+                        <td key={`fa-${slotIndex}-${ri}`} style={{ ...cellStyle, color: '#64748b' }}>
+                          —
+                        </td>
+                      ));
+                    }
+                    if (fv.type === 'nameBundle') {
+                      return fv.values.map((_, ri) => (
+                        <td key={`fa-${slotIndex}-nb-${ri}`} style={{ ...cellStyle, color: '#64748b' }}>
+                          —
+                        </td>
+                      ));
+                    }
+                    if (fv.type === 'positionBundle') {
+                      return fv.valuesByMetric.flatMap((perPerson, mi) =>
+                        perPerson.map((_, pi) => (
+                          <td key={`fa-${slotIndex}-pb-${mi}-${pi}`} style={{ ...cellStyle, color: '#64748b' }}>
+                            —
+                          </td>
+                        ))
+                      );
+                    }
+                    if (fv.type === 'operating') {
+                      return OPERATING_SUB_LABELS.map((_, ri) => (
+                        <td
+                          key={`fa-op-${slotIndex}-${ri}`}
+                          style={{
+                            ...operatingColumnTdStyle(ri, cellStyle),
+                            color: '#64748b',
+                          }}
+                        >
+                          —
+                        </td>
+                      ));
+                    }
+                    return [
+                      <td key={`fa-${slotIndex}`} style={cellStyle}>
+                        {formatTotalCell(
+                          Math.round(fv.total / denom),
                           isCurrencyField(slotId),
                           isPercentField(slotId)
                         )}
@@ -2363,6 +2671,23 @@ export default function SimpleFormsDropdownViewPage() {
                   ))}
                   <td style={cellStyle} />
                 </tr>
+                <tr style={averageRowStyle}>
+                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Average</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  {personModeMetricTotals.map((total, mi) => {
+                    const denom = dayCountForAverage > 0 ? dayCountForAverage : 1;
+                    return (
+                      <td key={`person-avg-${mi}`} style={cellStyle}>
+                        {formatTotalCell(
+                          Math.round(total / denom),
+                          isCurrencyField(personModeMetrics[mi] ?? '')
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td style={cellStyle} />
+                </tr>
               </tfoot>
             </table>
           </div>
@@ -2379,11 +2704,15 @@ export default function SimpleFormsDropdownViewPage() {
             }}
           >
             <span style={{ fontSize: 14, color: '#6b7280' }}>
-              {rows.length} day{rows.length === 1 ? '' : 's'}
+              {filterMode === 'month'
+                ? `${columnTableGroups.length} day${columnTableGroups.length === 1 ? '' : 's'}`
+                : `${rows.length} day${rows.length === 1 ? '' : 's'}`}
               {filterMode === 'person' && personFilter
                 ? ` · ${personFilter.personName} (${personFilter.position})`
                 : ''}
-              {filterMode === 'office' ? ` · ${NUM_SLOTS} column slots` : ` · ${personModeMetrics.length} column${personModeMetrics.length === 1 ? '' : 's'}`}
+              {filterMode === 'month' || filterMode === 'office'
+                ? ` · ${NUM_SLOTS} column slots`
+                : ` · ${personModeMetrics.length} column${personModeMetrics.length === 1 ? '' : 's'}`}
             </span>
             <button
               type="button"
