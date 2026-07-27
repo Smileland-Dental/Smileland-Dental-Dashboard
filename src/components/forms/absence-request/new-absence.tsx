@@ -1,5 +1,4 @@
 "use client";
-
 import { getPSTDate } from '@/lib/date';
 import React, { useMemo, useState } from "react";
 import { doc, updateDoc, addDoc, collection } from "firebase/firestore";
@@ -9,7 +8,7 @@ import FeedbackModal from '@/components/ui/FeedbackModal';
 import { Button } from '@/components/ui/button';
 import { OFFICES } from '@/lib/constants';
 import { AbsenceRequest } from '@/lib/types';
-import { TriangleAlert } from 'lucide-react';
+import { TriangleAlert, AlertCircle } from 'lucide-react';
 
 const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift"];
 
@@ -86,7 +85,11 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
     });
   }, [formData.type_of_incident, formData.incident_start, formData.incident_end, employeeExistingRequests]);
 
-  // ... keep the rest of your form logic & buttons ...
+  const isDateInvalid = Boolean(
+    formData.incident_start && 
+    formData.incident_end && 
+    new Date(formData.incident_end) < new Date(formData.incident_start)
+  );
 
   const isDateWindowValid = useMemo(() => {
     // If fields are empty, keep it valid (or fallback to HTML5 field requirements)
@@ -155,6 +158,11 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!isChecked) return; 
+
+    if (isDateInvalid) {
+      console.error("End date cannot be before start date.");
+      return;
+    }
 
     setIsSubmitting(true);
 
@@ -260,9 +268,18 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">End Date</label>
-                <input name="incident_end" type="date" onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" required />
+                <input name="incident_end" type="date" min={formData.incident_start || ""} onChange={handleChange} className={`
+                w-full border border-gray-300 p-2.5 rounded-md focus:ring-2 focus:ring-blue-500 outline-none ${isDateInvalid ? 'bg-rose-50 text-rose-600 ring-2 ring-rose-500' : 'bg-white'}`} required/>
               </div>
             </div>
+
+                {/* Date Validation Error Message */}
+                {isDateInvalid && (
+                  <div className="flex items-center gap-2 p-3 bg-rose-50 rounded-xl text-rose-600 text-xs font-bold border border-rose-200 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>End date cannot be earlier than the start date.</span>
+                  </div>
+                )}
 
             {/* Row 3: Conditional Time Field for Late In*/}
             {(formData.type_of_incident === "Late In") && (
@@ -397,7 +414,7 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
               </button>
               <button 
                 type="submit" 
-                disabled={isSubmitting || !isChecked || !isDateWindowValid ||  isOverlapping} 
+                disabled={isSubmitting || !isChecked || !isDateWindowValid ||  isOverlapping || isDateInvalid} 
                 className="px-5 py-2 text-sm font-medium bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition"
               >
                 {isSubmitting ? 'Submitting...' : 'Submit Request'}

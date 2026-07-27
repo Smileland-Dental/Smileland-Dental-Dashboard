@@ -3,7 +3,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { AbsenceRequest } from '@/lib/types';
 import { Search, Filter, ChevronRight, Calendar, User as UserIcon } from 'lucide-react';
-import { useSort } from '@/hooks/custom-hooks';
+import { useSort } from '@/hooks/use-sort';
 import { SortIcon } from '@/components/ui/table-sort';
 import { getRequestStatusText } from './approval';
 import { StatusBadge } from '@/components/ui/status-badge'

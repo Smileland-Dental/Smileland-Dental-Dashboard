@@ -86,6 +86,13 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
 
   const [feedback, setFeedback] = useState({ isOpen: false, type: 'success' as 'success' | 'error', message: '' });
 
+  // Date Validation Logic
+  const isDateInvalid = Boolean(
+    formData.incident_start && 
+    formData.incident_end && 
+    new Date(formData.incident_end) < new Date(formData.incident_start)
+  );
+
   // Step 1: Verification Logic
   const handleLookupEmployee = async () => {
     if (!tempID) return;
@@ -123,6 +130,11 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
     e.preventDefault();
     if (!formData.employeeFirestoreID) {
       setError("Please verify an employee first.");
+      return;
+    }
+
+    if (isDateInvalid) {
+      setError("End date cannot be before start date.");
       return;
     }
 
@@ -346,13 +358,23 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Start Date</label>
-                    <input name="incident_start" type="date" required className="w-full p-3 bg-slate-50 rounded-xl border-none font-bold text-sm" onChange={handleChange} />
+                    <input name="incident_start" type="date" required value={formData.incident_start} className="w-full p-3 bg-slate-50 rounded-xl border-none font-bold text-sm" onChange={handleChange} />
                   </div>
                   <div className="space-y-1">
                     <label className="text-[10px] font-black text-slate-400 uppercase ml-1">End Date</label>
-                    <input name="incident_end" type="date" required className="w-full p-3 bg-slate-50 rounded-xl border-none font-bold text-sm" onChange={handleChange} />
+                    <input name="incident_end" type="date" required min={formData.incident_start || ""} value={formData.incident_end} className={`w-full p-3 rounded-xl border-none font-bold text-sm ${
+                        isDateInvalid ? 'bg-rose-50 text-rose-600 ring-2 ring-rose-500' : 'bg-slate-50'
+                      }`} onChange={handleChange} />
                   </div>
                 </div>
+
+                {/* Date Validation Error Message */}
+                {isDateInvalid && (
+                  <div className="flex items-center gap-2 p-3 bg-rose-50 rounded-xl text-rose-600 text-xs font-bold border border-rose-200 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>End date cannot be earlier than the start date.</span>
+                  </div>
+                )}
 
                 <div className="space-y-1">
                   <label className="text-[10px] font-black text-slate-400 uppercase ml-1">HR/Manager Comments</label>
@@ -361,7 +383,7 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
 
                 <button 
                   type="submit" 
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isDateInvalid}
                   className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl shadow-xl hover:bg-slate-800 disabled:bg-slate-200 transition-all flex items-center justify-center gap-2"
                 >
                   {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
