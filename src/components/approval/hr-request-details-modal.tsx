@@ -57,6 +57,12 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
 
   // Condition to show final notes text area (Automatically shows if it has text, or if button was clicked)
   const showFinalNotes = !!tempData.final_notes || isNotesForcedOpen;
+    // Date Validation Logic
+  const isDateInvalid = Boolean(
+    tempData.incident_start && 
+    tempData.incident_end && 
+    new Date(tempData.incident_end) < new Date(tempData.incident_start)
+  );
 
   return (
     <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4" onClick={onClose}>
@@ -107,6 +113,11 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
           className="py-2 px-8 space-y-6 max-h-[85vh] overflow-y-auto" 
           onSubmit={async (e) => {
             e.preventDefault();
+
+            if (isDateInvalid) {
+              console.error("End date cannot be before start date.");
+              return;
+            }
             
             try {
               if (deleteFiles.length > 0) {
@@ -259,12 +270,20 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                   <input 
                     type="date" 
                     value={tempData.incident_end || ""} 
+                    min={tempData.incident_start || ""}
                     onChange={e => setTempData({...tempData, incident_end: e.target.value})}
                     className={`w-full p-2 rounded-lg border-none text-xs font-bold text-slate-700
                     ${isChanged('incident_end') ? 'bg-rose-50 text-rose-900' : 'bg-zinc-100 text-slate-700'}`}
                   />
                 </div>
               </div>
+              {/* Date Validation Error Message */}
+              {isDateInvalid && (
+                <div className="flex items-center gap-2 p-3 bg-rose-50 rounded-xl text-rose-600 text-xs font-bold border border-rose-200 animate-in fade-in">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>End date cannot be earlier than the start date.</span>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-3 bg-slate-200/50 px-4 py-8 rounded-2xl border border-indigo-100 shadow-sm">
@@ -616,9 +635,9 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             )}
             <button 
               type="submit" 
-              disabled={isSaving || !hasChanges} 
+              disabled={isSaving || !hasChanges || isDateInvalid} 
               className={`flex-1 py-4 font-black rounded-2xl shadow-xl transition-all flex items-center justify-center gap-2 ${
-                !hasChanges 
+                (!hasChanges  || isDateInvalid)
                   ? 'bg-slate-200 text-slate-400 cursor-not-allowed' 
                   : 'bg-indigo-600 text-white hover:bg-indigo-700'
               }`}

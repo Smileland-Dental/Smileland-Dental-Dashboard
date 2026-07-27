@@ -11,7 +11,7 @@ import ProtectedRoute from '@/components/auth/ProtectedRoute';
 
 import { OFFICES } from "@/lib/constants";
 
-import { useSort } from '@/hooks/custom-hooks'
+import { useSort } from '@/hooks/use-sort'
 import { SortIcon } from '@/components/ui/table-sort'
 
 const itemsPerPage = 50;

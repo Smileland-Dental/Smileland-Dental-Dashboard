@@ -15,7 +15,7 @@ import { HRRequestDetailsModal } from "@/components/approval/hr-request-details-
 import { HRCreateAbsenceModal } from "@/components/forms/absence-request/hr-absence";
 import * as XLSX from 'xlsx';
 
-import { useSort } from '@/hooks/custom-hooks'
+import { useSort } from '@/hooks/use-sort'
 import { SortIcon } from '@/components/ui/table-sort'
 
 import { OFFICES } from '@/lib/constants';
