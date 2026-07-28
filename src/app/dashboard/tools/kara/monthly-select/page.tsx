@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { db } from '@/lib/firebase.config';
-import { collection, getDocs } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase.config';
+import { onAuthStateChanged } from 'firebase/auth';
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 
 const BLACK_BEAR_COLLECTION = 'simple-forms';
 
@@ -30,7 +31,6 @@ type SelectDestination = {
   path: string;
 };
 
-/** Month / Office 선택 후 이동할 페이지. 새 리포트는 여기에 항목을 추가하세요. */
 const SELECT_DESTINATIONS: SelectDestination[] = [
   { label: 'Monthly Summary', path: '/dashboard/tools/kara/monthly-summary' },
   { label: 'Monthly Production', path: '/dashboard/tools/kara/monthly' },
@@ -200,6 +200,7 @@ function DropdownOption({
 }
 
 export default function MonthlySelectPage() {
+  const [pageReady, setPageReady] = useState(false);
   const [docs, setDocs] = useState<FormDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -209,6 +210,58 @@ export default function MonthlySelectPage() {
   const [officeDropdownOpen, setOfficeDropdownOpen] = useState(false);
   const monthDropdownRef = useRef<HTMLDivElement>(null);
   const officeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'HR' &&
+          userData?.role !== 'Director'
+        ) {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
+    });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -273,6 +326,10 @@ export default function MonthlySelectPage() {
     if (!canNavigate) return;
     window.open(buildDestinationUrl(path, selectedMonth, selectedOffice), '_blank', 'noopener,noreferrer');
   };
+
+  if (!pageReady) {
+    return <main style={{ minHeight: '100vh', background: colors.pageBg }} />;
+  }
 
   return (
     <main style={{ minHeight: '100vh', background: colors.pageBg, padding: 32 }}>
@@ -380,3 +437,4 @@ export default function MonthlySelectPage() {
     </main>
   );
 }
+

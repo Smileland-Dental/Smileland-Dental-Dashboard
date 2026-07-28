@@ -8,10 +8,14 @@ import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'fireb
 const PINK_BEAR_COLLECTION = 'monthly report';
 const BLACK_BEAR_COLLECTION = 'simple-forms';
 const REVIEW_DAILY_GOAL = 2;
-const COLUMN_COUNT = 5;
-const COLUMN_HEADERS = ['Source', 'Rating', 'Name', 'Review', 'Response'];
-const DATA_COLUMN_MIN_WIDTHS = [90, 70, 160, 560, 700];
-const REVIEWS_TABLE_MIN_WIDTH = DATA_COLUMN_MIN_WIDTHS.reduce((sum, width) => sum + width, 0);
+const COLUMN_COUNT = 6;
+const LEGACY_REVIEW_COLUMN_COUNT = 5;
+const COLUMN_HEADERS = ['Source', 'Rating', 'Date', 'Name', 'Review', 'Response'];
+const DATA_COLUMN_MIN_WIDTHS = [90, 70, 100, 160, 560, 700];
+const REVIEWS_DATA_MIN_WIDTH = DATA_COLUMN_MIN_WIDTHS.reduce((sum, width) => sum + width, 0);
+const REVIEW_ACTION_COLUMN_WIDTH = 300;
+const REVIEWS_TABLE_MIN_WIDTH = REVIEWS_DATA_MIN_WIDTH + REVIEW_ACTION_COLUMN_WIDTH;
+const REVIEWS_SECTION_MAX_WIDTH = REVIEWS_TABLE_MIN_WIDTH;
 const ISSUE_COLUMN_COUNT = 2;
 const ISSUE_COLUMN_HEADERS = ['Date', 'Issue'];
 const ISSUE_COLUMN_MIN_WIDTHS = [100, 480];
@@ -19,7 +23,7 @@ const ISSUES_TABLE_MIN_WIDTH = ISSUE_COLUMN_MIN_WIDTHS.reduce((sum, width) => su
 const EQUIPMENT_COLUMN_COUNT = 3;
 const EQUIPMENT_COLUMN_HEADERS = ['Category', 'Description', 'Status'];
 const EQUIPMENT_COLUMN_MIN_WIDTHS = [395, 790, 395];
-const EQUIPMENT_TABLE_MIN_WIDTH = REVIEWS_TABLE_MIN_WIDTH;
+const EQUIPMENT_TABLE_MIN_WIDTH = EQUIPMENT_COLUMN_MIN_WIDTHS.reduce((sum, width) => sum + width, 0);
 const EQUIPMENT_ITEM_ROW_COLORS: Record<string, string> = {
   'DEM': '#dcfce7',
   'IT': '#e0f2fe',
@@ -33,6 +37,7 @@ type TableRow = {
   id: string;
   cells: string[];
   highlighted?: boolean;
+  deletedReview?: boolean;
 };
 
 function getEquipmentRowBackground(row: TableRow): string | undefined {
@@ -81,6 +86,7 @@ const addRowButtonStyle: React.CSSProperties = {
 type StoredTableRow = {
   cells?: string[];
   highlighted?: boolean;
+  deletedReview?: boolean;
 };
 
 type ReviewSummarySnapshot = {
@@ -139,6 +145,13 @@ function getFieldString(value: unknown): string {
 }
 
 const REVIEW_ROW_HIGHLIGHT_COLOR = '#fef9c3';
+const REVIEW_ROW_DELETED_COLOR = '#fee2e2';
+
+function getReviewRowBackground(row: TableRow): string | undefined {
+  if (row.deletedReview) return REVIEW_ROW_DELETED_COLOR;
+  if (row.highlighted) return REVIEW_ROW_HIGHLIGHT_COLOR;
+  return undefined;
+}
 
 function normalizeRows(raw: unknown, columnCount: number): TableRow[] {
   if (!Array.isArray(raw)) return [];
@@ -158,10 +171,43 @@ function normalizeRows(raw: unknown, columnCount: number): TableRow[] {
     .filter((row) => row.cells.some((cell) => cell.trim() !== ''));
 }
 
+function migrateLegacyReviewRowCells(rawCells: string[]): string[] {
+  if (rawCells.length !== LEGACY_REVIEW_COLUMN_COUNT) return rawCells;
+  return [
+    rawCells[0] ?? '',
+    rawCells[1] ?? '',
+    '',
+    rawCells[2] ?? '',
+    rawCells[3] ?? '',
+    rawCells[4] ?? '',
+  ];
+}
+
+function normalizeReviewRows(raw: unknown): TableRow[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((item) => {
+      const rawCells = Array.isArray((item as StoredTableRow).cells)
+        ? migrateLegacyReviewRowCells((item as StoredTableRow).cells!.map((cell) => getFieldString(cell)))
+        : [];
+      const cells = Array.from({ length: COLUMN_COUNT }, (_, index) => getFieldString(rawCells[index]));
+      const highlighted = !!(item as StoredTableRow).highlighted;
+      const deletedReview = !!(item as StoredTableRow).deletedReview;
+      return {
+        id: crypto.randomUUID(),
+        cells,
+        ...(highlighted ? { highlighted: true } : {}),
+        ...(deletedReview ? { deletedReview: true } : {}),
+      };
+    })
+    .filter((row) => row.cells.some((cell) => cell.trim() !== ''));
+}
+
 function serializeRows(rows: TableRow[]): StoredTableRow[] {
-  return rows.map(({ cells, highlighted }) => {
+  return rows.map(({ cells, highlighted, deletedReview }) => {
     const row: StoredTableRow = { cells: [...cells] };
     if (highlighted) row.highlighted = true;
+    if (deletedReview) row.deletedReview = true;
     return row;
   });
 }
@@ -378,6 +424,10 @@ type EditableDataTableProps = {
   getRowBackground?: (row: TableRow) => string | undefined;
   enableRowHighlight?: boolean;
   onToggleHighlight?: (rowIndex: number) => void;
+  onToggleDeletedReview?: (rowIndex: number) => void;
+  getColumnInputType?: (colIndex: number) => 'text' | 'date';
+  actionColumnWidth?: number;
+  disableHorizontalScroll?: boolean;
 };
 
 function EditableDataTable({
@@ -393,15 +443,26 @@ function EditableDataTable({
   getRowBackground,
   enableRowHighlight = false,
   onToggleHighlight,
+  onToggleDeletedReview,
+  getColumnInputType,
+  actionColumnWidth = REVIEW_ACTION_COLUMN_WIDTH,
+  disableHorizontalScroll = false,
 }: EditableDataTableProps) {
   if (!isEditing && rows.length === 0) return null;
 
-  const tableMinWidth = columnMinWidths
+  const dataMinWidth = columnMinWidths
     ? columnMinWidths.reduce<number>((sum, width) => sum + (width ?? 0), 0)
     : 480;
+  const tableMinWidth = dataMinWidth + (isEditing && enableRowHighlight ? actionColumnWidth : 0);
 
   return (
-    <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+    <div
+      style={{
+        overflowX: disableHorizontalScroll ? 'visible' : 'auto',
+        border: '1px solid #e5e7eb',
+        borderRadius: 8,
+      }}
+    >
       <table style={{ width: '100%', borderCollapse: 'collapse', minWidth: tableMinWidth || 480 }}>
         <thead>
           <tr>
@@ -431,7 +492,8 @@ function EditableDataTable({
                   textAlign: 'left',
                   fontWeight: 700,
                   fontSize: 14,
-                  width: enableRowHighlight ? 160 : 80,
+                  width: enableRowHighlight ? actionColumnWidth : 80,
+                  minWidth: enableRowHighlight ? actionColumnWidth : 80,
                 }}
               >
                 Action
@@ -455,9 +517,8 @@ function EditableDataTable({
             </tr>
           )}
           {rows.map((row, rowIndex) => {
-            const rowBackground = row.highlighted
-              ? REVIEW_ROW_HIGHLIGHT_COLOR
-              : getRowBackground?.(row);
+            const rowBackground = getRowBackground?.(row)
+              ?? (enableRowHighlight ? getReviewRowBackground(row) : undefined);
 
             return (
             <tr key={row.id}>
@@ -475,7 +536,7 @@ function EditableDataTable({
                 >
                   {isEditing ? (
                     <input
-                      type="text"
+                      type={getColumnInputType?.(colIndex) ?? 'text'}
                       value={cell}
                       onChange={(e) => onCellChange(rowIndex, colIndex, e.target.value)}
                       onPaste={(e) => onPaste(e, rowIndex, colIndex)}
@@ -513,7 +574,25 @@ function EditableDataTable({
                           whiteSpace: 'nowrap',
                         }}
                       >
-                        {row.highlighted ? 'Unmark' : 'Highlight'}
+                        {row.highlighted ? 'Unmark' : 'Mentioned'}
+                      </button>
+                    )}
+                    {enableRowHighlight && (
+                      <button
+                        type="button"
+                        onClick={() => onToggleDeletedReview?.(rowIndex)}
+                        style={{
+                          border: row.deletedReview ? '1px solid #f87171' : '1px solid #fecaca',
+                          borderRadius: 6,
+                          padding: '6px 10px',
+                          background: row.deletedReview ? '#fca5a5' : '#fff',
+                          color: row.deletedReview ? '#7f1d1d' : '#b91c1c',
+                          fontSize: 13,
+                          cursor: 'pointer',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {row.deletedReview ? 'Unmark' : 'Deleted Review'}
                       </button>
                     )}
                     <button
@@ -577,6 +656,7 @@ function normalizeCellValue(value: unknown): string {
 
 function countByPlatformAndRating(rows: TableRow[], platform: ReviewPlatform, rating: string): number {
   return rows.filter((row) => {
+    if (row.deletedReview) return false;
     const column1 = String(row.cells[0] ?? '').trim().toLowerCase();
     const column2 = normalizeCellValue(row.cells[1]);
     return column1 === platform && column2 === rating;
@@ -585,6 +665,7 @@ function countByPlatformAndRating(rows: TableRow[], platform: ReviewPlatform, ra
 
 function countRepugenByColumn2Label(rows: TableRow[], label: string): number {
   return rows.filter((row) => {
+    if (row.deletedReview) return false;
     const column1 = String(row.cells[0] ?? '').trim().toLowerCase();
     const column2 = String(row.cells[1] ?? '').trim();
     return column1 === 'repugen' && column2 === label;
@@ -1091,7 +1172,7 @@ function ReportTablePageContent() {
   };
 
   const applyReportData = (data: ReportDoc | null) => {
-    const nextRows = normalizeRows(data?.reviews?.rows, COLUMN_COUNT);
+    const nextRows = normalizeReviewRows(data?.reviews?.rows);
     const nextIssueRows = normalizeRows(data?.issues?.rows, ISSUE_COLUMN_COUNT);
     const nextEquipmentRows = normalizeRows(data?.equipment?.rows, EQUIPMENT_COLUMN_COUNT);
     const nextFacebookRecommended = getFieldString(data?.reviews?.facebookRecommended);
@@ -1290,9 +1371,29 @@ function ReportTablePageContent() {
 
   const handleToggleReviewHighlight = (rowIndex: number) => {
     setDraftRows((prev) =>
-      prev.map((row, index) =>
-        index === rowIndex ? { ...row, highlighted: !row.highlighted } : row
-      )
+      prev.map((row, index) => {
+        if (index !== rowIndex) return row;
+        const highlighted = !row.highlighted;
+        return {
+          ...row,
+          highlighted,
+          ...(highlighted ? { deletedReview: false } : {}),
+        };
+      })
+    );
+  };
+
+  const handleToggleDeletedReview = (rowIndex: number) => {
+    setDraftRows((prev) =>
+      prev.map((row, index) => {
+        if (index !== rowIndex) return row;
+        const deletedReview = !row.deletedReview;
+        return {
+          ...row,
+          deletedReview,
+          ...(deletedReview ? { highlighted: false } : {}),
+        };
+      })
     );
   };
 
@@ -1317,7 +1418,11 @@ function ReportTablePageContent() {
     SECTION_OPTIONS.find((option) => option.value === activeSection)?.label ?? 'Review';
 
   const sectionMaxWidth =
-    activeSection === 'reviews' || activeSection === 'equipment' ? 1700 : 1200;
+    activeSection === 'reviews'
+      ? REVIEWS_SECTION_MAX_WIDTH
+      : activeSection === 'equipment'
+        ? 1700
+        : 1200;
 
   return (
     <main style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>
@@ -1505,6 +1610,9 @@ function ReportTablePageContent() {
                 emptyEditMessage="Please add a row using the Add Row button."
                 enableRowHighlight
                 onToggleHighlight={handleToggleReviewHighlight}
+                onToggleDeletedReview={handleToggleDeletedReview}
+                getRowBackground={getReviewRowBackground}
+                disableHorizontalScroll
               />
             )}
           </div>
@@ -1568,4 +1676,3 @@ function ReportTablePageContent() {
     </main>
   );
 }
-

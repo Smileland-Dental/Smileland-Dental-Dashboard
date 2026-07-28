@@ -1,8 +1,9 @@
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { db } from '@/lib/firebase.config';
-import { collection, doc, getDocs, increment, serverTimestamp, setDoc } from 'firebase/firestore';
+import { auth, db } from '@/lib/firebase.config';
+import { onAuthStateChanged } from 'firebase/auth';
+import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
 import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer';
 
 type ReportRow = {
@@ -147,8 +148,6 @@ type FormDoc = {
   productionSideMetrics?: ProductionSideMetrics;
   edited?: boolean;
   editedAt?: unknown;
-  pdfSaved?: boolean;
-  pdfSavedAt?: unknown;
 };
 
 const TABLE_HEADERS = [
@@ -551,11 +550,17 @@ function createSubmittedReportPDFDocument(props: {
     ...productionSideMetrics,
   };
   const visitsPdfHeaders = PRODUCTION_SIDE_METRIC_ROWS.map(({ label }) => label);
-  const visitsPdfValues = PRODUCTION_SIDE_METRIC_ROWS.map(({ key }) =>
-    key === 'seenPercent'
-      ? safeStr(formatSeenPercentDisplay(computeSeenPercentRounded(sideMetrics.scheduled, sideMetrics.seen)), 40) || ''
-      : safeStr(sideMetrics[key], 40) || ''
-  );
+  const visitsScheduledComputed = computeScheduledFromNoShowAndSeen(sideMetrics.noShow, sideMetrics.seen);
+  const visitsPdfValues = PRODUCTION_SIDE_METRIC_ROWS.map(({ key }) => {
+    if (key === 'scheduled') return safeStr(visitsScheduledComputed, 40) || '';
+    if (key === 'seenPercent') {
+      return (
+        safeStr(formatSeenPercentDisplay(computeSeenPercentRounded(visitsScheduledComputed, sideMetrics.seen)), 40) ||
+        ''
+      );
+    }
+    return safeStr(sideMetrics[key], 40) || '';
+  });
   const productionSideMetricsTable = createPdfTable(s, visitsPdfHeaders, [visitsPdfValues], 'production-side-metrics');
 
   const productionTotalForPdf = formatRoundedNumber(
@@ -747,6 +752,16 @@ function formatRoundedNumber(n: number): string {
   return (cents / 100).toFixed(2);
 }
 
+function formatNumberWithThousandSeparator(n: number): string {
+  const rounded = formatRoundedNumber(n);
+  const negative = rounded.startsWith('-');
+  const raw = negative ? rounded.slice(1) : rounded;
+  const [intPart, decPart] = raw.split('.');
+  const withCommas = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const body = decPart != null ? `${withCommas}.${decPart}` : withCommas;
+  return negative ? `-${body}` : body;
+}
+
 function formatMoneyValue(value: unknown): string {
   const s = String(value ?? '').trim();
   if (!s || s === '-') return '';
@@ -889,7 +904,7 @@ function formatCurrencyLabel(value: unknown): string {
     const core = s.startsWith('$') ? s.slice(1).trim() : s;
     return core ? (s.startsWith('$') ? s : `$${core}`) : '';
   }
-  return `$${formatRoundedNumber(n)}`;
+  return `$${formatNumberWithThousandSeparator(n)}`;
 }
 
 function formatSeenPercentDisplay(computed: string): string {
@@ -899,6 +914,13 @@ function formatSeenPercentDisplay(computed: string): string {
   return `${n}%`;
 }
 
+function computeScheduledFromNoShowAndSeen(noShowRaw: unknown, seenRaw: unknown): string {
+  const noShowStr = String(noShowRaw ?? '').trim();
+  const seenStr = String(seenRaw ?? '').trim();
+  if (noShowStr === '' && seenStr === '') return '';
+  return String(parseNumber(noShowRaw) + parseNumber(seenRaw));
+}
+
 function computeSeenPercentRounded(scheduledRaw: unknown, seenRaw: unknown): string {
   const sch = parseNumber(scheduledRaw);
   if (sch === 0) return '';
@@ -906,8 +928,13 @@ function computeSeenPercentRounded(scheduledRaw: unknown, seenRaw: unknown): str
   return String(Math.round((seen / sch) * 100));
 }
 
+function scheduledReadOnlyInputValueFromMetrics(m: ProductionSideMetrics | undefined): string {
+  return computeScheduledFromNoShowAndSeen(m?.noShow, m?.seen);
+}
+
 function seenPercentReadOnlyInputValueFromMetrics(m: ProductionSideMetrics | undefined): string {
-  const s = computeSeenPercentRounded(m?.scheduled, m?.seen);
+  const scheduled = computeScheduledFromNoShowAndSeen(m?.noShow, m?.seen);
+  const s = computeSeenPercentRounded(scheduled, m?.seen);
   return s === '' ? '' : `${s}%`;
 }
 
@@ -962,12 +989,6 @@ const FILTER_SELECT_STYLE: React.CSSProperties = {
   background: '#fff',
   fontWeight: 600,
 };
-
-function toFirestoreKey(value: string | undefined): string {
-  const raw = String(value ?? '').trim();
-  if (!raw) return 'Unknown';
-  return raw.replace(/[.#$/\[\]]/g, '_');
-}
 
 function getDurationLabel(start: string | undefined, end: string | undefined): string {
   if (!start || !end) return '';
@@ -1127,7 +1148,6 @@ function computeTableRows(rows: TableRow[]): TableRow[] {
       String(row.orangeJuiceNew ?? '').trim() !== '' || String(row.orangeJuiceReturn ?? '').trim() !== '';
     const coffeeTotal = coffeeHasInput ? String(parseNumber(row.coffeeNew) + parseNumber(row.coffeeReturn)) : '';
     const orangeJuiceTotal = orangeHasInput ? String(parseNumber(row.orangeJuiceNew) + parseNumber(row.orangeJuiceReturn)) : '';
-    /** CRA (Billable) = CRA Total − CRA (Not Billable); CRA Total은 New+Return 합. */
     const coffeeYes = coffeeTotal !== '' ? String(parseNumber(coffeeTotal) - parseNumber(row.coffeeNo)) : '';
     return {
       ...row,
@@ -1207,6 +1227,7 @@ function computeCoffeeActualTotals(values: Partial<Record<keyof TableTotals, str
 }
 
 export default function ViewPage() {
+  const [pageReady, setPageReady] = useState(false);
   const [docs, setDocs] = useState<FormDoc[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');
   const [selectedYearMonth, setSelectedYearMonth] = useState('');
@@ -1220,8 +1241,60 @@ export default function ViewPage() {
   const [saveMessage, setSaveMessage] = useState('');
 
   useEffect(() => {
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (userData?.role !== 'HR' && userData?.role !== 'Director') {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
+    });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pageReady) return;
+
     const load = async () => {
       try {
+        setLoading(true);
         const snap = await getDocs(collection(db, 'simple-forms'));
         const loaded = snap.docs
           .map((d) => {
@@ -1238,14 +1311,14 @@ export default function ViewPage() {
           .sort((a, b) => `${b.date ?? ''}_${b.location ?? ''}`.localeCompare(`${a.date ?? ''}_${a.location ?? ''}`));
         setDocs(loaded);
       } catch (e: any) {
-        setError('Try again please.');
+        setError('Unable to access this page.');
       } finally {
         setLoading(false);
       }
     };
 
     load();
-  }, []);
+  }, [pageReady]);
 
   const filtersReady = selectedYearMonth !== '' && selectedOffice !== '';
 
@@ -1386,12 +1459,6 @@ export default function ViewPage() {
     setIsEditing(false);
     setSaveMessage('');
   }, [selectedDoc]);
-  useEffect(() => {
-    if (selectedDoc?.pdfSaved && isEditing) {
-      setIsEditing(false);
-      setSaveMessage('You cannot edit anymore.');
-    }
-  }, [selectedDoc?.pdfSaved, isEditing]);
 
   const updateDraftField = (field: keyof FormDoc, value: string) => {
     const nextValue =
@@ -1499,7 +1566,7 @@ export default function ViewPage() {
   };
 
   const updateProductionSideMetricField = (field: keyof ProductionSideMetrics, value: string) => {
-    if (field === 'seenPercent') return;
+    if (field === 'seenPercent' || field === 'scheduled') return;
     setDraft((prev) => {
       if (!prev) return prev;
       return {
@@ -1577,13 +1644,16 @@ export default function ViewPage() {
         ...createEmptyProductionSideMetrics(),
         ...(draft.productionSideMetrics || {}),
       };
-      const seenPercentComputed = computeSeenPercentRounded(draftSideMetrics.scheduled, draftSideMetrics.seen);
+      const noShow = String(draftSideMetrics.noShow ?? '');
+      const seen = String(draftSideMetrics.seen ?? '');
+      const scheduledComputed = computeScheduledFromNoShowAndSeen(noShow, seen);
+      const seenPercentComputed = computeSeenPercentRounded(scheduledComputed, seen);
       const productionSideMetrics = {
         add: String(draftSideMetrics.add ?? ''),
-        noShow: String(draftSideMetrics.noShow ?? ''),
-        scheduled: String(draftSideMetrics.scheduled ?? ''),
-        seen: String(draftSideMetrics.seen ?? ''),
-        seenPercent: seenPercentComputed,     
+        noShow,
+        scheduled: scheduledComputed,
+        seen,
+        seenPercent: seenPercentComputed,
         referral: String(draftSideMetrics.referral ?? ''),
         postcard: String(draftSideMetrics.postcard ?? ''),
       };
@@ -1639,7 +1709,7 @@ export default function ViewPage() {
       setIsEditing(false);
       setSaveMessage('Saved.');
     } catch (e: any) {
-      setSaveMessage(`저장 실패: ${e?.message || '알 수 없는 오류'}`);
+      setSaveMessage('Failed to save.');
     }
   };
   const tableTotals = useMemo(() => {
@@ -1733,9 +1803,16 @@ export default function ViewPage() {
     const stored = isEditing ? draft?.hoursOpen : selectedDoc?.hoursOpen;
     return formatHoursOpenLabel(stored);
   })();
-  const visibleProductionSideMetrics = {
+  const visibleProductionSideMetricsBase = {
     ...createEmptyProductionSideMetrics(),
     ...(isEditing ? draft?.productionSideMetrics || {} : selectedDoc?.productionSideMetrics || {}),
+  };
+  const visibleProductionSideMetrics = {
+    ...visibleProductionSideMetricsBase,
+    scheduled: computeScheduledFromNoShowAndSeen(
+      visibleProductionSideMetricsBase.noShow,
+      visibleProductionSideMetricsBase.seen
+    ),
   };
 
   const handleAddReportRow = () => {
@@ -1763,7 +1840,7 @@ export default function ViewPage() {
     try {
       setIsPdfSaving(true);
       setSaveMessage('');
-      const generatedDate = new Date().toLocaleDateString('ko-KR');
+      const generatedDate = new Date().toLocaleDateString('en-US');
       const pdfDoc = createSubmittedReportPDFDocument({
         date: selectedDoc.date || '',
         location: selectedDoc.location || '',
@@ -1810,66 +1887,6 @@ export default function ViewPage() {
       link.download = filename;
       link.click();
       URL.revokeObjectURL(downloadUrl);
-
-      const monthKey = getMonthKey(selectedDoc.date);
-      const locationKey = toFirestoreKey(selectedDoc.location);
-      // const monthlyDocId = `${monthKey}-${locationKey}`;
-      // const monthlyRef = doc(db, 'simple-forms monthly', monthlyDocId);
-      const grandTotalValue = parseNumber(visibleGrandTotal);
-      const coffeeSalesValue = parseNumber(visibleCoffeeSales);
-      const salesWithoutCoffeeValue = parseNumber(visibleSalesWithoutCoffee);
-      const paperAtOrangeJuiceValue = parseNumber(visiblePaperAtOrangeJuice);
-      const paperAtTeaValue = parseNumber(visiblePaperAtTea);
-      const justPaperValue = parseNumber(visibleJustPaper);
-      const prophyTotalValue = parseNumber(visibleProphyTotal);
-      const actualOrangeNewValue = parseNumber(visibleCoffeeActualTotals.orangeJuiceNew);
-      const actualOrangeReturnValue = parseNumber(visibleCoffeeActualTotals.orangeJuiceReturn);
-      const pineappleValue = parseNumber(visiblePineappleValue);
-      const roseValue = parseNumber(visibleRoseValue);
-/*
-      await setDoc(
-        monthlyRef,
-        {
-          docId: monthlyDocId,
-          month: monthKey,
-          location: String(selectedDoc.location ?? '').trim() || 'Unknown',
-          locationKey,
-          updatedAt: serverTimestamp(),
-          docCount: increment(1),
-          grandTotal: increment(grandTotalValue),
-          coffeeSales: increment(coffeeSalesValue),
-          salesWithoutCoffee: increment(salesWithoutCoffeeValue),
-          paperAtOrangeJuice: increment(paperAtOrangeJuiceValue),
-          paperAtTea: increment(paperAtTeaValue),
-          justPaper: increment(justPaperValue),
-          prophyTotal: increment(prophyTotalValue),
-          actualOrangeJuiceNew: increment(actualOrangeNewValue),
-          actualOrangeJuiceReturn: increment(actualOrangeReturnValue),
-          pineapple: increment(pineappleValue),
-          rose: increment(roseValue),
-        },
-        { merge: true }
-      );
-*/
-      await setDoc(
-        doc(db, 'simple-forms', selectedDoc.id),
-        {
-          pdfSaved: true,
-          pdfSavedAt: serverTimestamp(),
-        },
-        { merge: true }
-      );
-      setDocs((prev) =>
-        prev.map((item) =>
-          item.id === selectedDoc.id
-            ? {
-                ...item,
-                pdfSaved: true,
-                pdfSavedAt: new Date().toISOString(),
-              }
-            : item
-        )
-      );
       setSaveMessage('Downloaded PDF.');
     } catch (e: any) {
       setSaveMessage('Cannot download PDF.');
@@ -1877,6 +1894,10 @@ export default function ViewPage() {
       setIsPdfSaving(false);
     }
   };
+
+  if (!pageReady) {
+    return null;
+  }
 
   return (
     <main className="d-page-main" style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>
@@ -1932,47 +1953,42 @@ export default function ViewPage() {
                 </>
               ) : (
                 <>
-                  {!selectedDoc.pdfSaved && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (selectedDoc.pdfSaved) return;
-                        setIsEditing(true);
-                        setSaveMessage('');
-                      }}
-                      style={{
-                        height: 36,
-                        padding: '0 14px',
-                        borderRadius: 8,
-                        border: '1px solid #2563eb',
-                        background: '#2563eb',
-                        color: '#fff',
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      Edit
-                    </button>
-                  )}
-                  {!selectedDoc.pdfSaved && (
-                    <button
-                      type="button"
-                      onClick={handleDownloadPdf}
-                      disabled={isPdfSaving}
-                      style={{
-                        height: 36,
-                        padding: '0 14px',
-                        borderRadius: 8,
-                        border: '1px solid #7c3aed',
-                        background: isPdfSaving ? '#a78bfa' : '#7c3aed',
-                        color: '#fff',
-                        fontWeight: 700,
-                        cursor: isPdfSaving ? 'not-allowed' : 'pointer',
-                      }}
-                    >
-                      {isPdfSaving ? 'Generating...' : 'Generate PDF'}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsEditing(true);
+                      setSaveMessage('');
+                    }}
+                    style={{
+                      height: 36,
+                      padding: '0 14px',
+                      borderRadius: 8,
+                      border: '1px solid #2563eb',
+                      background: '#2563eb',
+                      color: '#fff',
+                      fontWeight: 700,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleDownloadPdf}
+                    disabled={isPdfSaving}
+                    style={{
+                      height: 36,
+                      padding: '0 14px',
+                      borderRadius: 8,
+                      border: '1px solid #7c3aed',
+                      background: isPdfSaving ? '#a78bfa' : '#7c3aed',
+                      color: '#fff',
+                      fontWeight: 700,
+                      cursor: isPdfSaving ? 'not-allowed' : 'pointer',
+                    }}
+                  >
+                    {isPdfSaving ? 'Generating...' : 'Generate PDF'}
+                  </button>
                 </>
               )}
             </div>
@@ -2035,15 +2051,13 @@ export default function ViewPage() {
                 )}
               </div>
               {filtersReady && filteredDocs.length === 0 && (
-                <div style={{ padding: 12, color: '#6b7280' }}>선택한 조건에 해당하는 데이터가 없습니다.</div>
+                <div style={{ padding: 12, color: '#6b7280' }}>There is no data yet.</div>
               )}
               {filtersReady &&
                 filteredDocs.map((d, docIdx) => {
                   const active = d.id === selectedId;
-                  const statusLabel = d.pdfSaved ? 'Completed' : d.edited ? 'Editing' : '';
-                  const statusStyle = d.pdfSaved
-                    ? { background: '#dcfce7', color: '#166534', border: '1px solid #86efac' }
-                    : { background: '#dbeafe', color: '#1d4ed8', border: '1px solid #93c5fd' };
+                  const statusLabel = d.edited ? 'Editing' : '';
+                  const statusStyle = { background: '#dbeafe', color: '#1d4ed8', border: '1px solid #93c5fd' };
                   const isLastDocRow = docIdx === filteredDocs.length - 1;
                   return (
                     <button
@@ -2439,8 +2453,31 @@ export default function ViewPage() {
                                       />
                                     ) : (
                                       formatSeenPercentDisplay(
-                                        computeSeenPercentRounded(visibleProductionSideMetrics.scheduled, visibleProductionSideMetrics.seen)
+                                        computeSeenPercentRounded(
+                                          visibleProductionSideMetrics.scheduled,
+                                          visibleProductionSideMetrics.seen
+                                        )
                                       )
+                                    )
+                                  ) : key === 'scheduled' ? (
+                                    isEditing ? (
+                                      <input
+                                        type="text"
+                                        readOnly
+                                        value={scheduledReadOnlyInputValueFromMetrics(draftSideMetricsMerged)}
+                                        style={{
+                                          width: '100%',
+                                          minWidth: 100,
+                                          height: 30,
+                                          border: '1px solid #d1d5db',
+                                          borderRadius: 6,
+                                          padding: '0 8px',
+                                          background: '#f3f4f6',
+                                          color: '#6b7280',
+                                        }}
+                                      />
+                                    ) : (
+                                      String(visibleProductionSideMetrics.scheduled ?? '').trim() || ''
                                     )
                                   ) : isEditing ? (
                                     <input

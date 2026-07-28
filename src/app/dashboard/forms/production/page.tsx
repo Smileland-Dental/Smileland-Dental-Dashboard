@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
+import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { db } from '@/lib/firebase.config';
 import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 
@@ -114,34 +115,10 @@ const POSITION_OPTIONS = ['Doctor', 'RDA', 'DA', 'Extern', 'Working Interview'];
 const COFFEE_POSITION_OPTIONS = ['Doctor'];
 const FIXED_REASON_OPTIONS = ['Declined/DDP/Pt Left', 'Not Due/Freq', 'Medical Clearance', 'Furture TX/FMS', 'Courtesy, Not Billable', 'Mistakenly Done, Not Billable', 'Uncooperative/Re-eval', 'Not Documented', 'Age Limit/No teeth', 'Not Complete/Filled out'];
 const LOCATION_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia', 'Crowns', 'Endo'];
+const REQUIRED_ACCESS = 'production';
 
-/** 브라우저 number 스텝 화살표 제거 — 직접 입력만 (WebKit / Firefox). */
-const NO_NUMBER_SPINNER_CLASS = 'p-page-number-no-spinner';
-const NO_NUMBER_SPINNER_CSS = `
-.${NO_NUMBER_SPINNER_CLASS}::-webkit-outer-spin-button,
-.${NO_NUMBER_SPINNER_CLASS}::-webkit-inner-spin-button {
-  -webkit-appearance: none;
-  margin: 0;
-}
-.${NO_NUMBER_SPINNER_CLASS}[type="number"] {
-  -moz-appearance: textfield;
-  appearance: textfield;
-}
-`;
 const READONLY_FIELDS: Array<keyof TableRow> = ['coffeeTotal', 'orangeJuiceTotal', 'coffeeYes'];
 const READONLY_SUGAR_FIELDS: Array<keyof SugarRow> = ['sugarGood'];
-const NUMERIC_FIELDS: Array<keyof TableRow> = [
-  'sales',
-  'coffeeNew',
-  'coffeeReturn',
-  'coffeeTotal',
-  'coffeeNo',
-  'renderedCoffee',
-  'coffeeYes',
-  'orangeJuiceNew',
-  'orangeJuiceReturn',
-  'orangeJuiceTotal',
-];
 const TOTAL_TARGET_FIELDS: Array<keyof TableRow> = [
   'sales',
   'coffeeNew',
@@ -157,13 +134,67 @@ const TOTAL_TARGET_FIELDS: Array<keyof TableRow> = [
 const SUGAR_TOTAL_TARGET_FIELDS: Array<keyof SugarRow> = ['sugar', 'sugarGood', 'sugarBad', 'paper'];
 
 function parseNumber(value: string): number {
-  const n = Number(value);
+  const n = Number(String(value).replace(/,/g, ''));
   return Number.isFinite(n) ? n : 0;
+}
+
+/** 표시용 천 단위 콤마 (저장값은 콤마 없는 숫자 문자열 유지). */
+function formatWithCommas(value: string | number): string {
+  const raw = String(value ?? '').replace(/,/g, '').trim();
+  if (raw === '') return '';
+
+  const isNegative = raw.startsWith('-');
+  const body = isNegative ? raw.slice(1) : raw;
+  if (body === '' || body === '.') {
+    return isNegative ? `-${body}` : body;
+  }
+
+  const [intPartRaw, ...decParts] = body.split('.');
+  const intPart = intPartRaw.replace(/\D/g, '');
+  const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const hasDecimal = decParts.length > 0;
+  const decPart = hasDecimal ? decParts.join('').replace(/\D/g, '') : '';
+  const result = hasDecimal ? `${formattedInt}.${decPart}` : formattedInt;
+  return isNegative ? `-${result}` : result;
+}
+
+function sanitizeNumberInput(raw: string, allowDecimal: boolean): string {
+  let s = raw.replace(/,/g, '');
+  if (allowDecimal) {
+    s = s.replace(/[^\d.]/g, '');
+    const firstDot = s.indexOf('.');
+    if (firstDot !== -1) {
+      s = s.slice(0, firstDot + 1) + s.slice(firstDot + 1).replace(/\./g, '');
+    }
+  } else {
+    s = s.replace(/\D/g, '');
+  }
+  return s;
 }
 
 /** 달러 금액: 감산·곱셈 후 부동소수점 잔여 자릿수 정리 (센트 단위). */
 function roundToCents(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** 달러 금액을 항상 소수 둘째 자리 문자열로 (예: 10.5 → "10.50"). */
+function toMoneyString(n: number): string {
+  return roundToCents(n).toFixed(2);
+}
+
+/** 달러 금액 표시용 천 단위 콤마 + 소수 둘째 자리. */
+function formatMoneyWithCommas(value: string | number): string {
+  const raw = String(value ?? '').replace(/,/g, '').trim();
+  if (raw === '') return '';
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return formatWithCommas(value);
+
+  const fixed = toMoneyString(n);
+  const isNegative = fixed.startsWith('-');
+  const body = isNegative ? fixed.slice(1) : fixed;
+  const [intPart, decPart] = body.split('.');
+  const formattedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return `${isNegative ? '-' : ''}${formattedInt}.${decPart}`;
 }
 
 /** 건수 집계: 합·차 후 부동소수점 잔여 자릿수 정리 (정수). */
@@ -414,7 +445,6 @@ function hasAnyDataToSave(
 ) {
   const hasMainFormValue =
     form.reasonIfLate.trim() !== '' ||
-    form.submittedDateTime.trim() !== '' ||
     form.grandTotal.trim() !== '' ||
     form.coffeeSales.trim() !== '' ||
     form.salesWithoutCoffee.trim() !== '' ||
@@ -476,16 +506,17 @@ function DollarPrefixedNumberInput({
   readOnly,
   height = 40,
   borderRadius = 8,
-  step,
 }: {
   value: string;
-  onChange?: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  onChange?: (value: string) => void;
   readOnly?: boolean;
   height?: number;
   borderRadius?: number;
-  step?: string;
 }) {
+  const [focused, setFocused] = useState(false);
   const readOnlyBg = readOnly ? '#f3f4f6' : '#fff';
+  const displayValue = readOnly || !focused ? formatMoneyWithCommas(value) : value;
+
   return (
     <div
       style={{
@@ -503,12 +534,26 @@ function DollarPrefixedNumberInput({
     >
       <span style={{ color: '#6b7280', fontWeight: 600, fontSize: 13, flexShrink: 0, userSelect: 'none' }}>$</span>
       <input
-        type="number"
+        type="text"
         inputMode="decimal"
-        step={step}
-        className={NO_NUMBER_SPINNER_CLASS}
-        value={value}
-        onChange={onChange}
+        value={displayValue}
+        onChange={(e) => {
+          let next = sanitizeNumberInput(e.target.value, true);
+          const dot = next.indexOf('.');
+          if (dot !== -1) {
+            next = next.slice(0, dot + 1) + next.slice(dot + 1, dot + 3);
+          }
+          onChange?.(next);
+        }}
+        onFocus={() => setFocused(true)}
+        onBlur={() => {
+          setFocused(false);
+          if (!onChange || value.trim() === '') return;
+          const normalized = toMoneyString(parseNumber(value));
+          if (normalized !== value.replace(/,/g, '')) {
+            onChange(normalized);
+          }
+        }}
         readOnly={readOnly}
         style={{
           flex: 1,
@@ -522,6 +567,47 @@ function DollarPrefixedNumberInput({
         }}
       />
     </div>
+  );
+}
+
+function FormattedNumberInput({
+  value,
+  onChange,
+  readOnly,
+  height = 40,
+  borderRadius = 8,
+  style,
+}: {
+  value: string;
+  onChange?: (value: string) => void;
+  readOnly?: boolean;
+  height?: number;
+  borderRadius?: number;
+  style?: React.CSSProperties;
+}) {
+  const [focused, setFocused] = useState(false);
+  const displayValue = readOnly || !focused ? formatWithCommas(value) : value;
+
+  return (
+    <input
+      type="text"
+      inputMode="numeric"
+      value={displayValue}
+      readOnly={readOnly}
+      onChange={(e) => onChange?.(sanitizeNumberInput(e.target.value, false))}
+      onFocus={() => setFocused(true)}
+      onBlur={() => setFocused(false)}
+      style={{
+        width: '100%',
+        height,
+        padding: '0 10px',
+        border: '1px solid #d1d5db',
+        borderRadius,
+        background: readOnly ? '#f3f4f6' : '#fff',
+        color: readOnly ? '#6b7280' : '#111827',
+        ...style,
+      }}
+    />
   );
 }
 
@@ -543,6 +629,10 @@ export default function Page() {
   });
   const [reportRows, setReportRows] = useState<ReportRow[]>([createEmptyReportRow()]);
   const [status, setStatus] = useState('');
+  const [submitFeedback, setSubmitFeedback] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
   const lastSavedKeyRef = useRef('');
   const [tableRows, setTableRows] = useState<TableRow[]>(
     Array.from({ length: 4 }, () => createEmptyRow())
@@ -553,8 +643,68 @@ export default function Page() {
   const [reasonRows, setReasonRows] = useState<ReasonRow[]>(
     Array.from({ length: 10 }, (_, i) => createEmptyReasonRow(i))
   );
-  /** Firestore 문서에 submittedDateTime이 있으면 true — Date/Office만 변경 가능 */
   const [docSubmitLock, setDocSubmitLock] = useState(false);
+  const [locationOptions, setLocationOptions] = useState<string[]>([]);
+  const [pageAccess, setPageAccess] = useState<'loading' | 'allowed' | 'denied' | 'unauthenticated'>(
+    'loading'
+  );
+
+  useEffect(() => {
+    const auth = getAuth();
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        setPageAccess('unauthenticated');
+        setLocationOptions([]);
+        setForm((prev) => (prev.location === '' ? prev : { ...prev, location: '' }));
+        return;
+      }
+
+      setPageAccess('loading');
+      try {
+        const snap = await getDoc(doc(db, 'users', user.uid));
+        const data = snap.exists() ? snap.data() : undefined;
+        const accessRaw = data?.forms;
+        const accessList = Array.isArray(accessRaw)
+          ? accessRaw.map((item) => String(item).trim())
+          : [];
+        const hasPinkAccess = accessList.includes(REQUIRED_ACCESS);
+
+        if (!hasPinkAccess) {
+          setPageAccess('denied');
+          setLocationOptions([]);
+          setForm((prev) => (prev.location === '' ? prev : { ...prev, location: '' }));
+          return;
+        }
+
+        const officesRaw = data?.offices;
+        const userOffices = new Set(
+          Array.isArray(officesRaw)
+            ? officesRaw.map((office) => String(office).trim()).filter((office) => office !== '')
+            : []
+        );
+        const allowedLocations = LOCATION_OPTIONS.filter((location) => userOffices.has(location));
+
+        setLocationOptions(allowedLocations);
+        setForm((prev) => {
+          if (allowedLocations.length === 1) {
+            return prev.location === allowedLocations[0]
+              ? prev
+              : { ...prev, location: allowedLocations[0] };
+          }
+          if (prev.location && !allowedLocations.includes(prev.location)) {
+            return { ...prev, location: '' };
+          }
+          return prev;
+        });
+        setPageAccess('allowed');
+      } catch {
+        setPageAccess('denied');
+        setLocationOptions([]);
+      }
+    });
+
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     const hasCoffeeTotalBasis = tableRows.some(
@@ -565,7 +715,7 @@ export default function Page() {
       0
     );
     const calculatedCoffeeSales = hasCoffeeTotalBasis
-      ? String(roundToCents(coffeeYesSum * 61))
+      ? toMoneyString(coffeeYesSum * 61)
       : '';
 
     setForm((prev) =>
@@ -577,7 +727,7 @@ export default function Page() {
     const bothEmpty = form.grandTotal.trim() === '' && form.coffeeSales.trim() === '';
     const calculatedSalesWithoutCoffee = bothEmpty
       ? ''
-      : String(roundToCents(parseNumber(form.grandTotal) - parseNumber(form.coffeeSales)));
+      : toMoneyString(parseNumber(form.grandTotal) - parseNumber(form.coffeeSales));
 
     setForm((prev) =>
       prev.salesWithoutCoffee === calculatedSalesWithoutCoffee
@@ -775,9 +925,8 @@ export default function Page() {
           { merge: true }
         );
         lastSavedKeyRef.current = saveKey;
-        setStatus('Saved Successfully');
-      } catch (error: any) {
-        setStatus('Failed to Save');
+      } catch {
+        // Auto-save failures are silent; submit still surfaces errors.
       }
     }, 700);
 
@@ -899,7 +1048,7 @@ export default function Page() {
 
       lastSavedKeyRef.current = '';
       setForm({
-        location: '',
+        location: locationOptions.length === 1 ? locationOptions[0] : '',
         date: '',
         reasonIfLate: '',
         submittedDateTime: '',
@@ -917,11 +1066,57 @@ export default function Page() {
       setTableRows(Array.from({ length: 4 }, () => createEmptyRow()));
       setSugarRows(Array.from({ length: 6 }, () => createEmptySugarRow()));
       setReasonRows(Array.from({ length: 10 }, (_, i) => createEmptyReasonRow(i)));
-      setStatus('Submitted Successfully');
-    } catch (error: any) {
-      setStatus('Failed to Submit');
+      setStatus('');
+      setSubmitFeedback({ type: 'success', message: 'Submitted Successfully' });
+    } catch {
+      setSubmitFeedback({ type: 'error', message: 'Failed to Submit' });
     }
   };
+
+  if (pageAccess !== 'allowed') {
+    const message =
+      pageAccess === 'loading'
+        ? 'Checking access…'
+        : pageAccess === 'unauthenticated'
+          ? 'Please sign in to continue.'
+          : 'You do not have access to this page.';
+
+    return (
+      <main
+        style={{
+          minHeight: '100vh',
+          display: 'grid',
+          placeItems: 'center',
+          background: '#ffffff',
+          padding: '48px 24px',
+        }}
+      >
+        <section
+          style={{
+            width: '100%',
+            maxWidth: 420,
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: 12,
+            padding: 28,
+            boxShadow: '0 8px 24px rgba(15, 23, 42, 0.06)',
+            textAlign: 'center',
+          }}
+        >
+          <p
+            style={{
+              margin: 0,
+              fontSize: 15,
+              color: pageAccess === 'denied' ? '#991b1b' : '#6b7280',
+              fontWeight: pageAccess === 'denied' ? 600 : 500,
+            }}
+          >
+            {message}
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <main
@@ -933,7 +1128,6 @@ export default function Page() {
         padding: '48px 24px',
       }}
     >
-      <style>{NO_NUMBER_SPINNER_CSS}</style>
       <section
         style={{
           width: '100%',
@@ -945,7 +1139,7 @@ export default function Page() {
           boxShadow: '0 8px 24px rgba(15, 23, 42, 0.06)',
         }}
       >
-        <h1 style={{ margin: '0 0 16px', fontSize: 28, fontWeight: 800, color: '#111827' }}>Finalized Production</h1>
+        <h1 style={{ margin: '0 0 16px', fontSize: 28, fontWeight: 800, color: '#111827' }}>Production</h1>
         <div
           style={{
             display: 'grid',
@@ -972,25 +1166,44 @@ export default function Page() {
           </div>
           <div>
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Office</label>
-            <select
-              value={form.location}
-              onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))}
-              style={{
-                width: '100%',
-                height: 40,
-                padding: '0 10px',
-                border: '1px solid #d1d5db',
-                borderRadius: 8,
-                background: '#fff',
-              }}
-            >
-              <option value="">Select</option>
-              {LOCATION_OPTIONS.map((location) => (
-                <option key={location} value={location}>
-                  {location}
-                </option>
-              ))}
-            </select>
+            {locationOptions.length === 1 ? (
+              <input
+                type="text"
+                readOnly
+                value={locationOptions[0]}
+                style={{
+                  width: '100%',
+                  height: 40,
+                  padding: '0 10px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 8,
+                  background: '#f3f4f6',
+                  color: '#6b7280',
+                }}
+              />
+            ) : (
+              <select
+                value={form.location}
+                onChange={(e) => setForm((prev) => ({ ...prev, location: e.target.value }))}
+                disabled={locationOptions.length === 0}
+                style={{
+                  width: '100%',
+                  height: 40,
+                  padding: '0 10px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 8,
+                  background: locationOptions.length === 0 ? '#f3f4f6' : '#fff',
+                  color: locationOptions.length === 0 ? '#6b7280' : '#111827',
+                }}
+              >
+                <option value="">Select</option>
+                {locationOptions.map((location) => (
+                  <option key={location} value={location}>
+                    {location}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
         </div>
         {docSubmitLock ? (
@@ -1114,27 +1327,16 @@ export default function Page() {
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}># Chart</label>
-              <input
-                type="number"
-                inputMode="numeric"
-                className={NO_NUMBER_SPINNER_CLASS}
+              <FormattedNumberInput
                 value={row.chartCount}
-                onChange={(e) => handleReportRowChange(rowIndex, 'chartCount', e.target.value)}
-                style={{
-                  width: '100%',
-                  height: 40,
-                  padding: '0 10px',
-                  border: '1px solid #d1d5db',
-                  borderRadius: 8,
-                }}
+                onChange={(value) => handleReportRowChange(rowIndex, 'chartCount', value)}
               />
             </div>
             <div>
               <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>$ Amount</label>
               <DollarPrefixedNumberInput
                 value={row.amount}
-                onChange={(e) => handleReportRowChange(rowIndex, 'amount', e.target.value)}
-                step="0.01"
+                onChange={(value) => handleReportRowChange(rowIndex, 'amount', value)}
               />
             </div>
           </div>
@@ -1171,7 +1373,7 @@ export default function Page() {
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Grand Total</label>
             <DollarPrefixedNumberInput
               value={form.grandTotal}
-              onChange={(e) => setForm((prev) => ({ ...prev, grandTotal: e.target.value }))}
+              onChange={(value) => setForm((prev) => ({ ...prev, grandTotal: value }))}
             />
           </div>
           <div>
@@ -1193,72 +1395,28 @@ export default function Page() {
         >
           <div>
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Prophy @ OE</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              className={NO_NUMBER_SPINNER_CLASS}
+            <FormattedNumberInput
               value={form.paperAtOrangeJuice}
-              onChange={(e) => setForm((prev) => ({ ...prev, paperAtOrangeJuice: e.target.value }))}
-              style={{
-                width: '100%',
-                height: 40,
-                padding: '0 10px',
-                border: '1px solid #d1d5db',
-                borderRadius: 8,
-              }}
+              onChange={(value) => setForm((prev) => ({ ...prev, paperAtOrangeJuice: value }))}
             />
           </div>
           <div>
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Prophy @ TX</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              className={NO_NUMBER_SPINNER_CLASS}
+            <FormattedNumberInput
               value={form.paperAtTea}
-              onChange={(e) => setForm((prev) => ({ ...prev, paperAtTea: e.target.value }))}
-              style={{
-                width: '100%',
-                height: 40,
-                padding: '0 10px',
-                border: '1px solid #d1d5db',
-                borderRadius: 8,
-              }}
+              onChange={(value) => setForm((prev) => ({ ...prev, paperAtTea: value }))}
             />
           </div>
           <div>
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Just Prophy</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              className={NO_NUMBER_SPINNER_CLASS}
+            <FormattedNumberInput
               value={form.justPaper}
-              onChange={(e) => setForm((prev) => ({ ...prev, justPaper: e.target.value }))}
-              style={{
-                width: '100%',
-                height: 40,
-                padding: '0 10px',
-                border: '1px solid #d1d5db',
-                borderRadius: 8,
-              }}
+              onChange={(value) => setForm((prev) => ({ ...prev, justPaper: value }))}
             />
           </div>
           <div>
             <label style={{ display: 'block', marginBottom: 8, fontWeight: 600 }}>Actual Prophy</label>
-            <input
-              type="number"
-              readOnly
-              className={NO_NUMBER_SPINNER_CLASS}
-              value={form.prophyTotal}
-              style={{
-                width: '100%',
-                height: 40,
-                padding: '0 10px',
-                border: '1px solid #d1d5db',
-                borderRadius: 8,
-                background: '#f3f4f6',
-                color: '#6b7280',
-              }}
-            />
+            <FormattedNumberInput value={form.prophyTotal} readOnly />
           </div>
         </div>
 
@@ -1340,19 +1498,25 @@ export default function Page() {
                           height={34}
                           borderRadius={6}
                           value={row.sales}
-                          onChange={(e) => handleCellChange(rowIndex, 'sales', e.target.value)}
+                          onChange={(value) => handleCellChange(rowIndex, 'sales', value)}
                         />
-                      ) : (
-                        <input
-                          type={NUMERIC_FIELDS.includes(column.key) ? 'number' : 'text'}
-                          inputMode={NUMERIC_FIELDS.includes(column.key) ? 'numeric' : 'text'}
-                          className={NUMERIC_FIELDS.includes(column.key) ? NO_NUMBER_SPINNER_CLASS : undefined}
+                      ) : TOTAL_TARGET_FIELDS.includes(column.key) ? (
+                        <FormattedNumberInput
+                          height={34}
+                          borderRadius={6}
                           value={
                             READONLY_FIELDS.includes(column.key)
                               ? derivedRow[column.key]
                               : row[column.key]
                           }
                           readOnly={READONLY_FIELDS.includes(column.key)}
+                          onChange={(value) => handleCellChange(rowIndex, column.key, value)}
+                          style={{ padding: '0 8px' }}
+                        />
+                      ) : (
+                        <input
+                          type="text"
+                          value={row[column.key]}
                           onChange={(e) => handleCellChange(rowIndex, column.key, e.target.value)}
                           style={{
                             width: '100%',
@@ -1360,8 +1524,8 @@ export default function Page() {
                             border: '1px solid #d1d5db',
                             borderRadius: 6,
                             padding: '0 8px',
-                            background: READONLY_FIELDS.includes(column.key) ? '#f3f4f6' : '#fff',
-                            color: READONLY_FIELDS.includes(column.key) ? '#6b7280' : '#111827',
+                            background: '#fff',
+                            color: '#111827',
                           }}
                         />
                       )}
@@ -1377,7 +1541,12 @@ export default function Page() {
                   let value = '';
                   if (column.key === 'position') value = 'Total';
                   else if (column.key === 'name') value = '-';
-                  else if (TOTAL_TARGET_FIELDS.includes(column.key)) value = String(getColumnTotal(column.key));
+                  else if (TOTAL_TARGET_FIELDS.includes(column.key)) {
+                    value =
+                      column.key === 'sales'
+                        ? formatMoneyWithCommas(getColumnTotal(column.key))
+                        : formatWithCommas(getColumnTotal(column.key));
+                  }
 
                   const displayValue = column.key === 'sales' && value !== '' ? `$${value}` : value;
 
@@ -1465,17 +1634,10 @@ export default function Page() {
                             </option>
                           ))}
                         </select>
-                      ) : (
+                      ) : column.key === 'name' ? (
                         <input
-                          type={column.key === 'name' ? 'text' : 'number'}
-                          inputMode={column.key === 'name' ? 'text' : 'numeric'}
-                          className={column.key === 'name' ? undefined : NO_NUMBER_SPINNER_CLASS}
-                          value={
-                            READONLY_SUGAR_FIELDS.includes(column.key)
-                              ? derivedSugar[column.key]
-                              : row[column.key]
-                          }
-                          readOnly={READONLY_SUGAR_FIELDS.includes(column.key)}
+                          type="text"
+                          value={row[column.key]}
                           onChange={(e) => handleSugarCellChange(rowIndex, column.key, e.target.value)}
                           style={{
                             width: '100%',
@@ -1483,9 +1645,22 @@ export default function Page() {
                             border: '1px solid #d1d5db',
                             borderRadius: 6,
                             padding: '0 8px',
-                            background: READONLY_SUGAR_FIELDS.includes(column.key) ? '#f3f4f6' : '#fff',
-                            color: READONLY_SUGAR_FIELDS.includes(column.key) ? '#6b7280' : '#111827',
+                            background: '#fff',
+                            color: '#111827',
                           }}
+                        />
+                      ) : (
+                        <FormattedNumberInput
+                          height={34}
+                          borderRadius={6}
+                          value={
+                            READONLY_SUGAR_FIELDS.includes(column.key)
+                              ? derivedSugar[column.key]
+                              : row[column.key]
+                          }
+                          readOnly={READONLY_SUGAR_FIELDS.includes(column.key)}
+                          onChange={(value) => handleSugarCellChange(rowIndex, column.key, value)}
+                          style={{ padding: '0 8px' }}
                         />
                       )}
                     </td>
@@ -1500,7 +1675,7 @@ export default function Page() {
                   let value = '';
                   if (column.key === 'position') value = 'Total';
                   else if (column.key === 'name') value = '-';
-                  else if (SUGAR_TOTAL_TARGET_FIELDS.includes(column.key)) value = String(getSugarColumnTotal(column.key));
+                  else if (SUGAR_TOTAL_TARGET_FIELDS.includes(column.key)) value = formatWithCommas(getSugarColumnTotal(column.key));
 
                   return (
                     <td key={`sugar-total-${column.key}`} style={{ border: '1px solid #e5e7eb', padding: '8px' }}>
@@ -1545,23 +1720,30 @@ export default function Page() {
                 <tr key={`reason-row-${rowIndex}`}>
                   {REASON_COLUMNS.map((column) => (
                     <td key={`reason-${rowIndex}-${column.key}`} style={{ border: '1px solid #e5e7eb', padding: '6px' }}>
-                      <input
-                        type={column.key === 'reason' ? 'text' : 'number'}
-                        inputMode={column.key === 'reason' ? 'text' : 'numeric'}
-                        className={column.key === 'reason' ? undefined : NO_NUMBER_SPINNER_CLASS}
-                        value={row[column.key]}
-                        readOnly={column.key === 'reason'}
-                        onChange={(e) => handleReasonCellChange(rowIndex, column.key, e.target.value)}
-                        style={{
-                          width: '100%',
-                          height: 34,
-                          border: '1px solid #d1d5db',
-                          borderRadius: 6,
-                          padding: '0 8px',
-                          background: column.key === 'reason' ? '#f3f4f6' : '#fff',
-                          color: column.key === 'reason' ? '#6b7280' : '#111827',
-                        }}
-                      />
+                      {column.key === 'reason' ? (
+                        <input
+                          type="text"
+                          value={row[column.key]}
+                          readOnly
+                          style={{
+                            width: '100%',
+                            height: 34,
+                            border: '1px solid #d1d5db',
+                            borderRadius: 6,
+                            padding: '0 8px',
+                            background: '#f3f4f6',
+                            color: '#6b7280',
+                          }}
+                        />
+                      ) : (
+                        <FormattedNumberInput
+                          height={34}
+                          borderRadius={6}
+                          value={row[column.key]}
+                          onChange={(value) => handleReasonCellChange(rowIndex, column.key, value)}
+                          style={{ padding: '0 8px' }}
+                        />
+                      )}
                     </td>
                   ))}
                 </tr>
@@ -1638,8 +1820,8 @@ export default function Page() {
               width: '100%',
               height: 44,
               borderRadius: 8,
-              border: '1px solid #16a34a',
-              background: '#16a34a',
+              border: '1px solid #9fe0f4',
+              background: '#9fe0f4',
               color: '#fff',
               fontWeight: 700,
               cursor: docSubmitLock ? 'not-allowed' : 'pointer',
@@ -1651,6 +1833,83 @@ export default function Page() {
         </div>
         </fieldset>
       </section>
+
+      {submitFeedback && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="submit-feedback-title"
+          onClick={() => setSubmitFeedback(null)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            display: 'grid',
+            placeItems: 'center',
+            background: 'rgba(15, 23, 42, 0.45)',
+            padding: 24,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 420,
+              background: '#fff',
+              borderRadius: 16,
+              padding: '32px 28px 24px',
+              boxShadow: '0 20px 50px rgba(15, 23, 42, 0.25)',
+              textAlign: 'center',
+            }}
+          >
+            <div
+              aria-hidden
+              style={{
+                width: 64,
+                height: 64,
+                margin: '0 auto 16px',
+                borderRadius: '50%',
+                display: 'grid',
+                placeItems: 'center',
+                fontSize: 32,
+                fontWeight: 700,
+                color: '#fff',
+                background: submitFeedback.type === 'success' ? '#9fe0f4' : '#dc2626',
+              }}
+            >
+              {submitFeedback.type === 'success' ? '✓' : '!'}
+            </div>
+            <h2
+              id="submit-feedback-title"
+              style={{
+                margin: '0 0 8px',
+                fontSize: 22,
+                fontWeight: 800,
+                color: submitFeedback.type === 'success' ? '#9fe0f4' : '#991b1b',
+              }}
+            >
+              {submitFeedback.message}
+            </h2>
+            <button
+              type="button"
+              onClick={() => setSubmitFeedback(null)}
+              style={{
+                width: '100%',
+                height: 44,
+                borderRadius: 8,
+                border: 'none',
+                background: submitFeedback.type === 'success' ? '#9fe0f4' : '#dc2626',
+                color: '#fff',
+                fontWeight: 700,
+                fontSize: 15,
+                cursor: 'pointer',
+              }}
+            >
+              OK
+            </button>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
