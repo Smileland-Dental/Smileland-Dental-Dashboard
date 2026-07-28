@@ -2,7 +2,8 @@
 
 import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { db } from '@/lib/firebase.config';
+import { auth, db } from '@/lib/firebase.config';
+import { onAuthStateChanged } from 'firebase/auth';
 import { collection, deleteField, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
 
 const PINK_BEAR_COLLECTION = 'monthly report';
@@ -358,7 +359,8 @@ function getTableStyle(): React.CSSProperties {
 }
 
 function parseNumber(value: unknown): number {
-  const n = Number(value);
+  const raw = typeof value === 'string' ? value.replace(/,/g, '') : value;
+  const n = Number(raw);
   if (!Number.isFinite(n)) return 0;
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
@@ -369,7 +371,10 @@ function addAmount(base: number, value: unknown): number {
 
 function formatAmount(value: number): string {
   const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
+  return rounded.toLocaleString('en-US', {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function formatDollarAmount(value: number): string {
@@ -385,16 +390,19 @@ function formatDollarDailyAverage(total: number, days: number): string {
 function formatDailyAverage(total: number, days: number): string {
   if (days <= 0) return '0';
   const avg = Math.round(((total / days) + Number.EPSILON) * 100) / 100;
-  return Number.isInteger(avg) ? String(avg) : avg.toFixed(2);
+  return avg.toLocaleString('en-US', {
+    minimumFractionDigits: Number.isInteger(avg) ? 0 : 2,
+    maximumFractionDigits: 2,
+  });
 }
 
 function formatInteger(value: number): string {
-  return String(Math.round(value));
+  return Math.round(value).toLocaleString('en-US');
 }
 
 function formatIntegerDailyAverage(total: number, days: number): string {
   if (days <= 0) return '0';
-  return String(Math.round(total / days));
+  return Math.round(total / days).toLocaleString('en-US');
 }
 
 function formatIntegerGoal(value: number | undefined): string {
@@ -591,7 +599,7 @@ async function loadReportSummariesFromDb(month: string, office: string) {
 
 function formatSummaryNumber(value: number | null | undefined, fallback = '—'): string {
   if (value === null || value === undefined) return fallback;
-  return String(value);
+  return value.toLocaleString('en-US');
 }
 
 function formatSummaryText(value: string | undefined): string {
@@ -874,6 +882,7 @@ async function loadGoalSettings(month: string, office: string) {
     const data = snap.data() as Record<string, unknown>;
     const oGoalTotal = parseStoredGoalTotal(data['oe goal total']);
     const sealantGoalTotal = parseStoredGoalTotal(data['sealant goal total']);
+    const sealantTotal = parseStoredGoalTotal(data.sealantTotal);
     if (
       data.officeSummaryGoals === undefined &&
       data.oeTableGoals === undefined &&
@@ -884,7 +893,8 @@ async function loadGoalSettings(month: string, office: string) {
       !hasPromotionActuals(normalizePromotionActuals(data.promotionActuals)) &&
       !hasNote(normalizeNote(data['summary note'] ?? data.note)) &&
       oGoalTotal === undefined &&
-      sealantGoalTotal === undefined
+      sealantGoalTotal === undefined &&
+      sealantTotal === undefined
     ) continue;
 
     const startedRaw = data.started;
@@ -903,6 +913,7 @@ async function loadGoalSettings(month: string, office: string) {
       note: normalizeNote(data['summary note'] ?? data.note),
       oGoalTotal,
       sealantGoalTotal,
+      sealantTotal: sealantTotal !== undefined && sealantTotal >= 0 ? sealantTotal : undefined,
     };
   }
 
@@ -1257,12 +1268,20 @@ function getSealantDailyGoal(oeTotal: number, days: number): number {
   return Math.round(getSealantMonthlyGoal(oeTotal) / days);
 }
 
+const SEALANT_TABLE_COLUMN_COUNT = SEALANT_COLUMNS.length + 1;
+
 function SealantGoalsTable({
   metrics,
   docCount,
+  sealantTotal,
+  isEditing,
+  onSealantTotalChange,
 }: {
   metrics: GoalsActualMetrics;
   docCount: number;
+  sealantTotal: number | undefined;
+  isEditing: boolean;
+  onSealantTotalChange: (rawValue: string) => void;
 }) {
   const sealantMonthlyGoal = getSealantMonthlyGoal(metrics.oeTotal);
   const sealantDailyGoal = getSealantDailyGoal(metrics.oeTotal, docCount);
@@ -1282,6 +1301,7 @@ function SealantGoalsTable({
           {SEALANT_COLUMNS.map((column) => (
             <th key={column.key} style={headerCellStyle}>{column.header}</th>
           ))}
+          <th style={headerCellStyle}>Sealant (Total)</th>
         </tr>
       </thead>
       <tbody>
@@ -1289,17 +1309,18 @@ function SealantGoalsTable({
           <td style={cellStyle}>%</td>
           <td style={cellStyle}>{sealantRdaPct}%</td>
           <td style={cellStyle}>{sealantDdsPct}%</td>
+          <td style={cellStyle} />
         </tr>
         <tr style={rowStyle}>
           <td style={cellStyle}>Daily Goal</td>
-          <td colSpan={SEALANT_COLUMNS.length} style={{ ...cellStyle, textAlign: 'center' }}>
-            {sealantDailyGoal}
+          <td colSpan={SEALANT_TABLE_COLUMN_COUNT} style={{ ...cellStyle, textAlign: 'center' }}>
+            {formatInteger(sealantDailyGoal)}
           </td>
         </tr>
         <tr style={rowStyle}>
           <td style={cellStyle}>Monthly Goal</td>
-          <td colSpan={SEALANT_COLUMNS.length} style={{ ...cellStyle, textAlign: 'center' }}>
-            {sealantMonthlyGoal}
+          <td colSpan={SEALANT_TABLE_COLUMN_COUNT} style={{ ...cellStyle, textAlign: 'center' }}>
+            {formatInteger(sealantMonthlyGoal)}
           </td>
         </tr>
         <tr style={rowStyle}>
@@ -1309,6 +1330,14 @@ function SealantGoalsTable({
               {column.formatTotal(column.getValue(metrics))}
             </td>
           ))}
+          <GoalInputCell
+            value={sealantTotal}
+            isEditing={isEditing}
+            onChange={onSealantTotalChange}
+            cellStyle={cellStyle}
+            formatValue={(value) => (value === undefined ? '' : formatInteger(value))}
+            step="1"
+          />
         </tr>
         <tr style={rowStyle}>
           <td style={cellStyle}>Daily Average</td>
@@ -1317,6 +1346,9 @@ function SealantGoalsTable({
               {column.formatDaily(column.getValue(metrics), docCount)}
             </td>
           ))}
+          <td style={cellStyle}>
+            {sealantTotal === undefined ? '' : formatIntegerDailyAverage(sealantTotal, docCount)}
+          </td>
         </tr>
       </tbody>
     </table>
@@ -1330,9 +1362,11 @@ function GoalsTablesSection({
   officeDailyGoals,
   oeMonthlyGoals,
   oeDailyGoals,
+  sealantTotal,
   isEditing,
   onOfficeGoalChange,
   onOeGoalChange,
+  onSealantTotalChange,
 }: {
   aggregate: Aggregate;
   oeTotalAmount: number;
@@ -1340,9 +1374,11 @@ function GoalsTablesSection({
   officeDailyGoals: OfficeSummaryGoals;
   oeMonthlyGoals: OeTableGoals;
   oeDailyGoals: OeTableGoals;
+  sealantTotal: number | undefined;
   isEditing: boolean;
   onOfficeGoalChange: (key: OfficeSummaryGoalKey, rawValue: string) => void;
   onOeGoalChange: (key: OeTableGoalKey, rawValue: string) => void;
+  onSealantTotalChange: (rawValue: string) => void;
 }) {
   const metrics = getGoalsActualMetrics(aggregate, oeTotalAmount);
   const { docCount } = aggregate;
@@ -1400,6 +1436,9 @@ function GoalsTablesSection({
           <SealantGoalsTable
             metrics={metrics}
             docCount={docCount}
+            sealantTotal={sealantTotal}
+            isEditing={isEditing}
+            onSealantTotalChange={onSealantTotalChange}
           />
         </TableCard>
       </div>
@@ -1854,31 +1893,31 @@ function ReviewRatingRowsFromSummary({ ratingCounts }: { ratingCounts: ReviewSum
     <>
       <tr>
         <td style={{ ...labelCellStyle, textAlign: 'center' }}>1</td>
-        <td style={centeredCellStyle}>{ratingCounts.google['1']}</td>
-        <td style={centeredCellStyle}>{ratingCounts.yelp['1']}</td>
-        <td rowSpan={2} style={centeredCellStyle}>{repugenLow}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.google['1'])}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.yelp['1'])}</td>
+        <td rowSpan={2} style={centeredCellStyle}>{formatInteger(repugenLow)}</td>
       </tr>
       <tr>
         <td style={{ ...labelCellStyle, textAlign: 'center' }}>2</td>
-        <td style={centeredCellStyle}>{ratingCounts.google['2']}</td>
-        <td style={centeredCellStyle}>{ratingCounts.yelp['2']}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.google['2'])}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.yelp['2'])}</td>
       </tr>
       <tr>
         <td style={{ ...labelCellStyle, textAlign: 'center' }}>3</td>
-        <td style={centeredCellStyle}>{ratingCounts.google['3']}</td>
-        <td style={centeredCellStyle}>{ratingCounts.yelp['3']}</td>
-        <td style={centeredCellStyle}>{repugenMid}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.google['3'])}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.yelp['3'])}</td>
+        <td style={centeredCellStyle}>{formatInteger(repugenMid)}</td>
       </tr>
       <tr>
         <td style={{ ...labelCellStyle, textAlign: 'center' }}>4</td>
-        <td style={centeredCellStyle}>{ratingCounts.google['4']}</td>
-        <td style={centeredCellStyle}>{ratingCounts.yelp['4']}</td>
-        <td rowSpan={2} style={centeredCellStyle}>{repugenHigh}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.google['4'])}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.yelp['4'])}</td>
+        <td rowSpan={2} style={centeredCellStyle}>{formatInteger(repugenHigh)}</td>
       </tr>
       <tr>
         <td style={{ ...labelCellStyle, textAlign: 'center' }}>5</td>
-        <td style={centeredCellStyle}>{ratingCounts.google['5']}</td>
-        <td style={centeredCellStyle}>{ratingCounts.yelp['5']}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.google['5'])}</td>
+        <td style={centeredCellStyle}>{formatInteger(ratingCounts.yelp['5'])}</td>
       </tr>
     </>
   );
@@ -1911,7 +1950,7 @@ function ReviewSummaryTable({ summary }: { summary: ReviewSummarySnapshot | null
       <tbody>
         <tr>
           <td style={labelCellStyle}>Daily Goal</td>
-          <td colSpan={3} style={centeredCellStyle}>{summary.dailyGoal}</td>
+          <td colSpan={3} style={centeredCellStyle}>{formatInteger(summary.dailyGoal)}</td>
         </tr>
         <tr>
           <td style={labelCellStyle}>Monthly Goal</td>
@@ -1919,9 +1958,9 @@ function ReviewSummaryTable({ summary }: { summary: ReviewSummarySnapshot | null
         </tr>
         <tr>
           <td style={labelCellStyle}>Actual</td>
-          <td style={centeredCellStyle}>{summary.actual.google}</td>
-          <td style={centeredCellStyle}>{summary.actual.yelp}</td>
-          <td style={centeredCellStyle}>{summary.actual.repugen}</td>
+          <td style={centeredCellStyle}>{formatInteger(summary.actual.google)}</td>
+          <td style={centeredCellStyle}>{formatInteger(summary.actual.yelp)}</td>
+          <td style={centeredCellStyle}>{formatInteger(summary.actual.repugen)}</td>
         </tr>
         <tr>
           <td style={labelCellStyle}>Daily Average</td>
@@ -2229,6 +2268,7 @@ function MonthlySummaryPageContent() {
   const searchParams = useSearchParams();
   const selectedMonth = searchParams.get('month') ?? '';
   const selectedOffice = searchParams.get('office') ?? '';
+  const [pageReady, setPageReady] = useState(false);
   const [docs, setDocs] = useState<FormDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -2250,6 +2290,8 @@ function MonthlySummaryPageContent() {
   const [promotionActualsDraft, setPromotionActualsDraft] = useState<PromotionActuals>(emptyPromotionActuals);
   const [oGoalTotalSaved, setOGoalTotalSaved] = useState<number | undefined>(undefined);
   const [sealantGoalTotalSaved, setSealantGoalTotalSaved] = useState<number | undefined>(undefined);
+  const [sealantTotalSaved, setSealantTotalSaved] = useState<number | undefined>(undefined);
+  const [sealantTotalDraft, setSealantTotalDraft] = useState<number | undefined>(undefined);
   const [noteSaved, setNoteSaved] = useState<string | undefined>(undefined);
   const [noteDraft, setNoteDraft] = useState<string | undefined>(undefined);
   const [reviewSummary, setReviewSummary] = useState<ReviewSummarySnapshot | null>(null);
@@ -2262,6 +2304,7 @@ function MonthlySummaryPageContent() {
   const activeWaitTimes = isEditing ? waitTimesDraft : waitTimesSaved;
   const activeExpenses = isEditing ? expensesDraft : expensesSaved;
   const activePromotionActuals = isEditing ? promotionActualsDraft : promotionActualsSaved;
+  const activeSealantTotal = isEditing ? sealantTotalDraft : sealantTotalSaved;
   const activeNote = isEditing ? noteDraft : noteSaved;
 
   const syncDraftsFromSaved = () => {
@@ -2272,8 +2315,61 @@ function MonthlySummaryPageContent() {
     setWaitTimesDraft(waitTimesSaved);
     setExpensesDraft(expensesSaved);
     setPromotionActualsDraft(promotionActualsSaved);
+    setSealantTotalDraft(sealantTotalSaved);
     setNoteDraft(noteSaved);
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'HR' &&
+          userData?.role !== 'Director'
+        ) {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
+    });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     const load = async () => {
@@ -2325,6 +2421,8 @@ function MonthlySummaryPageContent() {
       setPromotionActualsDraft(emptyPromotionActuals());
       setOGoalTotalSaved(undefined);
       setSealantGoalTotalSaved(undefined);
+      setSealantTotalSaved(undefined);
+      setSealantTotalDraft(undefined);
       setNoteSaved(undefined);
       setNoteDraft(undefined);
       setIsEditing(false);
@@ -2358,6 +2456,8 @@ function MonthlySummaryPageContent() {
         setPromotionActualsDraft(merged.promotionActuals);
         setOGoalTotalSaved(merged.oGoalTotal);
         setSealantGoalTotalSaved(merged.sealantGoalTotal);
+        setSealantTotalSaved(merged.sealantTotal);
+        setSealantTotalDraft(merged.sealantTotal);
         setNoteSaved(merged.note);
         setNoteDraft(merged.note);
         setIsEditing(false);
@@ -2427,6 +2527,7 @@ function MonthlySummaryPageContent() {
           officeSummaryGoals: officeGoalsToSave,
           oeTableGoals: oeGoalsToSave,
           started: startedDraft === undefined ? deleteField() : startedDraft,
+          sealantTotal: sealantTotalDraft === undefined ? deleteField() : sealantTotalDraft,
           clean: hasClean(cleanDraft) ? cleanDraft : deleteField(),
           waitTimes: waitTimesPayload,
           expenses: expensesPayload,
@@ -2441,6 +2542,7 @@ function MonthlySummaryPageContent() {
       setOeTableGoalsSaved(oeGoalsToSave);
       setOeTableGoalsDraft(oeGoalsToSave);
       setStartedSaved(startedDraft);
+      setSealantTotalSaved(sealantTotalDraft);
       setCleanSaved(cleanDraft);
       setWaitTimesSaved(waitTimesDraft);
       setExpensesSaved(expensesToSave);
@@ -2455,6 +2557,12 @@ function MonthlySummaryPageContent() {
       setSaveMessage(`Failed to save: ${e?.message || 'Error'}`);
     }
   };
+
+  if (!pageReady) {
+    return (
+      <main style={{ minHeight: '100vh', background: '#f1f5f9' }} />
+    );
+  }
 
   return (
     <main style={{ minHeight: '100vh', background: '#f1f5f9', padding: '20px 24px', overflowX: 'hidden', boxSizing: 'border-box' }}>
@@ -2548,7 +2656,6 @@ function MonthlySummaryPageContent() {
           </StatusMessage>
         )}
         {!hasSelection && <StatusMessage type="info">Need Month and Office.</StatusMessage>}
-        {hasSelection && loading && <StatusMessage type="info">Loading...</StatusMessage>}
         {hasSelection && error && <StatusMessage type="error">{error}</StatusMessage>}
         {hasSelection && !loading && !error && !aggregate && (
           <StatusMessage type="info">There is no data for the month/office.</StatusMessage>
@@ -2575,6 +2682,7 @@ function MonthlySummaryPageContent() {
               officeDailyGoals={activeOfficeSummaryGoals.dailyGoal}
               oeMonthlyGoals={activeOeTableGoals.monthlyGoal}
               oeDailyGoals={activeOeTableGoals.dailyGoal}
+              sealantTotal={activeSealantTotal}
               isEditing={isEditing}
               onOfficeGoalChange={(key, rawValue) => {
                 if (key === 'mailedProduction') return;
@@ -2589,6 +2697,17 @@ function MonthlySummaryPageContent() {
                 setOeTableGoalsDraft((prev) =>
                   updateDailyGoalSection(prev, key, rawValue, aggregate.docCount)
                 );
+              }}
+              onSealantTotalChange={(rawValue) => {
+                const trimmed = rawValue.trim();
+                if (trimmed === '') {
+                  setSealantTotalDraft(undefined);
+                  return;
+                }
+                const parsed = parseNumber(trimmed);
+                if (Number.isFinite(parsed) && parsed >= 0) {
+                  setSealantTotalDraft(Math.round(parsed));
+                }
               }}
               />
             </SectionBlock>
@@ -2739,13 +2858,11 @@ function MonthlySummaryPageContent() {
 export default function MonthlySummaryPage() {
   return (
     <Suspense
-      fallback={
-        <main style={{ minHeight: '100vh', background: '#f1f5f9', padding: 24, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <p style={{ margin: 0, color: '#64748b', fontSize: 15 }}>Loading...</p>
-        </main>
-      }
+      fallback={<main style={{ minHeight: '100vh', background: '#f1f5f9' }} />}
     >
       <MonthlySummaryPageContent />
     </Suspense>
   );
 }
+
+

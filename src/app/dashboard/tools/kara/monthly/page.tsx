@@ -2,7 +2,8 @@
 
 import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { db } from '@/lib/firebase.config';
+import { auth, db } from '@/lib/firebase.config';
+import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
 import { Document, Page, StyleSheet, Text, View, pdf } from '@react-pdf/renderer';
 
@@ -307,7 +308,10 @@ function addAmount(base: number, value: unknown): number {
 
 function formatAmount(value: number): string {
   const rounded = Math.round((value + Number.EPSILON) * 100) / 100;
-  return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(2);
+  return rounded.toLocaleString('en-US', {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
+    maximumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
+  });
 }
 
 function sumRowsAmount<T>(rows: readonly T[], pick: (row: T) => number): number {
@@ -388,7 +392,7 @@ function formatDollarDailyAverage(total: number, days: number): string {
 
 function formatDailyAverage(total: number, days: number): string {
   if (days <= 0) return '0';
-  return String(Math.round((total / days) + Number.EPSILON));
+  return Math.round((total / days) + Number.EPSILON).toLocaleString('en-US');
 }
 
 function formatPercentage(value: number, total: number): string {
@@ -545,7 +549,6 @@ function monthlyProductionDocIdVariants(month: string, selectedOffice: string): 
       }
     }
   }
-
   return out;
 }
 
@@ -596,7 +599,7 @@ function normalizeDaysInOfficeOverrides(raw: unknown): DaysInOfficeOverrides {
       if (!sectionRaw || typeof sectionRaw !== 'object') return;
       Object.entries(sectionRaw as Record<string, unknown>).forEach(([key, value]) => {
         const n = parseNumber(value);
-        if (Number.isFinite(n) && n >= 0) out[key] = Math.floor(n);
+        if (Number.isFinite(n) && n >= 0) out[key] = n;
       });
     });
     return out;
@@ -604,7 +607,7 @@ function normalizeDaysInOfficeOverrides(raw: unknown): DaysInOfficeOverrides {
 
   Object.entries(data).forEach(([key, value]) => {
     const n = parseNumber(value);
-    if (Number.isFinite(n) && n >= 0) out[key] = Math.floor(n);
+    if (Number.isFinite(n) && n >= 0) out[key] = n;
   });
   return out;
 }
@@ -649,7 +652,7 @@ function renderDaysInOfficeTotal(
     const val = overrides[personKey(row.position, row.name)];
     return val === undefined ? sum : sum + val;
   }, 0);
-  return String(total);
+  return String(total.toFixed(2));
 }
 
 function getDaysInOfficeValue(
@@ -762,45 +765,13 @@ function daysInOfficeFromProductionDoc(data: Record<string, unknown> | undefined
   return normalizeDaysInOfficeOverrides(data.daysInOfficeOverrides);
 }
 
-function isMonthlyReportPdfDownloaded(data: Record<string, unknown> | undefined): boolean {
-  return data?.monthlyReportPdfDownloaded === true;
-}
-
-async function markMonthlyReportPdfDownloaded(
-  month: string,
-  selectedOffice: string,
-  existing: Record<string, unknown>
-): Promise<void> {
-  const docRef = doc(db, 'monthly production', getMonthlyProductionDocId(month, selectedOffice));
-  await setDoc(
-    docRef,
-    {
-      month: getWhiteBearMonthDocId(month),
-      location: getMonthlyLocationFieldKey(selectedOffice),
-      locationName: selectedOffice,
-      monthlyReportPdfDownloaded: true,
-      monthlyReportPdfDownloadedAt: serverTimestamp(),
-      ...(existing.daysInOfficeOverrides !== undefined
-        ? { daysInOfficeOverrides: existing.daysInOfficeOverrides }
-        : {}),
-      ...(existing.officeSummaryGoals !== undefined
-        ? { officeSummaryGoals: existing.officeSummaryGoals }
-        : {}),
-      ...(existing.oeTableGoals !== undefined ? { oeTableGoals: existing.oeTableGoals } : {}),
-    },
-    { merge: true }
-  );
-}
-
 async function loadWhiteBearSettingsForOffice(month: string, selectedOffice: string) {
-  let pdfDownloaded = false;
   let daysInOffice: DaysInOfficeOverrides = {};
 
   for (const docId of monthlyProductionDocIdVariants(month, selectedOffice)) {
     const snap = await getDoc(doc(db, 'monthly production', docId));
     if (!snap.exists()) continue;
     const data = snap.data() as Record<string, unknown>;
-    if (isMonthlyReportPdfDownloaded(data)) pdfDownloaded = true;
     const fromDoc = daysInOfficeFromProductionDoc(data);
     if (fromDoc) {
       daysInOffice = { ...daysInOffice, ...fromDoc };
@@ -828,8 +799,8 @@ async function loadWhiteBearSettingsForOffice(month: string, selectedOffice: str
     daysInOffice = { ...daysInOffice, ...mergeWhiteBearLocationSettings(entries).daysInOffice };
   }
 
-  if (Object.keys(daysInOffice).length === 0 && !pdfDownloaded) return null;
-  return { daysInOffice, pdfDownloaded };
+  if (Object.keys(daysInOffice).length === 0) return null;
+  return { daysInOffice };
 }
 
 function normalizePositionLabel(position: unknown): string {
@@ -1072,13 +1043,13 @@ function createMonthlyReportPdfDocument({
         {renderPdfTable(
           ['Add On', 'No Shows', 'Scheduled', 'Seen', 'Seen %', 'Referral', 'Postcard'],
           [[
-            String(aggregate.visitsAdd),
-            String(aggregate.visitsNoShow),
-            String(aggregate.visitsScheduled),
-            String(aggregate.visitsSeen),
+            formatAmount(aggregate.visitsAdd),
+            formatAmount(aggregate.visitsNoShow),
+            formatAmount(aggregate.visitsScheduled),
+            formatAmount(aggregate.visitsSeen),
             formatPercentage(aggregate.visitsSeen, aggregate.visitsScheduled),
-            String(aggregate.visitsReferral),
-            String(aggregate.visitsPostcard),
+            formatAmount(aggregate.visitsReferral),
+            formatAmount(aggregate.visitsPostcard),
           ]],
           [14, 14, 14, 12, 12, 16, 16],
           undefined,
@@ -1256,11 +1227,11 @@ function MonthlyReportPageContent() {
   const searchParams = useSearchParams();
   const selectedMonth = searchParams.get('month') ?? '';
   const selectedOffice = searchParams.get('office') ?? '';
+  const [pageReady, setPageReady] = useState(false);
   const [docs, setDocs] = useState<FormDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [isPdfDownloading, setIsPdfDownloading] = useState(false);
-  const [pdfAlreadyDownloaded, setPdfAlreadyDownloaded] = useState(false);
   const [saveMessage, setSaveMessage] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [daysOverridesSaved, setDaysOverridesSaved] = useState<DaysInOfficeOverrides>(emptyDaysInOfficeOverrides);
@@ -1269,6 +1240,60 @@ function MonthlyReportPageContent() {
   const activeDaysOverrides = isEditing ? daysOverridesDraft : daysOverridesSaved;
 
   useEffect(() => {
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'HR' &&
+          userData?.role !== 'Director'
+        ) {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
+    });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!pageReady) return;
+
     const load = async () => {
       try {
         const snap = await getDocs(collection(db, 'simple-forms'));
@@ -1281,7 +1306,7 @@ function MonthlyReportPageContent() {
       }
     };
     load();
-  }, []);
+  }, [pageReady]);
 
   const monthlyDocs = useMemo(
     () => {
@@ -1438,12 +1463,11 @@ function MonthlyReportPageContent() {
       if (cancelled) return;
       setDaysOverridesSaved(emptyDaysInOfficeOverrides());
       setDaysOverridesDraft(emptyDaysInOfficeOverrides());
-      setPdfAlreadyDownloaded(false);
       setIsEditing(false);
     };
 
     const loadDaysInOfficeOverrides = async () => {
-      if (!hasSelection) {
+      if (!pageReady || !hasSelection) {
         applyEmpty();
         return;
       }
@@ -1458,7 +1482,6 @@ function MonthlyReportPageContent() {
 
         setDaysOverridesSaved(merged.daysInOffice);
         setDaysOverridesDraft(merged.daysInOffice);
-        setPdfAlreadyDownloaded(merged.pdfDownloaded);
         setIsEditing(false);
       } catch {
         applyEmpty();
@@ -1469,7 +1492,7 @@ function MonthlyReportPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [hasSelection, selectedMonth, selectedOffice]);
+  }, [pageReady, hasSelection, selectedMonth, selectedOffice]);
 
   const coffeeTotals = sumCoffeeRowFields(selectedAggregate?.coffeeRows ?? EMPTY_COFFEE_ROWS);
   const additionalTotals = sumAdditionalRowFields(selectedAggregate?.additionalRows ?? EMPTY_ADDITIONAL_ROWS);
@@ -1509,7 +1532,7 @@ function MonthlyReportPageContent() {
     if (Number.isFinite(parsed) && parsed >= 0) {
       setDaysOverridesDraft((prev) => ({
         ...prev,
-        [key]: Math.floor(parsed),
+        [key]: parsed,
       }));
     }
   };
@@ -1546,20 +1569,10 @@ function MonthlyReportPageContent() {
   };
 
   const handleDownloadPdf = async () => {
-    if (!selectedAggregate || pdfAlreadyDownloaded) return;
+    if (!selectedAggregate) return;
     try {
       setIsPdfDownloading(true);
       setSaveMessage('');
-
-      const docRef = doc(db, 'monthly production', getMonthlyProductionDocId(selectedMonth, selectedOffice));
-      const existingSnap = await getDoc(docRef);
-      const existing = existingSnap.exists() ? (existingSnap.data() as Record<string, unknown>) : {};
-
-      if (isMonthlyReportPdfDownloaded(existing)) {
-        setPdfAlreadyDownloaded(true);
-        setSaveMessage('PDF has already been downloaded.');
-        return;
-      }
 
       const generatedDate = new Date().toLocaleDateString('en-US', {
         timeZone: 'America/Los_Angeles',
@@ -1574,8 +1587,6 @@ function MonthlyReportPageContent() {
         `${selectedAggregate.month}_${selectedAggregate.location}_monthly-report.pdf`
       );
       downloadPdfBlob(blob, filename);
-      await markMonthlyReportPdfDownloaded(selectedMonth, selectedOffice, existing);
-      setPdfAlreadyDownloaded(true);
       setSaveMessage('PDF downloaded!');
     } catch (e: unknown) {
       setSaveMessage(formatActionError('Failed to download the pdf', e));
@@ -1583,6 +1594,10 @@ function MonthlyReportPageContent() {
       setIsPdfDownloading(false);
     }
   };
+
+  if (!pageReady) {
+    return <main style={{ minHeight: '100vh', background: '#fff' }} />;
+  }
 
   return (
     <main style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>
@@ -1651,32 +1666,29 @@ function MonthlyReportPageContent() {
                 Edit
               </button>
             )}
-            {!pdfAlreadyDownloaded && (
-              <button
-                type="button"
-                onClick={handleDownloadPdf}
-                disabled={!selectedAggregate || isPdfDownloading || isEditing}
-                style={{
-                  height: 36,
-                  padding: '0 14px',
-                  borderRadius: 8,
-                  border: '1px solid #1d4ed8',
-                  background: !selectedAggregate || isPdfDownloading || isEditing ? '#bfdbfe' : '#2563eb',
-                  color: '#fff',
-                  fontWeight: 700,
-                  cursor: !selectedAggregate || isPdfDownloading || isEditing ? 'not-allowed' : 'pointer',
-                }}
-              >
-                {isPdfDownloading ? 'Downloading...' : 'Download PDF'}
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={handleDownloadPdf}
+              disabled={!selectedAggregate || isPdfDownloading || isEditing}
+              style={{
+                height: 36,
+                padding: '0 14px',
+                borderRadius: 8,
+                border: '1px solid #1d4ed8',
+                background: !selectedAggregate || isPdfDownloading || isEditing ? '#bfdbfe' : '#2563eb',
+                color: '#fff',
+                fontWeight: 700,
+                cursor: !selectedAggregate || isPdfDownloading || isEditing ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {isPdfDownloading ? 'Downloading...' : 'Download PDF'}
+            </button>
           </div>
         </div>
         {saveMessage && <p style={{ margin: '0 0 10px', color: saveMessage.includes('Failed') ? '#b91c1c' : '#166534' }}>{saveMessage}</p>}
         {!hasSelection && (
           <p style={{ margin: 0, color: '#6b7280' }}>Month and office details need to be included in the URL.</p>
         )}
-        {hasSelection && loading && <p style={{ margin: 0, color: '#6b7280' }}>Loading...</p>}
         {hasSelection && error && <p style={{ margin: 0, color: '#b91c1c' }}>{error}</p>}
         {hasSelection && !loading && !error && !selectedAggregate && (
           <p style={{ margin: 0, color: '#6b7280' }}>No completed monthly data is available for the selected Month/Office.</p>
@@ -1752,23 +1764,23 @@ function MonthlyReportPageContent() {
                       </thead>
                       <tbody>
                         <tr style={tableFooterRowStyle}>
-                          <td style={tableCellStyle}>{selectedAggregate.visitsAdd}</td>
-                          <td style={tableCellStyle}>{selectedAggregate.visitsNoShow}</td>
-                          <td style={tableCellStyle}>{selectedAggregate.visitsScheduled}</td>
-                          <td style={tableCellStyle}>{selectedAggregate.visitsSeen}</td>
+                          <td style={tableCellStyle}>{formatAmount(selectedAggregate.visitsAdd)}</td>
+                          <td style={tableCellStyle}>{formatAmount(selectedAggregate.visitsNoShow)}</td>
+                          <td style={tableCellStyle}>{formatAmount(selectedAggregate.visitsScheduled)}</td>
+                          <td style={tableCellStyle}>{formatAmount(selectedAggregate.visitsSeen)}</td>
                           <td style={tableCellStyle}>
                             {formatPercentage(selectedAggregate.visitsSeen, selectedAggregate.visitsScheduled)}
                           </td>
-                          <td style={tableCellStyle}>{selectedAggregate.visitsReferral}</td>
-                          <td style={tableCellStyle}>{selectedAggregate.visitsPostcard}</td>
+                          <td style={tableCellStyle}>{formatAmount(selectedAggregate.visitsReferral)}</td>
+                          <td style={tableCellStyle}>{formatAmount(selectedAggregate.visitsPostcard)}</td>
                         </tr>
                       </tbody>
                     </table>
                   </div>
 
-                  <div style={{ overflowX: 'auto' }}>
+                  <div style={{ overflowX: 'auto', marginBottom: 12 }}>
                     <h4 style={{ margin: '0 0 8px' }}>Production</h4>
-                    <table style={{ width: '100%', minWidth: 1200, borderCollapse: 'collapse', fontSize: 14, marginBottom: 12 }}>
+                    <table style={{ width: '100%', minWidth: 1200, borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
                         <tr>
                           {['Position', 'Name', 'Days in Office', 'Preventative', 'Restorative', 'CRA Production', 'Production', 'Production Average', 'Production %'].map((h, idx) => (
@@ -1829,9 +1841,11 @@ function MonthlyReportPageContent() {
                         </tr>
                       </tfoot>
                     </table>
+                  </div>
 
+                  <div style={{ overflowX: 'auto', marginBottom: 12 }}>
                     <h4 style={{ margin: '0 0 8px' }}>CRA</h4>
-                    <table style={{ width: '100%', minWidth: 1300, borderCollapse: 'collapse', fontSize: 14, marginBottom: 12 }}>
+                    <table style={{ width: '100%', minWidth: 1300, borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
                         <tr>
                           {['Position', 'Name', 'Days in Office', 'CRA (New)', 'CRA (Return)', 'CRA Total', 'CRA Average', 'CRA %', 'CRA (Not Billable)', 'Rendered CRA', 'CRA (Billable)'].map((h, idx) => (
@@ -1898,7 +1912,9 @@ function MonthlyReportPageContent() {
                         </tr>
                       </tfoot>
                     </table>
+                  </div>
 
+                  <div style={{ overflowX: 'auto' }}>
                     <h4 style={{ margin: '0 0 8px' }}>OE</h4>
                     <table style={{ width: '100%', minWidth: 1150, borderCollapse: 'collapse', fontSize: 14 }}>
                       <thead>
@@ -2165,7 +2181,7 @@ function MonthlyReportPageContent() {
 
 export default function MonthlyPage() {
   return (
-    <Suspense fallback={<main style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>Loading...</main>}>
+    <Suspense fallback={<main style={{ minHeight: '100vh', background: '#fff' }} />}>
       <MonthlyReportPageContent />
     </Suspense>
   );
