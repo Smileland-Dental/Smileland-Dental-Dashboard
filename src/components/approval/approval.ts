@@ -20,9 +20,12 @@ const chunkArray = (arr: string[], size: number): string[][] => {
 export async function getAbsenceRequestsByUser(user: User, startDateString: string, endDateString: string): Promise<AbsenceRequest[]> {
 
   const userRole = user.role || "";
-  const managedEmployeeIds: string[] = user.managedEmployeeIds || [];
+
+  const managedEmployeeIds: string[] = (user.managedEmployeeIds || []).filter(
+    (id) => id !== user.linkedEmployeeId
+  );
+
   const absencesRef = collection(db, "absences");
-  let queryConstraints = [];
   //console.log("User Role:", userRole);
   //console.log("Managed Employee IDs:", managedEmployeeIds);
   //console.log("Offices:", offices);

@@ -1,7 +1,5 @@
 import React from 'react';
-import Image from 'next/image';
 import { User } from '@/lib/types';
-//import defaultProfile from 'defaultProfile.jpg';
 
 interface UserCardProps {
   user: User;

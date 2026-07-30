@@ -1,7 +1,6 @@
 import React from 'react';
 import Image from 'next/image';
 import { Employee } from '@/lib/types';
-//import defaultProfile from 'defaultProfile.jpg';
 
 interface EmployeeCardProps {
   employee: Employee;
