@@ -59,10 +59,13 @@ const handleLinkEmployee = async (employeeId: string | null) => {
       linkedEmployeeId: newId 
     };
 
-    // 2. CRITICAL FIX: If we are linking an employee, 
-    // remove them from the managed list immediately
-    if (newId && user.managedEmployeeIds?.includes(newId)) {
-      userUpdates.managedEmployeeIds = arrayRemove(newId);
+    // 2. If we are linking an employee, 
+    // Add the new employee ID to managedEmployeeIds and remove from list if link is removed
+    if (newId) {
+      userUpdates.managedEmployeeIds = arrayUnion(newId);
+    }
+    else if (user.linkedEmployeeId) {
+      userUpdates.managedEmployeeIds = arrayRemove(user.linkedEmployeeId);
     }
 
     // 3. Update the User Document
@@ -193,6 +196,7 @@ const handleBulkAdd = async () => {
         {/* Header */}
         <div className="p-6 border-b bg-gray-50 flex justify-between items-start">
           <div>
+            <p className="text-xs text-blue-400">User ID: {user.id}</p>
             <h2 className="text-2xl font-bold text-gray-800">{user.username}</h2>
             <p className="text-sm text-gray-500">{user.email}</p>
           </div>

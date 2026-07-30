@@ -350,7 +350,7 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
                       checked={formData.excuse_note_submitted === opt}
                       className="accent-blue-600"
                     />
-                    {opt.replace('not_provided', 'Not Providing')}
+                    {opt.replace('not_provided', 'Not Providing').replace('pending', 'Will Provide Later')}
                   </label>
                 ))}
 
