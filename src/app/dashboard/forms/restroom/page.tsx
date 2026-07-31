@@ -43,7 +43,7 @@ export default function RestroomInspection() {
 
   const OFFICE_CHECK_OPTIONS = {
     "Bernard": ["Carmen", "Elisa", "Ranjit"],
-    "California": ["Helen", "Kindal"],
+    "California": ["Helen", "Kindal", "Liz", "Alba"],
     "Delano": ["Helen", "Jasmine", "Leana"],
     "Fresno": ["Cynthia"],
     "Ming": ["Hopie", "Kindal", "Marbella"],

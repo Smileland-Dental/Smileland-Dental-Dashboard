@@ -272,6 +272,8 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
     label: 'Doctors Performance',
     options: [
       { id: 'docperf.doctorCraProduction', label: 'CRA Production Doctor' },
+      { id: 'docperf.doctorPreventative', label: 'Preventative Doctor' },
+      { id: 'docperf.doctorRestorative', label: 'Restorative Doctor' },
       { id: 'table.sales', label: 'Production Doctor' },
       { id: 'docperf.customer', label: 'Patient Seen' },
       { id: 'docperf.icecream', label: 'Insurance' },
@@ -2737,3 +2739,4 @@ export default function SimpleFormsDropdownViewPage() {
     </main>
   );
 }
+

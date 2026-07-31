@@ -20,9 +20,9 @@ const ISSUE_COLUMN_COUNT = 2;
 const ISSUE_COLUMN_HEADERS = ['Date', 'Issue'];
 const ISSUE_COLUMN_MIN_WIDTHS = [100, 480];
 const ISSUES_TABLE_MIN_WIDTH = ISSUE_COLUMN_MIN_WIDTHS.reduce((sum, width) => sum + width, 0);
-const EQUIPMENT_COLUMN_COUNT = 3;
-const EQUIPMENT_COLUMN_HEADERS = ['Category', 'Description', 'Status'];
-const EQUIPMENT_COLUMN_MIN_WIDTHS = [395, 790, 395];
+const EQUIPMENT_COLUMN_COUNT = 5;
+const EQUIPMENT_COLUMN_HEADERS = ['Category', 'Report Date', 'Description', 'Status', 'Fixed Date'];
+const EQUIPMENT_COLUMN_MIN_WIDTHS = [200, 200, 790, 400, 200];
 const EQUIPMENT_TABLE_MIN_WIDTH = EQUIPMENT_COLUMN_MIN_WIDTHS.reduce((sum, width) => sum + width, 0);
 const EQUIPMENT_ITEM_ROW_COLORS: Record<string, string> = {
   'DEM': '#dcfce7',
@@ -1421,8 +1421,8 @@ function ReportTablePageContent() {
     activeSection === 'reviews'
       ? REVIEWS_SECTION_MAX_WIDTH
       : activeSection === 'equipment'
-        ? 1700
-        : 1200;
+        ? 2000
+        : 1550;
 
   return (
     <main style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>
@@ -1563,7 +1563,7 @@ function ReportTablePageContent() {
 
         {hasSelection && !loading && !error && (
         <>
-        <div style={{ marginBottom: 20, maxWidth: 1700 }}>
+        <div style={{ marginBottom: 20, maxWidth: 2000 }}>
           {activeSection === 'equipment' && (
             <NotePanel
               title="Broken Equipment Note"
@@ -1676,3 +1676,4 @@ function ReportTablePageContent() {
     </main>
   );
 }
+
