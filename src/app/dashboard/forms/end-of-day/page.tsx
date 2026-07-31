@@ -167,14 +167,6 @@ export default function EndOfDay() {
 
         const userData = userDoc.data();
 
-        if (!['Director', 'HR', 'Manager'].includes(userData?.role)) {
-          setIsAuthorized(false);
-          if (typeof window !== 'undefined') {
-            window.location.href = '/';
-          }
-          return;
-        }
-
         setIsAuthorized(true);
       } catch {
         setIsAuthorized(false);
