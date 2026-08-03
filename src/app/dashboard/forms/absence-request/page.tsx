@@ -42,7 +42,7 @@ export default function Page() {
     try {
       // 1. Create a query to find the employee document where the 'employeeID' field matches
       const employeesRef = collection(db, "employees");
-      console.log("Attempting login for Employee ID:", employeeID);
+      //console.log("Attempting login for Employee ID:", employeeID);
       const q = query(employeesRef, where("employeeID", "==", employeeID));
 
       // 2. Execute the query
@@ -57,8 +57,8 @@ export default function Page() {
         // 4. Extract and validate Birth Year
         const dob = data.dateOfBirth;
         const employee_birthYear = dob.split('-')[0];
-        console.log("Employee Name from DB:", data.firstName, data.lastName);
-        console.log("Employee Birth Year from DB:", employee_birthYear);
+        //console.log("Employee Name from DB:", data.firstName, data.lastName);
+        //console.log("Employee Birth Year from DB:", employee_birthYear);
         if (employee_birthYear === year) {
           setIsAuthenticated(true);
         
