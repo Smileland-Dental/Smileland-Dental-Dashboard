@@ -134,7 +134,7 @@ export const EmployeeInfoTab = ({
 
           <div className="space-y-1">
             <label className="text-xs font-semibold text-gray-500">Date of Birth</label>
-            <input name="dateOfBirth" value={formData.dateOfBirth || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
+            <input type="date" name="dateOfBirth" value={formData.dateOfBirth || ''} onChange={handleInputChange} className="w-full border p-2 rounded" />
           </div>
 
           <div className="space-y-1">
