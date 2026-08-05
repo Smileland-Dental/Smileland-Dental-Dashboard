@@ -68,6 +68,8 @@ type LocationSummary = {
   rose?: string;
   total?: string;
   mailedProduction?: string;
+  mailedDate?: string;
+  daysSinceSubmitted?: string;
 };
 
 type ProductionSideMetrics = {
@@ -229,6 +231,19 @@ const reportPdfStyles = StyleSheet.create({
   },
   notesTableText: { fontSize: 7, lineHeight: 1.35, width: PDF_NOTES_TEXT_WIDTH_PT },
 });
+
+function getDateDiffInDays(dateTimeString: string | undefined, dateString: string | undefined): string {
+  if (!dateTimeString || !dateString) {
+    return "";
+  }
+  const datePart = dateTimeString.split(" ")[0];
+  const [targetYear, targetMonth, targetDay] = datePart.split("-").map(Number);
+  const [baseYear, baseMonth, baseDay] = dateString.split("-").map(Number);
+  const targetUTC = Date.UTC(targetYear, targetMonth - 1, targetDay);
+  const baseUTC = Date.UTC(baseYear, baseMonth - 1, baseDay);
+
+  return `${Math.floor((baseUTC - targetUTC) / (1000 * 60 * 60 * 24))}`;
+}
 
 function safeStr(value: unknown, maxLength = 80): string {
   if (value == null) return '';
@@ -436,6 +451,8 @@ function createSubmittedReportPDFDocument(props: {
     coffeeSales: string;
     total: string;
     mailedProduction: string;
+    mailedDate: string;
+    daysSinceSubmitted: string;
   };
   productionSideMetrics: ProductionSideMetrics;
   sugarRows: SugarRow[];
@@ -532,7 +549,7 @@ function createSubmittedReportPDFDocument(props: {
 
   const locationSummaryTable = createPdfTable(
     s,
-    ['Preventative', 'Restorative', 'CRA Production', '1st Review Production', 'Mailed Production'],
+    ['Preventative', 'Restorative', 'CRA Production', '1st Review Production', 'Mailed Production', 'Mailed Date', 'Days Since Submitted'],
     [
       [
         formatCurrencyLabel(locationSummary.pineapple || ''),
@@ -540,6 +557,8 @@ function createSubmittedReportPDFDocument(props: {
         formatCurrencyLabel(locationSummary.coffeeSales || ''),
         formatCurrencyLabel(locationSummary.total || ''),
         formatCurrencyLabel(locationSummary.mailedProduction || ''),
+        locationSummary.mailedDate || '',
+        locationSummary.daysSinceSubmitted || '',
       ],
     ],
     'location-summary'
@@ -1084,6 +1103,8 @@ function createEmptyLocationSummary(): LocationSummary {
     rose: '',
     total: '',
     mailedProduction: '',
+    mailedDate: '',
+    daysSinceSubmitted: '',
   };
 }
 
@@ -1551,7 +1572,7 @@ export default function ViewPage() {
     });
   };
 
-  const updateLocationSummaryField = (field: 'pineapple' | 'rose' | 'mailedProduction', value: string) => {
+  const updateLocationSummaryField = (field: 'pineapple' | 'rose' | 'mailedProduction' | 'mailedDate' | 'daysSinceSubmitted', value: string) => {
     setDraft((prev) => {
       if (!prev) return prev;
       return {
@@ -1639,6 +1660,8 @@ export default function ViewPage() {
           coffeeSales
         ),
         mailedProduction: formatMoneyValue(draftLocationSummary.mailedProduction),
+        mailedDate: String(draftLocationSummary.mailedDate ?? ''),
+        daysSinceSubmitted: String(draftLocationSummary.daysSinceSubmitted ?? ''),
       };
       const draftSideMetrics = {
         ...createEmptyProductionSideMetrics(),
@@ -1782,6 +1805,8 @@ export default function ViewPage() {
     visibleCoffeeSales
   );
   const visibleMailedProduction = String(visibleLocationSummary.mailedProduction ?? '');
+  const visibleMailedDate = String(visibleLocationSummary.mailedDate ?? '');
+  const visibleDaysSinceSubmitted = getDateDiffInDays(selectedDoc?.submittedDateTime, visibleLocationSummary.mailedDate);
   const visibleGrandTotal = isEditing ? String(draft?.grandTotal ?? '') : selectedDoc?.grandTotal || '';
   const visibleSalesWithoutCoffee = computeSalesWithoutCoffee(visibleGrandTotal, visibleCoffeeSales);
   const visiblePaperAtOrangeJuice = isEditing ? String(draft?.paperAtOrangeJuice ?? '') : selectedDoc?.paperAtOrangeJuice || '';
@@ -1871,6 +1896,8 @@ export default function ViewPage() {
           coffeeSales: visibleCoffeeSales,
           total: visibleLocationTotal,
           mailedProduction: visibleMailedProduction,
+          mailedDate: visibleMailedDate,
+          daysSinceSubmitted: visibleDaysSinceSubmitted,
         },
         productionSideMetrics: visibleProductionSideMetrics,
         sugarRows: visibleSugarRows,
@@ -2415,6 +2442,38 @@ export default function ViewPage() {
                               ) : (
                                 formatCurrencyLabel(visibleMailedProduction || '')
                               )}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>Mailed Date</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                              {isEditing ? (
+                                <input
+                                  type="date"
+                                  value={String(draft?.locationSummary?.mailedDate ?? '')}
+                                  onChange={(e) => updateLocationSummaryField('mailedDate', e.target.value)}
+                                  style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                />
+                              ) : (
+                                visibleMailedDate || ''
+                              )}
+                            </td>
+                          </tr>
+                          <tr>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8, background: '#f9fafb', fontWeight: 700 }}>Days Since Submitted</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>
+                              {isEditing ? (
+                                <input
+                                  type="text"
+                                  readOnly
+                                  value={String(draft?.locationSummary?.daysSinceSubmitted ?? '')}
+                                  style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
+                                />
+                              ) : (
+                                visibleDaysSinceSubmitted || ''
+                              )
+                              }
+
                             </td>
                           </tr>
                         </tbody>
