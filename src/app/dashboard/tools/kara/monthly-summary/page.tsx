@@ -8,6 +8,15 @@ import { collection, deleteField, doc, getDoc, getDocs, serverTimestamp, setDoc 
 
 const PINK_BEAR_COLLECTION = 'monthly report';
 
+type SelectDestination = {
+  label: string;
+  path: string;
+};
+
+const SELECT_DESTINATIONS: SelectDestination[] = [
+  { label: 'Review', path: '/dashboard/tools/kara/review' },
+];
+
 type ReviewSummarySnapshot = {
   dailyGoal: number;
   monthlyGoal: number | null;
@@ -289,7 +298,15 @@ const summaryTablesRowStyle: React.CSSProperties = {
   alignItems: 'start',
 };
 
-function TableCard({ title, children }: { title?: string; children: React.ReactNode }) {
+function TableCard({
+  title,
+  onTitleClick,
+  children,
+}: {
+  title?: string;
+  onTitleClick?: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <div
       style={{
@@ -302,13 +319,26 @@ function TableCard({ title, children }: { title?: string; children: React.ReactN
     >
       {title && (
         <div
+          role={onTitleClick ? 'button' : undefined}
+          tabIndex={onTitleClick ? 0 : undefined}
+          onClick={onTitleClick}
+          onKeyDown={onTitleClick
+            ? (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onTitleClick();
+                }
+              }
+            : undefined}
           style={{
             padding: '10px 14px',
             borderBottom: '1px solid #e5e7eb',
             background: '#f8fafc',
             fontWeight: 700,
             fontSize: 13,
-            color: '#334155',
+            color: onTitleClick ? '#2563eb' : '#334155',
+            cursor: onTitleClick ? 'pointer' : undefined,
+            userSelect: onTitleClick ? 'none' : undefined,
           }}
         >
           {title}
@@ -1168,6 +1198,7 @@ function MetricsGoalsTable<K extends string>({
   readOnlyGoalKeys,
   getDerivedDailyGoal,
   getDerivedMonthlyGoal,
+  showDifference = false,
 }: {
   columns: GoalColumnDef<K>[];
   metrics: GoalsActualMetrics;
@@ -1184,8 +1215,13 @@ function MetricsGoalsTable<K extends string>({
     monthlyGoals: Partial<Record<K, number>>,
     docCount: number
   ) => number | undefined;
+  showDifference?: boolean;
 }) {
   const readOnlyKeys = new Set(readOnlyGoalKeys ?? []);
+
+  const resolveMonthlyGoal = (key: K) =>
+    getDerivedMonthlyGoal?.(key, dailyGoals, monthlyGoals, docCount)
+      ?? getComputedMonthlyGoal(dailyGoals[key], monthlyGoals[key], docCount);
 
   return (
     <table style={getTableStyle()}>
@@ -1225,12 +1261,7 @@ function MetricsGoalsTable<K extends string>({
         <tr style={rowStyle}>
           <td style={cellStyle}>Monthly Goal</td>
           {columns.map((column) => {
-            const monthlyValue = getDerivedMonthlyGoal?.(column.key, dailyGoals, monthlyGoals, docCount)
-              ?? getComputedMonthlyGoal(
-                dailyGoals[column.key],
-                monthlyGoals[column.key],
-                docCount
-              );
+            const monthlyValue = resolveMonthlyGoal(column.key);
             return (
               <td key={`monthly_goal_${column.key}`} style={cellStyle}>
                 {column.formatGoal(monthlyValue)}
@@ -1254,6 +1285,48 @@ function MetricsGoalsTable<K extends string>({
             </td>
           ))}
         </tr>
+        {showDifference && (
+          <>
+            <tr style={rowStyle}>
+              <td style={cellStyle}>Difference</td>
+              {columns.map((column) => {
+                const monthlyValue = resolveMonthlyGoal(column.key);
+                const total = column.getValue(metrics);
+                const difference = monthlyValue === undefined
+                  ? undefined
+                  : Math.round((total - monthlyValue + Number.EPSILON) * 100) / 100;
+                const differenceCellStyle: React.CSSProperties = {
+                  ...cellStyle,
+                  ...(difference !== undefined && difference > 0
+                    ? { background: '#d9f99d' }
+                    : {}),
+                  ...(difference !== undefined && difference < 0
+                    ? { background: '#fdba74' }
+                    : {}),
+                };
+                return (
+                  <td key={`difference_${column.key}`} style={differenceCellStyle}>
+                    {difference === undefined ? '' : column.formatTotal(difference)}
+                  </td>
+                );
+              })}
+            </tr>
+            <tr style={rowStyle}>
+              <td style={cellStyle}>Percentage</td>
+              {columns.map((column) => {
+                const monthlyValue = resolveMonthlyGoal(column.key);
+                const total = column.getValue(metrics);
+                return (
+                  <td key={`percentage_${column.key}`} style={cellStyle}>
+                    {monthlyValue === undefined || monthlyValue === 0
+                      ? ''
+                      : `${Math.round((total / monthlyValue) * 100)}%`}
+                  </td>
+                );
+              })}
+            </tr>
+          </>
+        )}
       </tbody>
     </table>
   );
@@ -1292,6 +1365,18 @@ function SealantGoalsTable({
     ? Math.round((sealantRdaTotal / sealantCombinedTotal) * 100)
     : 0;
   const sealantDdsPct = sealantCombinedTotal > 0 ? 100 - sealantRdaPct : 0;
+  const sealantTotalDifference = sealantTotal === undefined
+    ? undefined
+    : sealantTotal - sealantMonthlyGoal;
+  const sealantTotalDifferenceCellStyle: React.CSSProperties = {
+    ...cellStyle,
+    ...(sealantTotalDifference !== undefined && sealantTotalDifference > 0
+      ? { background: '#d9f99d' }
+      : {}),
+    ...(sealantTotalDifference !== undefined && sealantTotalDifference < 0
+      ? { background: '#fdba74' }
+      : {}),
+  };
 
   return (
     <table style={getTableStyle()}>
@@ -1350,6 +1435,26 @@ function SealantGoalsTable({
             {sealantTotal === undefined ? '' : formatIntegerDailyAverage(sealantTotal, docCount)}
           </td>
         </tr>
+        <tr style={rowStyle}>
+          <td style={cellStyle}>Difference</td>
+          {SEALANT_COLUMNS.map((column) => (
+            <td key={`difference_${column.key}`} style={cellStyle} />
+          ))}
+          <td style={sealantTotalDifferenceCellStyle}>
+            {sealantTotalDifference === undefined ? '' : formatInteger(sealantTotalDifference)}
+          </td>
+        </tr>
+        <tr style={rowStyle}>
+          <td style={cellStyle}>Percentage</td>
+          {SEALANT_COLUMNS.map((column) => (
+            <td key={`percentage_${column.key}`} style={cellStyle} />
+          ))}
+          <td style={cellStyle}>
+            {sealantTotal === undefined || sealantMonthlyGoal === 0
+              ? ''
+              : `${Math.round((sealantTotal / sealantMonthlyGoal) * 100)}%`}
+          </td>
+        </tr>
       </tbody>
     </table>
   );
@@ -1394,6 +1499,7 @@ function GoalsTablesSection({
           dailyGoals={officeDailyGoals}
           isEditing={isEditing}
           onGoalChange={onOfficeGoalChange}
+          showDifference
           readOnlyGoalKeys={['firstReviewProduction', 'mailedProduction']}
           getDerivedDailyGoal={(key, dailyGoals) => {
             if (key === 'mailedProduction') return undefined;
@@ -1419,6 +1525,7 @@ function GoalsTablesSection({
             dailyGoals={oeDailyGoals}
             isEditing={isEditing}
             onGoalChange={onOeGoalChange}
+            showDifference
           />
         </TableCard>
         <TableCard>
@@ -1430,6 +1537,7 @@ function GoalsTablesSection({
             dailyGoals={oeDailyGoals}
             isEditing={isEditing}
             onGoalChange={onOeGoalChange}
+            showDifference
           />
         </TableCard>
         <TableCard>
@@ -1937,6 +2045,17 @@ function ReviewSummaryTable({ summary }: { summary: ReviewSummarySnapshot | null
     );
   }
 
+  const actualSum = summary.actual.google + summary.actual.yelp + summary.actual.repugen;
+  const monthlyGoal = summary.monthlyGoal;
+  const difference = monthlyGoal === null || monthlyGoal === undefined
+    ? undefined
+    : actualSum - monthlyGoal;
+  const differenceCellStyle: React.CSSProperties = {
+    ...centeredCellStyle,
+    ...(difference !== undefined && difference > 0 ? { background: '#d9f99d' } : {}),
+    ...(difference !== undefined && difference < 0 ? { background: '#fdba74' } : {}),
+  };
+
   return (
     <table style={getTableStyle()}>
       <thead>
@@ -1979,6 +2098,20 @@ function ReviewSummaryTable({ summary }: { summary: ReviewSummarySnapshot | null
           <td style={cellStyle}>{formatSummaryText(summary.facebook.recommended)}</td>
           <td style={{ ...labelCellStyle, textAlign: 'center' }}>Not Recommended</td>
           <td style={cellStyle}>{formatSummaryText(summary.facebook.notRecommended)}</td>
+        </tr>
+        <tr>
+          <td style={labelCellStyle}>Difference</td>
+          <td colSpan={3} style={differenceCellStyle}>
+            {difference === undefined ? '' : formatInteger(difference)}
+          </td>
+        </tr>
+        <tr>
+          <td style={labelCellStyle}>Percentage</td>
+          <td colSpan={3} style={centeredCellStyle}>
+            {monthlyGoal === null || monthlyGoal === undefined || monthlyGoal === 0
+              ? ''
+              : `${Math.round((actualSum / monthlyGoal) * 100)}%`}
+          </td>
         </tr>
       </tbody>
     </table>
@@ -2070,7 +2203,7 @@ function PromotionTable({
                 const actual = actuals[actualKey];
                 return (
                   <td key={`${rowHeader}_${columnHeader}`} style={cellStyle}>
-                    {actual === undefined ? '' : formatDailyAverage(actual, docCount)}
+                    {actual === undefined ? '' : formatIntegerDailyAverage(actual, docCount)}
                   </td>
                 );
               }
@@ -2083,6 +2216,42 @@ function PromotionTable({
             })}
           </tr>
         ))}
+        <tr style={rowStyle}>
+          <td style={cellStyle}>Difference</td>
+          {PROMOTION_COLUMN_HEADERS.map((columnHeader) => {
+            const actualKey = PROMOTION_ACTUAL_KEYS[columnHeader];
+            const actual = actuals[actualKey];
+            const monthlyGoal = PROMOTION_DAILY_GOALS[columnHeader] * docCount;
+            const difference = actual === undefined
+              ? undefined
+              : Math.round((actual - monthlyGoal + Number.EPSILON) * 100) / 100;
+            const differenceCellStyle: React.CSSProperties = {
+              ...cellStyle,
+              ...(difference !== undefined && difference > 0 ? { background: '#d9f99d' } : {}),
+              ...(difference !== undefined && difference < 0 ? { background: '#fdba74' } : {}),
+            };
+            return (
+              <td key={`difference_${columnHeader}`} style={differenceCellStyle}>
+                {difference === undefined ? '' : formatAmount(difference)}
+              </td>
+            );
+          })}
+        </tr>
+        <tr style={rowStyle}>
+          <td style={cellStyle}>Percentage</td>
+          {PROMOTION_COLUMN_HEADERS.map((columnHeader) => {
+            const actualKey = PROMOTION_ACTUAL_KEYS[columnHeader];
+            const actual = actuals[actualKey];
+            const monthlyGoal = PROMOTION_DAILY_GOALS[columnHeader] * docCount;
+            return (
+              <td key={`percentage_${columnHeader}`} style={cellStyle}>
+                {actual === undefined || monthlyGoal === 0
+                  ? ''
+                  : `${Math.round((actual / monthlyGoal) * 100)}%`}
+              </td>
+            );
+          })}
+        </tr>
       </tbody>
     </table>
   );
@@ -2268,6 +2437,14 @@ function MonthlySummaryPageContent() {
   const searchParams = useSearchParams();
   const selectedMonth = searchParams.get('month') ?? '';
   const selectedOffice = searchParams.get('office') ?? '';
+
+  const handleDestinationClick = (path: string) => {
+    const params = new URLSearchParams();
+    if (selectedMonth) params.set('month', selectedMonth);
+    if (selectedOffice) params.set('office', selectedOffice);
+    const query = params.toString();
+    window.open(query ? `${path}?${query}` : path, '_blank', 'noopener,noreferrer');
+  };
   const [pageReady, setPageReady] = useState(false);
   const [docs, setDocs] = useState<FormDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -2792,9 +2969,15 @@ function MonthlySummaryPageContent() {
             <SectionBlock>
               <div style={summaryTablesRowStyle}>
                 <div style={tableCardStyle}>
-                  <TableCard title="Review">
-                    <ReviewSummaryTable summary={reviewSummary} />
-                  </TableCard>
+                  {SELECT_DESTINATIONS.map((destination) => (
+                    <TableCard
+                      key={destination.path}
+                      title={destination.label}
+                      onTitleClick={() => handleDestinationClick(destination.path)}
+                    >
+                      <ReviewSummaryTable summary={reviewSummary} />
+                    </TableCard>
+                  ))}
                 </div>
                 <div style={tableCardStyle}>
                   <TableCard title="Injury Issue">
@@ -2858,11 +3041,9 @@ function MonthlySummaryPageContent() {
 export default function MonthlySummaryPage() {
   return (
     <Suspense
-      fallback={<main style={{ minHeight: '100vh', background: '#f1f5f9' }} />}
+      fallback={<main style={{ minHeight: '100vh', background: '#151617' }} />}
     >
       <MonthlySummaryPageContent />
     </Suspense>
   );
 }
-
-
