@@ -1,9 +1,9 @@
 'use client';
 
 import React, { useEffect, useRef, useState } from 'react';
-import { getAuth, onAuthStateChanged } from 'firebase/auth';
-import { db } from '@/lib/firebase.config';
-import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth, db } from '@/lib/firebase.config';
+import { doc, getDoc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 
 type SimpleFormData = {
   location: string;
@@ -138,7 +138,6 @@ function parseNumber(value: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-/** 표시용 천 단위 콤마 (저장값은 콤마 없는 숫자 문자열 유지). */
 function formatWithCommas(value: string | number): string {
   const raw = String(value ?? '').replace(/,/g, '').trim();
   if (raw === '') return '';
@@ -172,17 +171,14 @@ function sanitizeNumberInput(raw: string, allowDecimal: boolean): string {
   return s;
 }
 
-/** 달러 금액: 감산·곱셈 후 부동소수점 잔여 자릿수 정리 (센트 단위). */
 function roundToCents(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
-/** 달러 금액을 항상 소수 둘째 자리 문자열로 (예: 10.5 → "10.50"). */
 function toMoneyString(n: number): string {
   return roundToCents(n).toFixed(2);
 }
 
-/** 달러 금액 표시용 천 단위 콤마 + 소수 둘째 자리. */
 function formatMoneyWithCommas(value: string | number): string {
   const raw = String(value ?? '').replace(/,/g, '').trim();
   if (raw === '') return '';
@@ -197,7 +193,6 @@ function formatMoneyWithCommas(value: string | number): string {
   return `${isNegative ? '-' : ''}${formattedInt}.${decPart}`;
 }
 
-/** 건수 집계: 합·차 후 부동소수점 잔여 자릿수 정리 (정수). */
 function roundToWhole(n: number): number {
   return Math.round(n);
 }
@@ -213,7 +208,7 @@ function computeRow(row: TableRow): TableRow {
     ? roundToWhole(parseNumber(row.orangeJuiceNew) + parseNumber(row.orangeJuiceReturn))
     : NaN;
   const orangeJuiceTotal = orangeHasInput ? String(orangeJuiceTotalNum) : '';
-  /** CRA (Billable) = CRA Total − CRA (Not Billable); CRA Total comes from New+Return. */
+
   const coffeeYes =
     coffeeTotal !== '' ? String(roundToWhole(coffeeTotalNum - parseNumber(row.coffeeNo))) : '';
 
@@ -370,7 +365,6 @@ function parseDateTimeValue(value: string): Date | null {
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
-/** Firestore(AM/PM 등) → datetime-local 입력용 YYYY-MM-DDTHH:mm */
 function toDateTimeLocalValue(stored: string): string {
   const trimmed = stored.trim();
   if (!trimmed) return '';
@@ -387,7 +381,6 @@ function toDateTimeLocalValue(stored: string): string {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
-/** datetime-local 입력값 → Firestore 저장용 AM/PM 문자열 */
 function toStoredDateTime12h(localValue: string): string {
   const trimmed = localValue.trim();
   if (!trimmed) return '';
@@ -645,34 +638,33 @@ export default function Page() {
   );
   const [docSubmitLock, setDocSubmitLock] = useState(false);
   const [locationOptions, setLocationOptions] = useState<string[]>([]);
-  const [pageAccess, setPageAccess] = useState<'loading' | 'allowed' | 'denied' | 'unauthenticated'>(
-    'loading'
-  );
+  const [pageAccess, setPageAccess] = useState<'loading' | 'allowed'>('loading');
 
   useEffect(() => {
-    const auth = getAuth();
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (!user) {
-        setPageAccess('unauthenticated');
-        setLocationOptions([]);
-        setForm((prev) => (prev.location === '' ? prev : { ...prev, location: '' }));
-        return;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
       }
+    };
 
-      setPageAccess('loading');
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       try {
+        if (!user) {
+          goHome();
+          return;
+        }
+
+        setPageAccess('loading');
         const snap = await getDoc(doc(db, 'users', user.uid));
         const data = snap.exists() ? snap.data() : undefined;
         const accessRaw = data?.forms;
         const accessList = Array.isArray(accessRaw)
           ? accessRaw.map((item) => String(item).trim())
           : [];
-        const hasPinkAccess = accessList.includes(REQUIRED_ACCESS);
+        const hasAccess = accessList.includes(REQUIRED_ACCESS);
 
-        if (!hasPinkAccess) {
-          setPageAccess('denied');
-          setLocationOptions([]);
-          setForm((prev) => (prev.location === '' ? prev : { ...prev, location: '' }));
+        if (!hasAccess) {
+          goHome();
           return;
         }
 
@@ -698,8 +690,7 @@ export default function Page() {
         });
         setPageAccess('allowed');
       } catch {
-        setPageAccess('denied');
-        setLocationOptions([]);
+        goHome();
       }
     });
 
@@ -853,10 +844,10 @@ export default function Page() {
         }));
         lastSavedKeyRef.current = '';
         if (!cancelled) setDocSubmitLock(false);
-      } catch (error: any) {
+      } catch {
         if (cancelled) return;
         setDocSubmitLock(false);
-        setStatus(`불러오기 실패: ${error?.message || '알 수 없는 오류'}`);
+        setStatus('Failed to load');
       }
     };
 
@@ -926,7 +917,6 @@ export default function Page() {
         );
         lastSavedKeyRef.current = saveKey;
       } catch {
-        // Auto-save failures are silent; submit still surfaces errors.
       }
     }, 700);
 
@@ -1028,7 +1018,8 @@ export default function Page() {
       const submittedDateTime = getNowDateTimeString();
 
       const { notes, notDue, ...formWithoutMultiline } = form;
-      await setDoc(doc(db, 'simple-forms', docId), {
+      const docRef = doc(db, 'simple-forms', docId);
+      const payload = {
         ...formWithoutMultiline,
         ...getMultilineFirestoreFields(notes, notDue),
         submittedDateTime,
@@ -1044,7 +1035,14 @@ export default function Page() {
         sugarTotals,
         reasonRows,
         updatedAt: serverTimestamp(),
-      });
+      };
+
+      // Keep fields written by other pages; only patch this page's fields.
+      if (existingSnap.exists()) {
+        await updateDoc(docRef, payload);
+      } else {
+        await setDoc(docRef, payload);
+      }
 
       lastSavedKeyRef.current = '';
       setForm({
@@ -1074,48 +1072,7 @@ export default function Page() {
   };
 
   if (pageAccess !== 'allowed') {
-    const message =
-      pageAccess === 'loading'
-        ? 'Checking access…'
-        : pageAccess === 'unauthenticated'
-          ? 'Please sign in to continue.'
-          : 'You do not have access to this page.';
-
-    return (
-      <main
-        style={{
-          minHeight: '100vh',
-          display: 'grid',
-          placeItems: 'center',
-          background: '#ffffff',
-          padding: '48px 24px',
-        }}
-      >
-        <section
-          style={{
-            width: '100%',
-            maxWidth: 420,
-            background: '#fff',
-            border: '1px solid #e5e7eb',
-            borderRadius: 12,
-            padding: 28,
-            boxShadow: '0 8px 24px rgba(15, 23, 42, 0.06)',
-            textAlign: 'center',
-          }}
-        >
-          <p
-            style={{
-              margin: 0,
-              fontSize: 15,
-              color: pageAccess === 'denied' ? '#991b1b' : '#6b7280',
-              fontWeight: pageAccess === 'denied' ? 600 : 500,
-            }}
-          >
-            {message}
-          </p>
-        </section>
-      </main>
-    );
+    return null;
   }
 
   return (

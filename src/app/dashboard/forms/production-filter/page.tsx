@@ -1217,7 +1217,7 @@ export default function SimpleFormsDropdownViewPage() {
         }
 
         const userData = userDoc.data();
-        if (userData?.role !== 'HR' && userData?.role !== 'Director' && userData?.role !== 'Manager') {
+        if (userData?.role !== 'HR' && userData?.role !== 'Director') {
           goHome();
           return;
         }

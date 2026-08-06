@@ -1,13 +1,22 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef, Suspense } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { doc,setDoc, collection, getDocs, getDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp, } from "firebase/firestore";
 import { getStorage, ref, listAll, getMetadata, getDownloadURL, deleteObject, type StorageReference, } from "firebase/storage";
 import { db, auth } from "@/lib/firebase.config";
 import { onAuthStateChanged } from 'firebase/auth';
-const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
 const MAX_STRING_LENGTH = 10000;
+const ITEM_EDITABLE_FIELDS = new Set([
+  'category',
+  'item',
+  'extraInfo',
+  'price',
+  'seller',
+  'code',
+  'url',
+]);
 
 function sanitizeValue(value: unknown): unknown {
   if (value === null || value === undefined) return null;
@@ -31,7 +40,6 @@ function sanitizeValue(value: unknown): unknown {
 function sanitizeData<T extends Record<string, unknown>>(data: T): T {
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(data)) {
-    if (DANGEROUS_KEYS.has(key)) continue;
     const sanitizedKey = String(key).trim().slice(0, 500);
     if (!sanitizedKey) continue;
     result[sanitizedKey] = sanitizeValue(data[key]);
@@ -46,7 +54,7 @@ function normalizeSupplyStoragePath(path: string): string | null {
   return p;
 }
 
-const SUPPLY_ORDER_PDF_STATUS_COLLECTION = "supply-order-pdf-status";
+const PDF_STATUS_COLLECTION = "supply-order-pdf-status";
 
 type ManagerSupplyPdfStatus =
   | "requested"
@@ -127,7 +135,6 @@ async function collectSupplyOrderPdfRefs(
   return direct.concat(...nested);
 }
 
-// 개별 아이템 행 컴포넌트 (엑셀 스타일)
 interface ItemRowProps {
   item: any;
   updateItem: (itemId: string, field: string, value: string) => void;
@@ -151,7 +158,6 @@ const ItemRow = React.memo(({
   onInsertBelow,
   editingValues
 }: ItemRowProps) => {
-  // 편집 중인 값이 있으면 그것을 사용, 없으면 item 값 사용
   const getValue = (field: string) => {
     return editingValues[item.id]?.[field] ?? item[field];
   };
@@ -301,8 +307,7 @@ ItemRow.displayName = 'ItemRow';
 
 function SupplyManagerSystemContent() {
   const searchParams = useSearchParams();
-  const router = useRouter();
-  const [supplyType, setSupplyType] = useState('order-request'); // 'dental', 'office', or 'order-request'
+  const [supplyType, setSupplyType] = useState('order-request'); 
   const [items, setItems] = useState<any[]>([]);
   const [filteredItems, setFilteredItems] = useState<any[]>([]);
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
@@ -322,7 +327,6 @@ function SupplyManagerSystemContent() {
   });
   const [insertAfterRow, setInsertAfterRow] = useState('');
   const [editingValues, setEditingValues] = useState<{ [key: string]: any }>({});
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
   const [orderRequestPdfs, setOrderRequestPdfs] = useState<StorageOrderPdf[]>([]);
   const [filteredOrderPdfs, setFilteredOrderPdfs] = useState<StorageOrderPdf[]>([]);
   const [viewingStoragePdf, setViewingStoragePdf] = useState<StorageOrderPdf | null>(null);
@@ -331,13 +335,14 @@ function SupplyManagerSystemContent() {
   const [storagePdfViewerError, setStoragePdfViewerError] = useState(false);
   const storagePdfBlobUrlRef = useRef<string | null>(null);
   const [managerStatusUpdatingPath, setManagerStatusUpdatingPath] = useState<string | null>(null);
+  const [pageReady, setPageReady] = useState(false);
 
   const collectionName = supplyType === 'dental' ? 'dental-supplies' : 'office-supplies';
   const supplyTypeLabel = supplyType === 'order-request' ? 'Order Request' : (supplyType === 'dental' ? 'Dental' : 'Office');
-  const supplyTypeEmoji = supplyType === 'order-request' ? '📦' : (supplyType === 'dental' ? '🦷' : '📋');
 
-  // 카테고리 옵션 동적 생성
   const categoryOptions = [...new Set(items.map(item => item.category).filter(Boolean))].sort();
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
 
   const loadOrderRequestPdfsFromStorage = useCallback(async () => {
     try {
@@ -378,10 +383,10 @@ function SupplyManagerSystemContent() {
           let managerStatusFirestore: string | null = null;
           if (docId) {
             const snap = await getDoc(
-              doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, docId)
+              doc(db, PDF_STATUS_COLLECTION, docId)
             );
             if (snap.exists()) {
-              const data = sanitizeData(snap.data() || {}) as Record<string, unknown>;
+              const data = snap.data() || {};
               officeStatusFirestore =
                 data.office_status === "received" ? "received" : "requested";
               const ms = data.manager_status;
@@ -426,9 +431,9 @@ function SupplyManagerSystemContent() {
           if (!p) throw new Error("invalid path");
           await deleteObject(ref(getStorage(), p));
           try {
-            await deleteDoc(doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, docId));
+            await deleteDoc(doc(db, PDF_STATUS_COLLECTION, docId));
           } catch {
-            /* 문서 없음 */
+
           }
           setViewingStoragePdf((v) => (v?.path === pdf.path ? null : v));
           await loadOrderRequestPdfsFromStorage();
@@ -454,7 +459,7 @@ function SupplyManagerSystemContent() {
         }
 
         await setDoc(
-          doc(db, SUPPLY_ORDER_PDF_STATUS_COLLECTION, docId),
+          doc(db, PDF_STATUS_COLLECTION, docId),
           payload as { [key: string]: unknown },
           { merge: true }
         );
@@ -485,11 +490,10 @@ function SupplyManagerSystemContent() {
     [loadOrderRequestPdfsFromStorage]
   );
 
-  // 데이터 로드 (dental / office: Firestore, order-request: Storage PDF만)
   const loadItems = useCallback(async () => {
     if (supplyType === "order-request") {
       await loadOrderRequestPdfsFromStorage();
-      return;
+      return [];
     }
     try {
       setLoading(true);
@@ -499,29 +503,29 @@ function SupplyManagerSystemContent() {
       const itemsList: any[] = [];
 
       querySnapshot.forEach((docSnap: any) => {
-        const rawData = docSnap.data();
-        const sanitizedData = sanitizeData(rawData);
+        const rawData = docSnap.data() || {};
 
-        if (sanitizedData.items && sanitizedData.items.length > 0) {
-          sanitizedData.items.forEach((item: any, index: number) => {
-            const quantity = sanitizedData.quantities?.[item.id] || 0;
-            const perItemStatus = sanitizedData.itemStatuses?.[item.id] || sanitizedData.status;
+        if (Array.isArray(rawData.items) && rawData.items.length > 0) {
+          rawData.items.forEach((item: any, index: number) => {
+            const quantity = rawData.quantities?.[item.id] || 0;
+            const perItemStatus = rawData.itemStatuses?.[item.id] || rawData.status;
             itemsList.push({
               id: `${docSnap.id}-${index}`,
               originalItemId: item.id,
               ...item,
               quantity: quantity,
-              orderSessionId: sanitizedData.orderSessionId,
-              office: sanitizedData.office,
-              orderDate: sanitizedData.orderDate,
+              orderSessionId: rawData.orderSessionId,
+              office: rawData.office,
+              orderDate: rawData.orderDate,
               status: perItemStatus,
               parentDocId: docSnap.id,
+              nestedIndex: index,
             });
           });
         } else {
           itemsList.push({
             id: docSnap.id,
-            ...sanitizedData,
+            ...rawData,
           });
         }
       });
@@ -545,19 +549,21 @@ function SupplyManagerSystemContent() {
 
       setItems(itemsWithDisplayId);
       setFilteredItems(itemsWithDisplayId);
+      itemsRef.current = itemsWithDisplayId;
+      return itemsWithDisplayId;
     } catch (error) {
       setError("Failed to load items");
+      return [];
     } finally {
       setLoading(false);
     }
   }, [collectionName, supplyType, loadOrderRequestPdfsFromStorage]);
 
-  // Firebase 업데이트를 위한 debounce 타이머 저장
   const updateTimersRef = useRef<{ [key: string]: NodeJS.Timeout }>({});
 
-  // 개별 아이템 업데이트 (편집 중인 값을 별도 관리)
   const updateItem = useCallback((itemId: string, field: string, value: string) => {
-    // 편집 중인 값을 별도 상태에 저장 (입력이 부드럽게 됨)
+    if (!ITEM_EDITABLE_FIELDS.has(field)) return;
+
     setEditingValues(prev => ({
       ...prev,
       [itemId]: {
@@ -566,33 +572,62 @@ function SupplyManagerSystemContent() {
       }
     }));
 
-    // 이전 타이머 취소
     const timerKey = `${itemId}-${field}`;
     if (updateTimersRef.current[timerKey]) {
       clearTimeout(updateTimersRef.current[timerKey]);
     }
 
-    // 새 타이머 설정 (1초 후 Firebase 및 items 업데이트)
     updateTimersRef.current[timerKey] = setTimeout(async () => {
       try {
-        const itemRef = doc(db, collectionName, itemId);
-        const updateData = {
-          [field]: value,
-          lastUpdated: new Date().toISOString()
-        };
-        const sanitizedUpdateData = sanitizeData(updateData);
-        await updateDoc(itemRef, sanitizedUpdateData);
-        
-        // items 상태 업데이트
-        setItems(prevItems => 
-          prevItems.map(item => 
-            item.id === itemId 
-              ? { ...item, [field]: value, lastUpdated: new Date().toISOString() }
+        const row = itemsRef.current.find((item) => item.id === itemId);
+        if (!row) {
+          setError('Failed to update item');
+          return;
+        }
+
+        const sanitizedValue = String(value ?? '').trim().slice(0, MAX_STRING_LENGTH);
+        const lastUpdated = new Date().toISOString();
+
+        if (row.parentDocId) {
+          const parentRef = doc(db, collectionName, row.parentDocId);
+          const parentSnap = await getDoc(parentRef);
+          if (!parentSnap.exists()) {
+            throw new Error('Parent document not found');
+          }
+          const parentData = parentSnap.data() || {};
+          const nestedItems = Array.isArray(parentData.items) ? [...parentData.items] : [];
+          let nestedIndex = nestedItems.findIndex(
+            (it: any) => it?.id != null && it.id === row.originalItemId
+          );
+          if (nestedIndex < 0 && typeof row.nestedIndex === 'number') {
+            nestedIndex = row.nestedIndex;
+          }
+          if (nestedIndex < 0 || nestedIndex >= nestedItems.length) {
+            throw new Error('Nested item not found');
+          }
+          nestedItems[nestedIndex] = {
+            ...nestedItems[nestedIndex],
+            [field]: sanitizedValue,
+          };
+          await updateDoc(parentRef, {
+            items: nestedItems,
+            lastUpdated,
+          });
+        } else {
+          await updateDoc(doc(db, collectionName, itemId), {
+            [field]: sanitizedValue,
+            lastUpdated,
+          });
+        }
+
+        setItems(prevItems =>
+          prevItems.map(item =>
+            item.id === itemId
+              ? { ...item, [field]: sanitizedValue, lastUpdated }
               : item
           )
         );
-        
-        // 편집 완료된 값 제거
+
         setEditingValues(prev => {
           const newValues = { ...prev };
           if (newValues[itemId]) {
@@ -603,8 +638,7 @@ function SupplyManagerSystemContent() {
           }
           return newValues;
         });
-        
-        // 타이머 정리
+
         delete updateTimersRef.current[timerKey];
       } catch (error) {
         setError('Failed to update item');
@@ -612,7 +646,6 @@ function SupplyManagerSystemContent() {
     }, 1000);
   }, [collectionName]);
 
-  // 새 아이템 추가
   const addItem = useCallback(async () => {
     if (!newItem.item.trim()) {
       setError('Item name is required');
@@ -624,7 +657,6 @@ function SupplyManagerSystemContent() {
       
       let newOrder: number;
       
-      // 특정 행 뒤에 삽입하는 경우
       if (insertAfterRow && insertAfterRow.trim() !== '') {
         const insertAfterNumber = parseInt(insertAfterRow);
         
@@ -634,11 +666,9 @@ function SupplyManagerSystemContent() {
           return;
         }
         
-        // 1이면 맨 앞에 추가
         if (insertAfterNumber === 1) {
           newOrder = 0.5;
         } else {
-          // 해당 행 찾기 (insertAfterNumber - 1이 실제 행 번호)
           const targetItem = items.find(item => item.displayId === insertAfterNumber - 1);
           if (!targetItem) {
             setError('Target row not found');
@@ -646,49 +676,42 @@ function SupplyManagerSystemContent() {
             return;
           }
           
-          // 해당 행의 order 값 가져오기
           const currentOrder = targetItem.order || (insertAfterNumber - 1);
           
-          // 다음 아이템의 order 값 찾기
           const nextItem = items.find(item => (item.order || item.displayId) > currentOrder);
           
           if (nextItem) {
-            // 사이에 삽입
             const nextOrder_value = nextItem.order || nextItem.displayId;
             newOrder = (currentOrder + nextOrder_value) / 2;
           } else {
-            // 맨 끝에 추가
             newOrder = currentOrder + 1;
           }
         }
         
-        // order 값이 너무 가까워지면 전체 재정렬
         const needsReordering = items.some(item => {
           const itemOrder = item.order || 0;
           return Math.abs(itemOrder - newOrder) < 0.001 && itemOrder !== newOrder;
         });
         
         if (needsReordering) {
-          // 배치 작업으로 모든 아이템 재정렬
           const batch = writeBatch(db);
           items.forEach((item, index) => {
+            if (item.parentDocId) return;
             const itemRef = doc(db, collectionName, item.id);
             batch.update(itemRef, { order: index + 1 });
           });
           await batch.commit();
-          await loadItems();
-          
-          // 재로드 후 다시 계산
-          const reloadedItems = items.map((item, index) => ({ ...item, order: index + 1 }));
-          const targetItem = reloadedItems[insertAfterNumber - 1];
+          const reloadedItems = await loadItems();
+          const targetItem = reloadedItems.find(
+            (item) => item.displayId === insertAfterNumber
+          );
           if (targetItem) {
-            newOrder = targetItem.order + 0.5;
+            newOrder = (targetItem.order || insertAfterNumber) + 0.5;
           } else {
             newOrder = (insertAfterNumber - 1) + 0.5;
           }
         }
       } else {
-        // 맨 끝에 추가
         const maxOrder = items.length > 0 ? Math.max(...items.map(item => item.order || 0)) : 0;
         newOrder = maxOrder + 1;
       }
@@ -700,7 +723,6 @@ function SupplyManagerSystemContent() {
         lastUpdated: new Date().toISOString()
       };
 
-      // 데이터 검증 후 저장
       const sanitizedItemData = sanitizeData(itemData);
       const newItemRef = doc(collection(db, collectionName));
       await setDoc(newItemRef, sanitizedItemData);
@@ -724,10 +746,55 @@ function SupplyManagerSystemContent() {
     }
   }, [newItem, items, collectionName, loadItems, insertAfterRow]);
 
-  
+  const removeSupplyItemById = useCallback(
+    async (itemId: string) => {
+      const row = itemsRef.current.find((item) => item.id === itemId);
+      if (!row) {
+        throw new Error('Item not found');
+      }
 
+      if (row.parentDocId) {
+        const parentRef = doc(db, collectionName, row.parentDocId);
+        const parentSnap = await getDoc(parentRef);
+        if (!parentSnap.exists()) {
+          throw new Error('Parent document not found');
+        }
+        const parentData = parentSnap.data() || {};
+        const nestedItems = Array.isArray(parentData.items) ? [...parentData.items] : [];
+        const nextItems = nestedItems.filter((it: any, index: number) => {
+          if (row.originalItemId != null) {
+            return it?.id !== row.originalItemId;
+          }
+          if (typeof row.nestedIndex === 'number') {
+            return index !== row.nestedIndex;
+          }
+          return true;
+        });
 
-  // 선택된 아이템들 삭제
+        if (nextItems.length === 0) {
+          await deleteDoc(parentRef);
+        } else {
+          const quantities = { ...(parentData.quantities || {}) };
+          const itemStatuses = { ...(parentData.itemStatuses || {}) };
+          if (row.originalItemId != null) {
+            delete quantities[row.originalItemId];
+            delete itemStatuses[row.originalItemId];
+          }
+          await updateDoc(parentRef, {
+            items: nextItems,
+            quantities,
+            itemStatuses,
+            lastUpdated: new Date().toISOString(),
+          });
+        }
+        return;
+      }
+
+      await deleteDoc(doc(db, collectionName, itemId));
+    },
+    [collectionName]
+  );
+
   const deleteSelectedItems = useCallback(async () => {
     if (selectedItems.size === 0) {
       setError('Please select items to delete');
@@ -740,14 +807,10 @@ function SupplyManagerSystemContent() {
 
     try {
       setLoading(true);
-      const batch = writeBatch(db);
-
-      selectedItems.forEach((itemId: string) => {
-        const itemRef = doc(db, collectionName, itemId);
-        batch.delete(itemRef);
-      });
-
-      await batch.commit();
+      for (const itemId of selectedItems) {
+        await removeSupplyItemById(itemId);
+        itemsRef.current = itemsRef.current.filter((item) => item.id !== itemId);
+      }
       setSelectedItems(new Set());
       await loadItems();
     } catch (error) {
@@ -755,9 +818,8 @@ function SupplyManagerSystemContent() {
     } finally {
       setLoading(false);
     }
-  }, [selectedItems, collectionName, loadItems]);
+  }, [selectedItems, removeSupplyItemById, loadItems]);
 
-  // 개별 아이템 삭제
   const deleteItem = useCallback(async (itemId: string) => {
     if (typeof itemId !== 'string') {
       return;
@@ -769,16 +831,15 @@ function SupplyManagerSystemContent() {
 
     try {
       setLoading(true);
-      await deleteDoc(doc(db, collectionName, itemId));
+      await removeSupplyItemById(itemId);
       await loadItems();
     } catch (error) {
       setError('Failed to delete item');
     } finally {
       setLoading(false);
     }
-  }, [collectionName, loadItems]);
+  }, [removeSupplyItemById, loadItems]);
 
-  // 아이템 선택 토글
   const toggleItemSelection = useCallback((itemId: string) => {
     setSelectedItems(prev => {
       const newSet = new Set(prev);
@@ -791,14 +852,11 @@ function SupplyManagerSystemContent() {
     });
   }, []);
 
-  // 특정 행 뒤에 삽입하기 위한 함수
   const handleInsertBelow = useCallback((displayId: number) => {
     setInsertAfterRow((displayId + 1).toString());
-    // 스크롤을 추가 폼으로 이동
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }, []);
 
-  // 전체 선택/해제
   const toggleSelectAll = useCallback(() => {
     if (selectedItems.size === filteredItems.length) {
       setSelectedItems(new Set());
@@ -807,7 +865,6 @@ function SupplyManagerSystemContent() {
     }
   }, [selectedItems.size, filteredItems]);
 
-  // 필터링 로직
   useEffect(() => {
     let filtered = [...items];
 
@@ -829,7 +886,6 @@ function SupplyManagerSystemContent() {
       );
     }
 
-    // displayId 재계산
     const filteredWithDisplayId = filtered.map((item, index) => ({
       ...item,
       displayId: index + 1
@@ -843,12 +899,7 @@ function SupplyManagerSystemContent() {
     let f = [...orderRequestPdfs];
     if (searchInput.trim()) {
       const q = searchInput.trim().toLowerCase();
-      f = f.filter(
-        (p) =>
-          p.filename.toLowerCase().includes(q) ||
-          p.office.toLowerCase().includes(q) ||
-          (p.dateFolder && p.dateFolder.toLowerCase().includes(q))
-      );
+      f = f.filter((p) => p.office.toLowerCase().includes(q));
     }
     setFilteredOrderPdfs(f);
   }, [supplyType, orderRequestPdfs, searchInput]);
@@ -934,17 +985,6 @@ function SupplyManagerSystemContent() {
     return () => window.removeEventListener("keydown", onKey);
   }, [viewingStoragePdf]);
 
-  // supply type 변경 시 데이터 리로드
-  useEffect(() => {
-    loadItems();
-    setSelectedItems(new Set());
-    setCategoryFilter('');
-    setSellerFilter('');
-    setSearchInput('');
-    setEditingValues({});
-  }, [supplyType, loadItems]);
-
-  // URL 파라미터에서 supply type 설정
   useEffect(() => {
     const type = searchParams.get('type');
     if (type === 'dental' || type === 'office' || type === 'order-request') {
@@ -952,49 +992,75 @@ function SupplyManagerSystemContent() {
     }
   }, [searchParams]);
 
-  // 초기 로드
   useEffect(() => {
+    if (!pageReady) return;
     loadItems();
-  }, [loadItems]);
+    setSelectedItems(new Set());
+    setCategoryFilter('');
+    setSellerFilter('');
+    setSearchInput('');
+    setEditingValues({});
+  }, [pageReady, supplyType, loadItems]);
 
-  // 사용자 인증 및 role 확인
   useEffect(() => {
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (!currentUser) {
-          alert('Please log in.');
-          setIsAuthorized(false);
-          return;
-        }
-
-        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
-        if (!userDoc.exists()) {
-          alert('User information could not be found.');
-          setIsAuthorized(false);
-          return;
-        }
-
-        if (userDoc.id !== 'eV4AQK6V6yZQgFPNOfVeRrtz5Eu1' && userDoc.id !== 'rVMFu186CNf6ebSdSsnOg7EUrh63') {
-          setIsAuthorized(false);
-          if (typeof window !== 'undefined') {
-            window.location.href = '/';
+          if (!cancelled) {
+            setPageReady(false);
+            goHome();
           }
           return;
         }
 
-        setIsAuthorized(true);
-      } catch (error: any) {
-        alert('An error occurred while verifying authentication.');
-        setIsAuthorized(false);
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (cancelled) return;
+
+        if (!userDoc.exists()) {
+          setPageReady(false);
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'HR'
+        ) {
+          setPageReady(false);
+          goHome();
+          return;
+        }
+
+        setPageReady(true);
+      } catch {
+        if (!cancelled) {
+          setPageReady(false);
+          goHome();
+        }
       }
     });
 
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
     return () => {
+      cancelled = true;
       unsubscribe();
     };
   }, []);
 
-  // 컴포넌트 언마운트 시 타이머 정리
   useEffect(() => {
     return () => {
       Object.keys(updateTimersRef.current).forEach((key) => {
@@ -1003,7 +1069,6 @@ function SupplyManagerSystemContent() {
     };
   }, []);
 
-  // 스타일 정의
   const bodyStyle = {
     fontFamily: 'Segoe UI, Tahoma, Geneva, Verdana, sans-serif',
     backgroundColor: '#f8f9fa',
@@ -1090,40 +1155,8 @@ function SupplyManagerSystemContent() {
     fontSize: '15px'
   };
 
-  // 인증 확인 중
-  if (isAuthorized === null) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        background: '#f8f9fa',
-        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '18px', color: '#2c3e50' }}>Verifying authentication...</div>
-        </div>
-      </div>
-    );
-  }
-
-  // 인증 실패
-  if (isAuthorized === false) {
-    return (
-      <div style={{
-        display: 'flex',
-        justifyContent: 'center',
-        alignItems: 'center',
-        height: '100vh',
-        background: '#f8f9fa',
-        fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif"
-      }}>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '18px', color: '#d32f2f', marginBottom: '10px' }}>You do not have access to this page.</div>
-        </div>
-      </div>
-    );
+  if (!pageReady) {
+    return null;
   }
 
   return (
@@ -1132,7 +1165,6 @@ function SupplyManagerSystemContent() {
         {/* 헤더 */}
         <h1 style={headerStyle}>Supply Manager</h1>
 
-        {/* Supply Type 선택 */}
         <div style={sectionStyle}>
           <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>Supply Type Selection</h2>
           <div style={{ display: 'flex', gap: '20px', alignItems: 'center' }}>
@@ -1172,8 +1204,6 @@ function SupplyManagerSystemContent() {
           </div>
         </div>
 
-
-        {/* 새 아이템 추가 - Order Request가 아닐 때만 표시 */}
         {supplyType !== 'order-request' && (
         <div style={sectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
@@ -1288,8 +1318,6 @@ function SupplyManagerSystemContent() {
         </div>
         )}
 
-
-        {/* 에러 메시지 */}
         {error && (
           <div style={{ 
             backgroundColor: '#f8d7da', 
@@ -1319,7 +1347,6 @@ function SupplyManagerSystemContent() {
           </div>
         )}
 
-        {/* 엑셀 스타일 데이터 테이블 */}
         <div style={sectionStyle}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px' }}>
             <h2 style={{ color: '#0077B6', margin: 0 }}>{supplyTypeLabel} {supplyType === 'order-request' ? 'List' : 'Supply Items'}</h2>
@@ -1457,7 +1484,7 @@ function SupplyManagerSystemContent() {
                     type="text"
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
-                    placeholder="Office, file name, or date folder..."
+                    placeholder="Office"
                     style={inputStyle}
                   />
                 </div>
@@ -1594,7 +1621,7 @@ function SupplyManagerSystemContent() {
                                     : rowStatus === 'completed'
                                       ? '#d4edda'
                                       : rowStatus === 'received'
-                                        ? '#e7f3ff'
+                                        ? '#e9ecef'
                                         : rowStatus === 'delete'
                                           ? '#f8d7da'
                                           : '#e9ecef',
@@ -1606,7 +1633,7 @@ function SupplyManagerSystemContent() {
                                     : rowStatus === 'completed'
                                       ? '#155724'
                                       : rowStatus === 'received'
-                                        ? '#0d6efd'
+                                        ? '#495057'
                                         : rowStatus === 'delete'
                                           ? '#721c24'
                                           : '#495057',
@@ -1618,7 +1645,7 @@ function SupplyManagerSystemContent() {
                                     : rowStatus === 'completed'
                                       ? '#28a745'
                                       : rowStatus === 'received'
-                                        ? '#0d6efd'
+                                        ? '#6c757d'
                                         : rowStatus === 'delete'
                                           ? '#dc3545'
                                           : '#6c757d',
@@ -1840,4 +1867,3 @@ export default function SupplyManagerSystem() {
     </>
   );
 }
-
