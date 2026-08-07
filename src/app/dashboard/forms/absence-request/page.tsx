@@ -100,7 +100,7 @@ export default function Page() {
 
     let timeoutId: NodeJS.Timeout;
     let lastActivityTime = Date.now(); // Store exact timestamp of last activity
-    const INACTIVITY_LIMIT = 5 * 60 * 1000; // 5 minutes
+    const INACTIVITY_LIMIT = 1 * 60 * 1000; // 1 minutes
 
     const resetTimer = () => {
       clearTimeout(timeoutId);
@@ -108,7 +108,7 @@ export default function Page() {
 
       timeoutId = setTimeout(() => {
         handleLogout();
-        alert("You have been signed out due to 5 minutes of inactivity.");
+        alert("You have been signed out due to inactivity.");
       }, INACTIVITY_LIMIT);
     };
 
@@ -161,7 +161,7 @@ export default function Page() {
       const absenceData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as AbsenceRequest));
 
       const activeAbsences = absenceData.filter(absence => (absence.status !== 'archived' && absence.status !== 'pending_action'));
-      const archivedAbsences = absenceData.filter(absence => absence.status === 'archived');
+      const archivedAbsences = absenceData.filter(absence => (absence.status === 'archived' || absence.status === 'cancellation_requested'));
       const pendingActionAbsences = absenceData.filter(absence => absence.status === 'pending_action')
       setAbsences(activeAbsences);
       setArchivedAbsences(archivedAbsences);

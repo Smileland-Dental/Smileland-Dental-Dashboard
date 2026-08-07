@@ -126,7 +126,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
     setIsSubmitting(true);
     try {
       await updateDoc(doc(db, "absences", absence.id), {
-        status: 'archived',
+        status: 'cancellation_requested',
         updatedAt: new Date(),
       });
 
@@ -235,12 +235,12 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             {!isDenied && absence.status !== 'archived' && (
               <div className="flex flex-col gap-1.5">
               <button type="button" onClick={handleDelete} className="text-xs font-bold text-red-500 hover:bg-red-50 px-3 py-1 rounded border border-red-200 uppercase tracking-tighter disabled:opacity-50 disabled:cursor-not-allowed disabled:border-gray-200 disabled:text-gray-400"
-                disabled={absence.type_of_request === "HR Call In" || absence.final_approval === "approved" || absence.final_approval === "denied" || isSubmitting}
+                disabled={absence.type_of_request === "HR Call In" || absence.type_of_request === "No Call" || absence.type_of_request === "Call In After Shift" ||  absence.type_of_request === "Previously Not Approved" || absence.final_approval === "approved" || absence.final_approval === "denied" || isSubmitting}
               >
                 Cancel Request
               </button>
 
-              {(absence.type_of_request === "HR Call In" || isApproved || absence.final_approval === "denied" || isSubmitting) && (
+              {(absence.type_of_request === "HR Call In" || absence.type_of_request === "No Call" || absence.type_of_request === "Call In After Shift" ||  absence.type_of_request === "Previously Not Approved" || isApproved || absence.final_approval === "denied" || isSubmitting) && (
                 <p className="text-[10px] text-slate-400 italic text-right">Contact EXEC to cancel.</p>
               )}
               </div>

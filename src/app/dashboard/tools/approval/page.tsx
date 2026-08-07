@@ -55,7 +55,7 @@ export default function Page() {
           const requests = await getAbsenceRequestsByUser(
             user, startDate, endDate
           ); // Filter out archived requests at this stage
-          setAllRequests((requests as AbsenceRequest[]).filter(r => (r.status !== 'archived' && r.status !== 'pending_action')));
+          setAllRequests((requests as AbsenceRequest[]).filter(r => (r.status !== 'archived' && r.status !== 'cancellation_requested' && r.status !== 'pending_action')));
           setPendingEmployeeAbsences((requests as AbsenceRequest[]).filter(r => r.status === 'pending_action'))
         } catch (err: any) {
           console.error("Error fetching requests:", err);
