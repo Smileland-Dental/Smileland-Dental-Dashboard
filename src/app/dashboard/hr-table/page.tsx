@@ -275,6 +275,7 @@ export default function Page() {
             <option value="active_and_pending">All</option>
             <option value="active">Active</option>
             <option value="pending_action">Pending Action</option>
+            <option value="cancellation_requested">Cancellation Requested</option>
             <option value="archived">Archived</option>
           </select>
         </div>
@@ -385,13 +386,13 @@ export default function Page() {
                   <StatusBadge req={a} />
                 </td>
                 <td className="whitespace-nowrap">
-                  <div className="px-1 text-sm font-bold text-slate-900">{a.pendingDOAPoints ? a.pendingDOAPoints : '0'}</div>
+                  <div className="px-1 text-sm font-bold text-slate-900">{a.pendingDOAPoints ?? '-'}</div>
                 </td>
                 <td className="whitespace-nowrap">
-                  <div className="px-1 text-sm font-bold text-slate-900">{a.DOAPoints ? a.DOAPoints : '0'}</div>
+                  <div className="px-1 text-sm font-bold text-slate-900">{a.DOAPoints ?? '-'}</div>
                 </td>
                 <td className="pr-4 text-right whitespace-nowrap">
-                  <div className="px-1 text-sm font-bold text-slate-900">{a.DAP ? a.DAP : '0'}</div>
+                  <div className="px-1 text-sm font-bold text-slate-900">{a.DAP ?? '-'}</div>
                   {/*<button onClick={() => setSelectedAbsence(a)} className="p-2 text-black hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all">
                     <Edit3 className="h-5 w-5"/>
                   </button>*/}

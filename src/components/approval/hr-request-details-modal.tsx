@@ -525,7 +525,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             {/* Pending DOA Points Box */}
             <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('pendingDOAPoints') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
               <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${tempData.pendingDOAPoints > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
+                <div className={`p-2 rounded-lg ${(tempData.pendingDOAPoints ?? 0) > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
                   <AlertCircle className="h-4 w-4" />
                 </div>
                 <div>
@@ -538,17 +538,19 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                 type="number" 
                 min="0" 
                 step="any"
-                value={tempData.pendingDOAPoints || ''} 
-                onChange={e => setTempData({...tempData, pendingDOAPoints: parseFloat(e.target.value) || 0})}
+                value={tempData.pendingDOAPoints ?? ''}
+                onChange={e => {
+                  const val = e.target.value; 
+                  setTempData({...tempData, pendingDOAPoints: val === '' ? null : parseFloat(val)});}}
                 className="w-20 h-10 text-center font-bold text-lg bg-white rounded-xl border-none shadow-inner focus:ring-2 focus:ring-blue-400"
-                placeholder="0"
+                placeholder="-"
               />
             </div>
 
             {/* DOA Points Box */}
             <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('DOAPoints') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
               <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${tempData.DOAPoints > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
+                <div className={`p-2 rounded-lg ${(tempData.DOAPoints ?? 0) > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
                   <AlertCircle className="h-4 w-4" />
                 </div>
                 <div>
@@ -561,10 +563,12 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                 type="number" 
                 min="0" 
                 step="any"
-                value={tempData.DOAPoints || ''} 
-                onChange={e => setTempData({...tempData, DOAPoints: parseFloat(e.target.value) || 0})}
+                value={tempData.DOAPoints ?? ''} 
+                onChange={e => {
+                  const val = e.target.value; 
+                  setTempData({...tempData, DOAPoints: val === '' ? null : parseFloat(val)});}}
                 className="w-20 h-10 text-center font-bold text-lg bg-white rounded-xl border-none shadow-inner focus:ring-2 focus:ring-blue-400"
-                placeholder="0"
+                placeholder="-"
               />
             </div>
 
@@ -580,7 +584,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             {/* DAP Points Box */}
             <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('DAP') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
               <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${tempData.DAP > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
+                <div className={`p-2 rounded-lg ${(tempData.DAP ?? 0) > 0 ? 'bg-amber-100 text-amber-600' : 'bg-blue-200 text-slate-500'}`}>
                   <AlertCircle className="h-4 w-4" />
                 </div>
                 <div>
@@ -593,10 +597,12 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                 type="number" 
                 min="0" 
                 step="any"
-                value={tempData.DAP || ''} 
-                onChange={e => setTempData({...tempData, DAP: parseFloat(e.target.value) || 0})}
+                value={tempData.DAP ?? ''} 
+                onChange={e => {
+                  const val = e.target.value; 
+                  setTempData({...tempData, DAP: val === '' ? null : parseFloat(val)});}}
                 className="w-20 h-10 text-center font-bold text-lg bg-white rounded-xl border-none shadow-inner focus:ring-2 focus:ring-blue-400"
-                placeholder="0"
+                placeholder="-"
               />
             </div>
 

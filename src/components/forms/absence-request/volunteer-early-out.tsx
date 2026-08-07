@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { db } from '@/lib/firebase.config';
-import { collection, addDoc, Timestamp, query, where, getDocs } from 'firebase/firestore';
+import { collection, addDoc, Timestamp, query, where, getDocs, serverTimestamp } from 'firebase/firestore';
 import { X, Loader2, CheckCircle2, Clock, ArrowRight } from 'lucide-react';
 import { OFFICES } from '@/lib/constants';
 import FeedbackModal from '@/components/ui/FeedbackModal';
@@ -172,7 +172,10 @@ export const EarlyOutForm = ({ onClose }: EarlyOutFormProps) => {
       const now = new Date();
 
       // Format current date matching typical 'YYYY-MM-DD' input shapes
-      const currentDateString = now.toISOString().split('T')[0]; 
+      const year = now.getFullYear();
+      const month = String(now.getMonth() + 1).padStart(2, '0');
+      const day = String(now.getDate()).padStart(2, '0');
+      const currentDateString = `${year}-${month}-${day}`;
       
       // Format current time matching typical 'HH:MM' input shapes
       const currentTimeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -183,7 +186,7 @@ export const EarlyOutForm = ({ onClose }: EarlyOutFormProps) => {
         supervisor_name: supervisorEmployeeName, 
         incident_date: currentDateString,       
         incident_time: currentTimeString,
-        createdAt: now,
+        createdAt: serverTimestamp(),
       });
       setFeedback({ isOpen: true, type: 'success', message: "Volunteer early departure recorded successfully." });
     } catch (err) {

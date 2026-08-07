@@ -24,11 +24,11 @@ export type AbsenceRequest = {
   type_of_request: string; // Either "Time Off Request" or "Incident Notice" for the User // "HR Call In" for HR created requests // "No Call", "Call In After Shift", "Previously Not Approved"
   updatedAt?: Timestamp;
   skipManagerApproval: boolean; // Field to indicate if manager approval is skipped (true/false)
-  DOAPoints: number; // Points assigned for the DOA system based on the hours missed
-  pendingDOAPoints: number; // Points that are pending and will be added to DOAPoints if the request is approved
-  DAP: number;
+  DOAPoints: number | null; // Points assigned for the DOA system based on the hours missed
+  pendingDOAPoints: number | null; // Points that are pending and will be added to DOAPoints if the request is approved
+  DAP: number | null;
   final_notes?: string;
-  status: 'active' | 'archived' | 'pending_action'; // New field to indicate if the request is active or archived, including a way to check if it is an initial 'HR Call In' Request
+  status: 'active' | 'archived' | 'pending_action' | 'cancellation_requested'; // New field to indicate if the request is active or archived, including a way to check if it is an initial 'HR Call In' Request
 };
 
 export type VolunteerEarlyOutRequest = {
@@ -112,4 +112,37 @@ export interface Employee {
 
 export type GroupedEmployees = {
   [office: string]: Employee[];
+};
+
+export interface ShiftAssignment {
+  id: string; // ID of the individual shift entry for internal tracking
+  employeeFirebaseID: string; // ID of the employee assigned to this shift (links to Employee collection)
+  employeeName: string;         // Name of the employee assigned to this shift
+  shiftTime: string;             // Time slot for the shift
+  //status: 'Present' | 'Absent';  // Attendance status for the shift
+}
+
+export interface DayScheduleData {
+  shifts: ShiftAssignment[]; // All Shift Assignments for the day
+  comments?: string; // Optional comments for the day, such as notes on coverage or special circumstances
+}
+
+export interface MonthScheduleDoc {
+  office: string; // Office location for this schedule document
+  year: number; // Year for this schedule document
+  month: string; // Month for this schedule document
+  role: string; // Role/Department this schedule applies to (e.g., RDA, DA, Front Office, AR, Call Center, EXEC, Doctors)
+  filledBy?: string; // ID of the user who last updated the schedule
+  updatedAt?: any; // Timestamp of the last update
+  days: Record<string, DayScheduleData>; // Keyed by day number (1-31) with the corresponding schedule data
+}
+
+export type RoleType = 'RDA' | 'DA' | 'Front Office' | 'AR' | 'Call Center' | 'EXEC' | 'Doctors' | 'Marcom';
+
+export const getRolesForOffice = (office: string): RoleType[] => {
+  if (office === "Call Center") return ['Call Center'];
+  if (office === "AR") return ['AR'];
+  if (office === "Marcom") return ['Marcom'];
+  if (office === "Corporate") return ['Doctors', 'EXEC'];
+  return ['RDA', 'DA', 'Front Office'];
 };

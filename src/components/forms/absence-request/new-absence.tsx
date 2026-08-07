@@ -46,6 +46,7 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
     DAP: 0,
     skipManagerApproval: employeeSkipManagerApproval || false,
     DOAPoints: 0,
+    pendingDOAPoints: 0,
     status: 'active',
   });
 

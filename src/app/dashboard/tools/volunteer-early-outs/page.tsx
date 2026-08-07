@@ -16,6 +16,14 @@ import { SortIcon } from '@/components/ui/table-sort'
 
 const itemsPerPage = 50;
 
+function formatTo12Hour(time24: string): string {
+  if (!time24) return '';
+  const [hours, minutes] = time24.split(':').map(Number);
+  const period = hours >= 12 ? 'PM' : 'AM';
+  const hours12 = hours % 12 || 12; // Converts 0/12/24 appropriately
+  return `${hours12}:${String(minutes).padStart(2, '0')} ${period}`;
+}
+
 export default function Page() {
   const { user, loading: authLoading } = useAuth();
   const { sortConfig, handleSort } = useSort();
@@ -215,7 +223,7 @@ export default function Page() {
                         {r.incident_date.replace(/^(\d{4})-(\d{2})-(\d{2})$/, "$2/$3/$1")}
                       </div>
                       <div className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                        <Clock className="h-3 w-3" /> {r.incident_time}
+                        <Clock className="h-3 w-3" /> {formatTo12Hour(r.incident_time)}
                       </div>
                     </td>
                     <td className="px-6 py-4">

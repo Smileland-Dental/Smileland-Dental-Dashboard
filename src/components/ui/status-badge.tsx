@@ -9,7 +9,8 @@ const styles: Record<string, string> = {
   red: 'bg-rose-100 text-rose-700 ring-rose-600/20',
   yellow: 'bg-amber-100 text-amber-700 ring-amber-600/20',
   gray: 'bg-slate-100 text-slate-600 ring-slate-600/20',
-  blue: 'bg-cyan-100 text-cyan-600 ring-cyan-600/20' 
+  blue: 'bg-cyan-100 text-cyan-600 ring-cyan-600/20',
+  orange: 'bg-orange-100 text-orange-600 ring-orange-600/20'
 };
 
 export const Badge = ({ color, text }: { color: string; text: string }) => {
@@ -23,6 +24,7 @@ export const Badge = ({ color, text }: { color: string; text: string }) => {
 export const StatusBadge = ({ req }: { req: AbsenceRequest }) => {
   const statusText = getRequestStatusText(req);
   if (statusText === "Pending Employee") return <Badge color="blue" text={statusText} />;
+  if (statusText === "Cancellation Requested") return <Badge color="orange" text= {statusText} />;
   if (statusText === "Manager Denied" || statusText === "Denied") return <Badge color="red" text={statusText} />;
   if (statusText === "Approved" || statusText === "Approved With Note") return <Badge color="green" text={statusText} />;
   if (statusText === "Manager Approved" || statusText === "Pending Final Approval") return <Badge color="yellow" text={statusText} />;
