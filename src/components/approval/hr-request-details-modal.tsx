@@ -65,13 +65,13 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
   );
 
   return (
-    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white w-full max-w-4xl rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-4xl rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
         
         {/* Header */}
-        <div className="py-4 px-6 border-b border-slate-50 flex justify-between items-center bg-slate-100/50">
+        <div className="py-4 px-6 border-b border-slate-50 flex justify-between items-center bg-slate-900">
           <div>
-            <h2 className="text-xl font-black text-slate-900 leading-none mb-1">
+            <h2 className="text-xl font-black text-indigo-400 leading-none mb-1">
               {absence.createdAt.toDate().toLocaleDateString()} @ {absence.createdAt.toDate().toLocaleTimeString([], { 
                 hour: '2-digit', 
                 minute: '2-digit', 
@@ -104,13 +104,13 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             </div>
           </div>
           
-          <button onClick={onClose} className="p-2 hover:bg-white rounded-full transition-colors">
-            <X className="h-5 w-5 text-slate-500" />
+          <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-full transition-all">
+            <X className="h-5 w-5 text-white" />
           </button>
         </div>
 
         <form 
-          className="py-2 px-8 space-y-6 max-h-[85vh] overflow-y-auto" 
+          className="bg-white py-2 px-8 space-y-6 max-h-[85vh] overflow-y-auto" 
           onSubmit={async (e) => {
             e.preventDefault();
 

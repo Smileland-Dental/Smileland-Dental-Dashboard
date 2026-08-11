@@ -241,12 +241,13 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
   ];
 
   return (
-    <div className="fixed inset-0 bg-black/60 flex justify-center items-center z-50 p-4" onClick={handleBeforeClose}>
-      <div className="bg-white rounded-lg shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 bg-black/60 flex justify-center items-center z-50 p-4">
+      <div className="bg-white rounded-lg shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
         
         {/* Header */}
         <div className="flex justify-between items-center p-6 border-b flex-shrink-0">
           <h2 className="text-2xl font-bold text-gray-900">Employee Information</h2>
+          {/*<h3 className="text-xs font-semibold text-blue-400/50">{formData.id}</h3>*/}
           <button onClick={handleBeforeClose} className="text-gray-500 hover:text-gray-800"><X size={24} /></button>
         </div>
 

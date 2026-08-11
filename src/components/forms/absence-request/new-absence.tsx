@@ -210,8 +210,8 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50" onClick={onClose}>
-        <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
+        <div className="bg-white p-8 rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
           <h2 className="text-2xl font-bold mb-6 text-gray-800">New Absence Request</h2>
           {isOverlapping && (
             <div className="p-3.5 bg-red-50 border border-red-200 text-red-900 rounded-md text-xs font-medium mt-2">

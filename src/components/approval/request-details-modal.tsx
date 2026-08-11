@@ -42,8 +42,8 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
   //};
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" onClick={handleCloseModal}>
-      <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full flex flex-col max-h-[90vh] relative" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-xl shadow-2xl max-w-3xl w-full flex flex-col max-h-[90vh] relative">
         
         {/* Modal Header */}
         <div className="flex justify-between items-center pt-6 pl-6 pr-6 pb-3 border-b">
