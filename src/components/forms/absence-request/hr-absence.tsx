@@ -196,8 +196,8 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
 
   return (
     <>
-      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[60] flex items-center justify-center p-4" onClick={handleClose}>
-        <div className="bg-white w-full max-w-xl rounded-[2.5rem] shadow-2xl overflow-hidden transition-all" onClick={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[60] flex items-center justify-center p-4">
+        <div className="bg-white w-full max-w-xl rounded-[2.5rem] shadow-2xl overflow-hidden transition-all">
           
           {/* Header */}
           <div className="p-6 bg-slate-900 text-white flex justify-between items-center">

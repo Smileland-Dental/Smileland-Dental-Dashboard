@@ -133,8 +133,8 @@ export default function AddEmployeeForm({ onSuccess, onCancel }: AddEmployeeForm
 
   return (
     <>
-      <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50" onClick={onCancel}>
-        <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+      <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
+        <div className="bg-white p-6 rounded-lg shadow-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
           <h2 className="text-2xl font-bold mb-4">Add New Employee</h2>
           
           <form onSubmit={handleSubmit} className="space-y-4">
