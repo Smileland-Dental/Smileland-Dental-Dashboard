@@ -171,12 +171,8 @@ export const EarlyOutForm = ({ onClose }: EarlyOutFormProps) => {
     try {
       const now = new Date();
 
-      // Format current date matching typical 'YYYY-MM-DD' input shapes
-      const year = now.getFullYear();
-      const month = String(now.getMonth() + 1).padStart(2, '0');
-      const day = String(now.getDate()).padStart(2, '0');
-      const currentDateString = `${year}-${month}-${day}`;
-      
+      const currentDateString = now.toLocaleDateString('en-CA');
+
       // Format current time matching typical 'HH:MM' input shapes
       const currentTimeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
