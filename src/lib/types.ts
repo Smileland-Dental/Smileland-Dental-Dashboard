@@ -29,6 +29,8 @@ export type AbsenceRequest = {
   DAP: number | null;
   final_notes?: string;
   status: 'active' | 'archived' | 'pending_action' | 'cancellation_requested'; // New field to indicate if the request is active or archived, including a way to check if it is an initial 'HR Call In' Request
+  comment_opening?: string;
+  comment_closing?: string;
 };
 
 export type VolunteerEarlyOutRequest = {
@@ -137,12 +139,13 @@ export interface MonthScheduleDoc {
   days: Record<string, DayScheduleData>; // Keyed by day number (1-31) with the corresponding schedule data
 }
 
-export type RoleType = 'RDA' | 'DA' | 'Front Office' | 'AR' | 'Call Center' | 'EXEC' | 'Doctors' | 'Marcom';
+export type RoleType = 'RDA' | 'DA' | 'Front Office' | 'AR' | 'Call Center' | 'EXEC' | 'Doctors' | 'Marcom' | 'North Offices' | 'South Offices';
 
 export const getRolesForOffice = (office: string): RoleType[] => {
   if (office === "Call Center") return ['Call Center'];
   if (office === "AR") return ['AR'];
   if (office === "Marcom") return ['Marcom'];
-  if (office === "Corporate") return ['Doctors', 'EXEC'];
+  if (office === "Corporate") return ['EXEC'];
+  if (office === "Dentist") return ['North Offices', 'South Offices']
   return ['RDA', 'DA', 'Front Office'];
 };

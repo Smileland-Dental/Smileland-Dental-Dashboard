@@ -244,7 +244,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                 <option value="Time Off Request">Time Off Request</option>
                 <option value="No Call">No Call</option>
                 <option value="Call In After Shift">Call In After Shift</option>
-                <option value="Previously Not Approved">Previous Not Approved</option>
+                <option value="Previously Not Approved">Previously Not Approved</option>
               </select>
             </div>
           </div>
@@ -323,7 +323,34 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             </div>
           </div>
 
-          {/* Section 4: Excuse Notes Management */}
+          <div className="grid grid-cols-1 md:grid-cols-1 gap-6">
+            {/* Opening Comment */}
+            <div className="space-y-2 p-4 rounded-3xl border transition-all bg-amber-200/50 border-amber-100 shadow-sm">
+              <label className="text-s underline block text-center font-bold text-red-500 uppercase">For Key Holders or Supervisors</label>
+              <div className="flex items-center">
+                <label className="w-20 text-[10px] font-black text-black uppercase ml-1">Opening</label>
+                <textarea name="comment_opening" value={tempData.comment_opening || ""} onChange={e => setTempData({ ...tempData, comment_opening: e.target.value })} 
+                  className={`w-full p-1 rounded-md border text-xs font-medium transition-all outline-none resize-none ${
+                  isChanged('comment_opening')
+                    ? 'bg-rose-50 border-rose-300 text-rose-900 focus:ring-2 focus:ring-rose-200'
+                    : 'bg-white border-slate-200 text-slate-800 focus:ring-2 focus:ring-indigo-100'
+                }`}
+                rows={1}/>
+              </div>
+              <div className="flex items-center">
+                <label className="w-20 text-[10px] font-black text-black uppercase ml-1">Closing</label>
+                <textarea name="comment_closing" value={tempData.comment_closing || ""} onChange={e => setTempData({ ...tempData, comment_closing: e.target.value })}
+                className={`w-full p-1 rounded-md border text-xs font-medium transition-all outline-none resize-none ${
+                  isChanged('comment_closing')
+                    ? 'bg-rose-50 border-rose-300 text-rose-900 focus:ring-2 focus:ring-rose-200'
+                    : 'bg-white border-slate-200 text-slate-800 focus:ring-2 focus:ring-indigo-100'
+                }`}
+                rows={1}/>
+              </div>
+            </div>
+          </div>
+
+          {/* Section 5: Excuse Notes Management */}
           <div className={`space-y-4 p-3 rounded-3xl border transition-all shadow-sm ${ (isChanged('excuse_note') || newFiles.length > 0 || isChanged('excuse_note_submitted')) ? 'bg-rose-50 border-rose-200' : 'bg-amber-200/50 border-amber-100' }`}>
             <div className="flex justify-between items-center">
               <label className="text-[10px] font-black text-black uppercase ml-1 flex items-center gap-1"><Paperclip className="h-3 w-3" /> Excuse Notes</label>
@@ -411,7 +438,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             </div>
           </div>
 
-          {/* Section 5: Approvals */}
+          {/* Section 6: Approvals */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 border-slate-100">
             {/* Manager Approval Box */}
             <div className={`space-y-3 p-3 col-span-2 md:col-span-1 rounded-2xl border transition-all shadow-sm ${isChanged('manager_approval') ? 'bg-rose-50 border-rose-200' : 'bg-emerald-200/50 border-emerald-200'}`}>
@@ -520,7 +547,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             </div>
           )}
 
-          {/* Section 6: Manager Exemption and DOA Points*/}
+          {/* Section 7: Manager Exemption and DOA Points*/}
           <div className = "grid grid-cols-2 gap-6 border-slate-100">
             {/* Pending DOA Points Box */}
             <div className={`p-4 rounded-2xl col-span-2 md:col-span-1 border transition-all flex items-center justify-between shadow-sm ${ isChanged('pendingDOAPoints') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>

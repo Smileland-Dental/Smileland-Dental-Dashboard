@@ -182,6 +182,21 @@ const RequestDetailsModal: React.FC<RequestDetailsModalProps> = ({
             )}
           </section>
 
+          {/* Section: Opening and Closing for Supervisors*/}
+          <section className="grid md:grid-cols-1 gap-6">
+            <div className="bg-red-50 p-2 rounded-md border-2 border-red-200">
+              <h4 className="text-xs font-bold text-red-500 text-center uppercase mb-2">For Key Holders and Supervisors</h4>
+              <div className="flex items-center">
+                <label className="w-20 text-xs font-bold text-gray-400 uppercase tracking-wider">Opening:</label>
+                <p className="w-full text-sm text-gray-700 bg-white p-1 border rounded-md italic">{selectedRequest.comment_opening || "No notes provided."}</p>
+              </div>
+              <div className="flex items-center">
+                <label className="w-20 text-xs font-bold text-gray-400 uppercase tracking-wider">Closing:</label>
+                <p className="w-full text-sm text-gray-700 bg-white p-1 border rounded-md italic">{selectedRequest.comment_closing || "No notes provided."}</p>
+              </div>
+            </div>
+          </section>
+
           {/* Section: Approval Workflow */}
           <section>
             <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Approval Status</h4>
