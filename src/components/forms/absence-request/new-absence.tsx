@@ -48,6 +48,8 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
     DOAPoints: 0,
     pendingDOAPoints: 0,
     status: 'active',
+    comment_opening: "",
+    comment_closing: "",
   });
 
   const [excuse_notes, setExcuseNotes] = useState<File[]>([]);
@@ -274,13 +276,13 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
               </div>
             </div>
 
-                {/* Date Validation Error Message */}
-                {isDateInvalid && (
-                  <div className="flex items-center gap-2 p-3 bg-rose-50 rounded-xl text-rose-600 text-xs font-bold border border-rose-200 animate-in fade-in">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>End date cannot be earlier than the start date.</span>
-                  </div>
-                )}
+            {/* Date Validation Error Message */}
+            {isDateInvalid && (
+              <div className="flex items-center gap-2 p-3 bg-rose-50 rounded-xl text-rose-600 text-xs font-bold border border-rose-200 animate-in fade-in">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>End date cannot be earlier than the start date.</span>
+              </div>
+            )}
 
             {/* Row 3: Conditional Time Field for Late In*/}
             {(formData.type_of_incident === "Late In") && (
@@ -337,6 +339,19 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
               <textarea name="employee_comments" onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" rows={2}/>
             </div>
 
+            {/* Optional PTO/PSL and Key Holders or Supervisors */}
+            <div className="space-y-1 bg-red-50 p-2 rounded-2xl border-2 border-red-200">
+              <label className="text-s underline block text-center font-bold text-red-500 uppercase">For Key Holders or Supervisors</label>
+              <div className="flex items-center">
+                <label className="w-20 text-xs font-medium text-black uppercase tracking-wider">Opening:</label>
+                <textarea name="comment_opening" onChange={handleChange} className="w-full border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" rows={1}/>
+              </div>
+              <div className="flex items-center">
+                <label className="w-20 text-xs font-medium text-black uppercase tracking-wider">Closing:</label>
+                <textarea name="comment_closing" onChange={handleChange} className="w-full border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" rows={1}/>
+              </div>
+            </div>
+  
             {/* --- EXCUSE NOTE SECTION --- */}
             <div className="p-4 bg-gray-50 border border-gray-200 rounded-lg space-y-4 mt-1">
               <label className="block text-sm font-semibold text-gray-700">Excuse Note Submission</label>

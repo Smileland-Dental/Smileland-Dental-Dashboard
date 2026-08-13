@@ -34,6 +34,8 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
     etd: absence.etd || '',
     excuse_note_submitted: absence.excuse_note_submitted || 'not_provided',
     final_notes: absence.final_notes || '',
+    comment_opening: absence.comment_opening || '',
+    comment_closing: absence.comment_closing || '',
   });
 
   const [newExcuseNotes, setNewExcuseNotes] = useState<File[]>([]);
@@ -64,7 +66,9 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
       formData.employee_comments !== (absence.employee_comments || '') ||
       formData.eta !== (absence.eta || '') ||
       formData.etd !== (absence.etd || '') ||
-      formData.excuse_note_submitted !== (absence.excuse_note_submitted || 'not_provided');
+      formData.excuse_note_submitted !== (absence.excuse_note_submitted || 'not_provided') ||
+      formData.comment_opening !== (absence.comment_opening || '') ||
+      formData.comment_closing !== (absence.comment_closing || '');
 
       // CHECK HERE
 
@@ -332,6 +336,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
             )}
 
             {/* Times */}
+            {["Early Out", "Late In", "Leave and Come Back"].includes(formData.type_of_incident) && (
             <div className="grid grid-cols-2 gap-4">
               {["Late In", "Leave and Come Back"].includes(formData.type_of_incident) && (
                 <div className="space-y-1">
@@ -345,7 +350,7 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                   <input name="etd" type="time" value={formData.etd} onChange={handleChange} disabled={disableCoreInputs} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50" required />
                 </div>
               )}
-            </div>
+            </div>)}
 
             {/* Comments */}
             <div className="space-y-1">
@@ -363,6 +368,18 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
                 className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 focus:ring-1 focus:ring-blue-500" 
                 rows={2} 
               />
+            </div>
+
+            <div className="space-y-1 bg-red-50 p-2 rounded-2xl border-2 border-red-200">
+              <label className="text-s underline block text-center font-bold text-red-500 uppercase">For Key Holders or Supervisors</label>
+              <div className="flex items-center">
+                <label className="w-20 text-xs font-medium text-black uppercase tracking-wider">Opening:</label>
+                <textarea name="comment_opening" value={formData.comment_opening}   onChange={handleChange} className="w-full border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" rows={1}/>
+              </div>
+              <div className="flex items-center">
+                <label className="w-20 text-xs font-medium text-black uppercase tracking-wider">Closing:</label>
+                <textarea name="comment_closing" value={formData.comment_closing}  onChange={handleChange} className="w-full border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" rows={1}/>
+              </div>
             </div>
 
           {/* File Management Container */}
