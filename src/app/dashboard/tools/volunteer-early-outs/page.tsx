@@ -32,12 +32,12 @@ export default function Page() {
   const [startDate, setStartDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate()-1);
-    return d.toISOString().split("T")[0];
+    return d.toLocaleDateString('en-CA');
   });
   const [endDate, setEndDate] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate()+1);
-    return d.toISOString().split("T")[0];
+    return d.toLocaleDateString('en-CA');
   });
 
   const [submissions, setSubmissions] = useState<VolunteerEarlyOutRequest[]>([]);
