@@ -166,11 +166,6 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
       setIsSearching(false);
     }
   };
-  
-  const debugAbsences = useMemo(() => {
-  console.log("Fetched Employee Absences:", employeeExistingRequests);
-  return employeeExistingRequests;
-}, [employeeExistingRequests]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
