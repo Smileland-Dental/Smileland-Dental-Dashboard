@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { X, Plus, User, Search, Loader2, AlertCircle, ArrowRight, CheckCircle2 } from 'lucide-react';
 import { db } from '@/lib/firebase.config';
 import { collection, query, where, getDocs, addDoc } from "firebase/firestore";
@@ -51,6 +51,7 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
   const [isSearching, setIsSearching] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [employeeExistingRequests, setEmployeeExistingRequests] = useState<AbsenceRequest[]>([]);
   
   // Split state into Employee Data and Incident Data
   const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
@@ -86,6 +87,32 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
 
   const [feedback, setFeedback] = useState({ isOpen: false, type: 'success' as 'success' | 'error', message: '' });
 
+  const isOverlapping = useMemo(() => {
+    if (!formData.type_of_incident || !formData.incident_start || !formData.incident_end) {
+      return false;
+    }
+
+    const formStart = new Date(formData.incident_start + "T00:00:00").getTime();
+    const formEnd = new Date(formData.incident_end + "T00:00:00").getTime();
+
+    // Look through array instances currently stored in parent state
+    return employeeExistingRequests.some((absence) => {
+      if (absence.type_of_incident !== formData.type_of_incident) {
+        return false;
+      }
+      const isConflictingStatus = ['active', 'pending_action'].includes(absence.status);
+      if (!isConflictingStatus) {
+        return false; // Skips 'archived'
+      }
+
+      const existingStart = new Date(absence.incident_start + "T00:00:00").getTime();
+      const existingEnd = new Date(absence.incident_end + "T00:00:00").getTime();
+
+      // Check date interval overlap logic: (StartA <= EndB) AND (EndA >= StartB)
+      return formStart <= existingEnd && formEnd >= existingStart;
+    });
+  }, [formData.type_of_incident, formData.incident_start, formData.incident_end, employeeExistingRequests]);
+
   // Date Validation Logic
   const isDateInvalid = Boolean(
     formData.incident_start && 
@@ -116,6 +143,20 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
           employeeFirestoreID: empDoc.id,
           skipManagerApproval: data.skipManagerApproval || false,
         }));
+
+        const employeeAbsences = query(
+          collection(db, "absences"), 
+          where("employee_id", "==", tempID),
+          where("status", "in", ["active", "pending_action", "cancellation_requested"])
+        );
+        const absenceSnapshot = await getDocs(employeeAbsences);
+        const exisitngAbsences = absenceSnapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as AbsenceRequest[];
+
+        setEmployeeExistingRequests(exisitngAbsences);
+
       } else {
         setError("Invalid Employee ID. Please check and try again.");
       }
@@ -125,6 +166,11 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
       setIsSearching(false);
     }
   };
+  
+  const debugAbsences = useMemo(() => {
+  console.log("Fetched Employee Absences:", employeeExistingRequests);
+  return employeeExistingRequests;
+}, [employeeExistingRequests]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,6 +181,10 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
 
     if (isDateInvalid) {
       setError("End date cannot be before start date.");
+      return;
+    }
+    if (isOverlapping) {
+      setError("A record for this incident type already exists within this date range.");
       return;
     }
 
@@ -183,6 +233,7 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
   const handleReset = () => {
     setFormData(initialState);
     setSelectedEmployee(null);
+    setEmployeeExistingRequests([]);
     setTempID("");
     setError(null);
   };
@@ -197,17 +248,17 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
   return (
     <>
       <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-md z-[60] flex items-center justify-center p-4">
-        <div className="bg-white w-full max-w-xl rounded-[2.5rem] shadow-2xl overflow-hidden transition-all">
+        <div className="bg-white w-full max-w-xl max-h-[90vh] flex flex-col rounded-[2.5rem] shadow-2xl overflow-hidden transition-all">
           
           {/* Header */}
-          <div className="p-6 bg-slate-900 text-white flex justify-between items-center">
+          <div className="p-6 bg-slate-900 text-white flex justify-between items-center shrink-0">
             <h2 className="text-xl font-black flex items-center gap-2">
               HR Absence Entry
             </h2>
             <button onClick={handleClose} className="p-2 hover:bg-white/10 rounded-full transition-all"><X /></button>
           </div>
 
-          <div className="p-8 space-y-6">
+          <div className="p-8 space-y-6 overflow-y-auto">
             {/* STEP 1: EMPLOYEE SEARCH */}
             {!selectedEmployee ? (
               <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4">
@@ -277,6 +328,14 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
                     </div>
                   </div>
                 </div>
+
+                {/* Overlap / Duplicate Warning */}
+                {isOverlapping && (
+                  <div className="flex items-center gap-2 p-3 bg-amber-50 rounded-xl text-amber-700 text-xs font-bold border border-amber-200 animate-in fade-in">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-600" />
+                    <span>An active or pending record for "{formData.type_of_incident}" already exists in this date range.</span>
+                  </div>
+                )}
 
                 {/* Form Fields */}
                 <div className="grid grid-cols-2 gap-4">
@@ -383,7 +442,7 @@ export const HRCreateAbsenceModal = ({ isOpen, onClose, onSave }: HRCreateAbsenc
 
                 <button 
                   type="submit" 
-                  disabled={isSubmitting || isDateInvalid}
+                  disabled={isSubmitting || isDateInvalid || isOverlapping}
                   className="w-full py-4 bg-slate-900 text-white font-black rounded-2xl shadow-xl hover:bg-slate-800 disabled:bg-slate-200 transition-all flex items-center justify-center gap-2"
                 >
                   {isSubmitting ? <Loader2 className="h-5 w-5 animate-spin" /> : <CheckCircle2 className="h-5 w-5" />}
