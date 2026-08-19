@@ -615,7 +615,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                   <AlertCircle className="h-4 w-4" />
                 </div>
                 <div>
-                  <p className="text-[11px] font-black text-black uppercase leading-none">Pending DAP</p>
+                  <p className="text-[11px] font-black text-black uppercase leading-none">DAP</p>
                   <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter italic">DAP Points</p>
                 </div>
               </div>
@@ -637,20 +637,12 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             <div className={`col-span-2 space-y-1 p-3 rounded-2xl border transition-all shadow-sm ${ isChanged('manager_notes') ? 'bg-rose-50 border-rose-200' : 'bg-sky-200/50 border-sky-200' }`}>
               <label className="text-[10px] font-black text-black uppercase ml-1 flex items-center gap-1">Admin Notes</label>
               <textarea 
-                className="w-full bg-transparent border-none text-sm font-bold focus:ring-0 resize-none overflow-hidden" 
+                rows={1}
+                style={{ fieldSizing: 'content' } as React.CSSProperties}
+                className="w-full bg-transparent border-none text-sm font-bold focus:ring-0 overflow-hidden" 
                 placeholder="(Manager/HR Notes)" 
-                value={tempData.manager_notes} 
-                onChange={e => {
-                    setTempData({...tempData, manager_notes: e.target.value});
-                    // Auto-expand logic
-                    e.target.style.height = 'auto';
-                    e.target.style.height = e.target.scrollHeight + 'px';
-                }}
-                // Set initial height on mount
-                onFocus={(e) => {
-                    e.target.style.height = 'auto';
-                    e.target.style.height = e.target.scrollHeight + 'px';
-                }}
+                value={tempData.manager_notes || ''} 
+                onChange={e => setTempData({...tempData, manager_notes: e.target.value})}       
               />
             </div>
           </div>

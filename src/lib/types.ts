@@ -46,6 +46,7 @@ export type VolunteerEarlyOutRequest = {
   created_at?: Timestamp;
   incident_date: string;
   incident_time: string;
+  custom_timestamp: boolean;
 }
 
 export interface User {
