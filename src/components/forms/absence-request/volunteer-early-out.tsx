@@ -20,6 +20,8 @@ export const EarlyOutForm = ({ onClose }: EarlyOutFormProps) => {
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState({ isOpen: false, type: 'success' as 'success' | 'error', message: '' });
 
+  const [isCustomTimeChecked, setIsCustomTimeChecked] = useState(false);
+
   const [isVolunteerChecked1, setIsVolunteerChecked1] = useState(false);
   const [isVolunteerChecked2, setIsVolunteerChecked2] = useState(false);
 
@@ -171,17 +173,21 @@ export const EarlyOutForm = ({ onClose }: EarlyOutFormProps) => {
     try {
       const now = new Date();
 
-      const currentDateString = now.toLocaleDateString('en-CA');
+      const finalIncidentDate = isCustomTimeChecked
+        ? formData.incident_date
+        : now.toLocaleDateString('en-CA');
 
-      // Format current time matching typical 'HH:MM' input shapes
-      const currentTimeString = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+      const finalIncidentTime = isCustomTimeChecked
+        ? formData.incident_time
+        : now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
       await addDoc(collection(db, "volunteer-early-outs"), {
         ...formData,
         supervisor_id: supervisorEmployeeID,
         supervisor_name: supervisorEmployeeName, 
-        incident_date: currentDateString,       
-        incident_time: currentTimeString,
+        incident_date: finalIncidentDate,       
+        incident_time: finalIncidentTime,
+        custom_timestamp: isCustomTimeChecked,
         createdAt: serverTimestamp(),
       });
       setFeedback({ isOpen: true, type: 'success', message: "Volunteer early departure recorded successfully." });
@@ -272,14 +278,52 @@ export const EarlyOutForm = ({ onClose }: EarlyOutFormProps) => {
                       {OFFICES.map(o => <option key={o} value={o}>{o}</option>)}
                     </select>
                   </div>
-                  <div className="space-y-1">
-                    <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Current Timestamp</label>
-                    <div className="w-full p-3 bg-slate-50 text-slate-700 rounded-xl font-mono font-bold border border-slate-100 flex items-center justify-between">
-                      <span>{new Date().toLocaleDateString()}</span>
-                      {/*<span className="text-indigo-600 animate-pulse bg-indigo-50 px-2 py-0.5 rounded-md">*/}
-                        <LiveTime />
-                      {/*</span>*/}
+                  {!isCustomTimeChecked ? (
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Current Timestamp</label>
+                      <div className="w-full p-2 bg-slate-50 text-slate-700 rounded-xl font-mono font-bold border border-slate-100 flex items-center justify-between">
+                        <span>{new Date().toLocaleDateString()}</span>
+                        {/*<span className="text-indigo-600 animate-pulse bg-indigo-50 px-2 py-0.5 rounded-md">*/}
+                          <LiveTime />
+                        {/*</span>*/}
+                      </div>
                     </div>
+                  ) : (
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-black text-slate-400 uppercase ml-1">Custom Date and Timestamp</label>
+                        <div className="w-full p-3 bg-slate-50 text-slate-700 rounded-xl font-mono font-bold border border-slate-100 flex items-center justify-between gap-2">
+                        {/* Custom Date Field */}
+                        <input
+                          type="date"
+                          name="incident_date"
+                          required={isCustomTimeChecked}
+                          value={formData.incident_date || ''}
+                          onChange={handleChange}
+                          className="bg-transparent text-slate-700 font-mono font-bold text-xs focus:outline-none focus:text-indigo-600 transition-colors cursor-pointer"
+                        />
+                        {/* Custom Time Field */}
+                        <input
+                          type="time"
+                          name="incident_time"
+                          required={isCustomTimeChecked}
+                          value={formData.incident_time || ''}
+                          onChange={handleChange}
+                          className="bg-transparent text-slate-700 font-mono font-bold text-xs focus:outline-none focus:text-indigo-600 transition-colors cursor-pointer text-right"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <div className="col-span-2">
+                    <input 
+                      type="checkbox" 
+                      id="timeChange" 
+                      checked={isCustomTimeChecked} 
+                      onChange={(e) => setIsCustomTimeChecked(e.target.checked)} 
+                      className=" text-blue-600 rounded border-gray-300"
+                    />
+                    <label htmlFor="timeChange" className="pl-1 text-xs text-blue-600 leading-tight">
+                      I need to edit the time. Please remember to submit the form BEFORE you leave next time.
+                    </label>
                   </div>
                 </div>
 

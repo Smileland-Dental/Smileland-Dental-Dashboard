@@ -4,7 +4,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { db } from "@/lib/firebase.config";
 import { collection, query, where, getDocs, orderBy, Timestamp } from "firebase/firestore";
 import { useAuth } from "@/contexts/AuthContext";
-import { Search, Calendar, FileDown, Clock, Building } from "lucide-react";
+import { Search, Calendar, FileDown, Clock, Building, Check, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { VolunteerEarlyOutRequest } from "@/lib/types";
 import ProtectedRoute from '@/components/auth/ProtectedRoute';
@@ -195,6 +195,7 @@ export default function Page() {
                 <th onClick={() => handleSort('office')} className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Office<SortIcon columnKey="office" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
                 <th onClick={() => handleSort('incident_date')} className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Early Out Window<SortIcon columnKey="incident_date" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
                 <th onClick={() => handleSort('supervisor_name')} className="px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Supervisor<SortIcon columnKey="supervisor_name" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
+                <th onClick={() => handleSort('custom_timestamp')} className="py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Time Edited<SortIcon columnKey="custom_timestamp" currentSortKey={sortConfig.key} direction={sortConfig.direction}/></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">
@@ -229,6 +230,9 @@ export default function Page() {
                     <td className="px-6 py-4">
                       <div className="text-sm font-semibold text-slate-700">{r.supervisor_name}</div>
                       <div className="text-[10px] font-mono text-slate-400">ID: {r.supervisor_id}</div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <div className="text-sm font-semibold text-slate-700">{(r.custom_timestamp ? <Check/> :  <X/>)}</div>
                     </td>
                   </tr>
                 ))
