@@ -1,7 +1,7 @@
 'use client';
 import React, { useState, useEffect, useMemo } from "react";
 import { db, storage } from '@/lib/firebase.config';
-import { collection, doc, updateDoc, addDoc, Timestamp, deleteDoc } from 'firebase/firestore';
+import {getDocs, where, query, collection, doc, updateDoc, addDoc, Timestamp, deleteDoc } from 'firebase/firestore';
 import { ref, deleteObject } from "firebase/storage";
 import { useAuth } from '@/contexts/AuthContext';
 import { AbsenceRequest } from "@/lib/types";
@@ -41,8 +41,7 @@ export default function Page() {
   const [searchTerm, setSearchTerm] = useState('');
   const [officeFilter, setOfficeFilter] = useState('all');
   const [activeFilter, setActiveFilter] = useState('active_and_pending');
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [pendingNotesOnly, setPendingNotesOnly] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedAbsence, setSelectedAbsence] = useState<AbsenceRequest | null>(null);
@@ -50,6 +49,27 @@ export default function Page() {
   const [isAdding, setIsAdding] = useState(false);
   const [loading, setLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  const [exemptEmployeeIds, setExemptEmployeeIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const fetchExemptList = async () => {
+      try {
+        const q = query(
+          collection(db, "employees"),
+          where("employmentStatus", "==", "Exempt")
+        );
+        const snap = await getDocs(q);
+
+        const ids = new Set(snap.docs.map(doc => doc.id));
+        setExemptEmployeeIds(ids);
+      } catch (err) {
+        console.error("Error fetching exempt employees:", err);
+      }
+    };
+
+    fetchExemptList();
+  }, []);
 
   // --- Server-Side Fetch Logic ---
   const fetchDocs = async (resetPages = false) => {
@@ -87,10 +107,16 @@ export default function Page() {
       // 1. Resolve fallback status context
       const requestCurrentStatus = a.status || 'active';
 
+      let requestStatusMatches = false;
+
       // 2. Evaluate the status matching rule based on the selected option
-      let requestStatusMatches = requestCurrentStatus === activeFilter;
-      if (activeFilter === 'active_and_pending') {
+      if (activeFilter === 'exempt') {
+      // Instant lookup in memory — zero database reads!
+        requestStatusMatches = exemptEmployeeIds.has(a.employeeFirestoreID);
+      } else if (activeFilter === 'active_and_pending') {
         requestStatusMatches = requestCurrentStatus === 'active' || requestCurrentStatus === 'pending_action';
+      } else {
+        requestStatusMatches = requestCurrentStatus === activeFilter;
       }
 
       // This matches for the approval status
@@ -268,15 +294,18 @@ export default function Page() {
         </div>
         <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
           <select
-            className="bg-transparent border-none text-s font-bold focus:ring-0 p-0"
+            className="bg-transparent border-none text-s font-bold focus:ring-0 p-0 overflow-hidden"
             value={activeFilter}
-            onChange={e => setActiveFilter(e.target.value)}
+            onChange={e => {
+                setActiveFilter(e.target.value);
+            }}
           >
             <option value="active_and_pending">All</option>
             <option value="active">Active</option>
             <option value="pending_action">Pending Action</option>
             <option value="cancellation_requested">Cancellation Requested</option>
             <option value="archived">Archived</option>
+            <option value="exempt">Exempt Requests</option>
           </select>
         </div>
         <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
