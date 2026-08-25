@@ -1,53 +1,57 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { db, auth } from '@/lib/firebase.config';
+import { db, auth, storage } from '@/lib/firebase.config';
 import { doc, getDoc } from 'firebase/firestore';
-import { getStorage, ref, listAll, getMetadata, getDownloadURL, getBlob } from 'firebase/storage';
-import JSZip from 'jszip';
+import {ref, listAll, getMetadata, getDownloadURL, deleteObject, type StorageReference} from 'firebase/storage';
 import { onAuthStateChanged } from 'firebase/auth';
 
-function extractSubmissionDateFromStoragePath(fullPath: string, office: string): string | null {
-  if (!fullPath || !office) return null;
-  const parts = fullPath.split('/').filter(Boolean);
-  if (parts.length < 4) return null;
-  if (parts[0] !== 'endofday-pdfs' || parts[1] !== office) return null;
-  const folder = parts[2];
-  return /^\d{4}-\d{2}-\d{2}$/.test(folder) ? folder : null;
+function getTodayInLA(): string {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+}
+
+async function collectPdfItemsUnder(
+  folderRef: StorageReference
+): Promise<StorageReference[]> {
+  const current = await listAll(folderRef);
+  const directPdfItems = current.items.filter((item) =>
+    item.name.toLowerCase().endsWith('.pdf')
+  );
+  const nestedItems = await Promise.all(
+    current.prefixes.map((prefix) => collectPdfItemsUnder(prefix))
+  );
+  return [...directPdfItems, ...nestedItems.flat()];
 }
 
 export default function EndOfDay() {
+  const todayStr = getTodayInLA();
   const [selectedOffice, setSelectedOffice] = useState('');
+  const [yearMonthFilter, setYearMonthFilter] = useState(todayStr.slice(0, 7));
+  const [dateFilter, setDateFilter] = useState(todayStr);
   const [pdfs, setPdfs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
-  const [filteredPdfs, setFilteredPdfs] = useState<any[]>([]);
   const [viewerOpen, setViewerOpen] = useState(false);
   const [viewingPdf, setViewingPdf] = useState<any | null>(null);
   const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState(false);
   const pdfBlobUrlRef = useRef<string | null>(null);
-  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null); // null: 확인 중, true: 인증됨, false: 인증 실패
-  const [zipDownloading, setZipDownloading] = useState(false);
+  const [isAuthorized, setIsAuthorized] = useState<boolean | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [deleting, setDeleting] = useState(false);
 
-  // 오피스 옵션
-  const officeOptions = ['Bernard', 'Ming', 'Delano', 'Janitor', 'California', 'Fresno', 'Ortho', 'Tulare', 'Visalia', 'Call_Center'];
+  const officeOptions = ['Bernard', 'California', 'Call_Center', 'Delano', 'Fresno', 'Janitor', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
-
-  // 보안: Office 값 검증
   const isValidOffice = (office: string): boolean => {
     return officeOptions.includes(office);
   };
 
-  // Office 변경 처리
   const handleOfficeChange = (newOffice: string) => {
-    // 빈 값으로 선택하면 비밀번호 없이 변경 허용 (초기화)
     if (newOffice === '') {
       setSelectedOffice('');
       return;
     }
-    
-    // 보안: 허용된 Office 값만 허용
+
     if (!isValidOffice(newOffice)) {
       alert('Invalid office selection.');
       return;
@@ -56,51 +60,46 @@ export default function EndOfDay() {
     setSelectedOffice(newOffice);
   };
 
-  // PDF 목록 로드: Storage에서 직접 목록 가져오기 (path가 항상 올바름)
+  const handleYearMonthChange = (ym: string) => {
+    if (!ym) return;
+    setYearMonthFilter(ym);
+    if (!dateFilter.startsWith(ym)) {
+      const today = getTodayInLA();
+      setDateFilter(today.startsWith(ym) ? today : `${ym}-01`);
+    }
+  };
+
+  const handleDateChange = (d: string) => {
+    if (!d) return;
+    setDateFilter(d);
+    setYearMonthFilter(d.slice(0, 7));
+  };
+
   const loadPdfs = async () => {
-    if (!selectedOffice) {
+    if (!selectedOffice || !dateFilter) {
       setPdfs([]);
-      setFilteredPdfs([]);
       return;
     }
 
     setLoading(true);
     try {
-      const storage = getStorage();
-      const listRef = ref(storage, `endofday-pdfs/${selectedOffice}/`);
-      const result = await listAll(listRef);
+      const listRef = ref(storage, `endofday-pdfs/${selectedOffice}/${dateFilter}/`);
 
-      // Office 하위 폴더를 재귀 탐색해 모든 PDF 수집
-      const collectPdfItems = async (
-        currentRef: ReturnType<typeof ref>
-      ): Promise<(typeof result.items)[number][]> => {
-        const current = await listAll(currentRef);
-        const directPdfItems = current.items.filter((item) =>
-          item.name.toLowerCase().endsWith('.pdf')
-        );
-        const nestedItems = await Promise.all(
-          current.prefixes.map((prefix) => collectPdfItems(prefix))
-        );
-        return [...directPdfItems, ...nestedItems.flat()];
-      };
-
-      const pdfItems = await collectPdfItems(listRef);
+      let pdfItems: StorageReference[] = [];
+      try {
+        pdfItems = await collectPdfItemsUnder(listRef);
+      } catch {
+        pdfItems = [];
+      }
 
       const pdfList: any[] = await Promise.all(
         pdfItems.map(async (item) => {
           const meta = await getMetadata(item);
           const createdAt = meta.timeCreated ? new Date(meta.timeCreated) : new Date();
-          const submissionDate = extractSubmissionDateFromStoragePath(
-            item.fullPath,
-            selectedOffice
-          );
-          const dateStr =
-            submissionDate ?? createdAt.toISOString().slice(0, 10);
           return {
             path: item.fullPath,
             filename: item.name,
-            createdAt,
-            date: dateStr
+            createdAt
           };
         })
       );
@@ -122,29 +121,23 @@ export default function EndOfDay() {
       });
 
       setPdfs(pdfList);
-      setFilteredPdfs(pdfList);
     } catch (error) {
       console.error('Failed to load PDFs from Storage:', error);
       alert('Error, please try again.');
       setPdfs([]);
-      setFilteredPdfs([]);
     } finally {
       setLoading(false);
     }
   };
 
-  // 컴포넌트 마운트 시 사용자 인증 및 role 확인
   useEffect(() => {
-    // 프로덕션 환경에서 HTTPS 강제 (클라이언트 사이드)
-    if (process.env.NODE_ENV === 'production' && 
-        typeof window !== 'undefined' && 
+    if (process.env.NODE_ENV === 'production' &&
+        typeof window !== 'undefined' &&
         window.location.protocol !== 'https:') {
-      // HTTP로 접속한 경우 HTTPS로 리다이렉트
       window.location.href = window.location.href.replace('http:', 'https:');
       return;
     }
 
-    // Firebase Auth 상태 변경 감지
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       try {
         if (!currentUser) {
@@ -155,7 +148,6 @@ export default function EndOfDay() {
           return;
         }
 
-        // Firestore에서 사용자 role 확인
         const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
         if (!userDoc.exists()) {
           setIsAuthorized(false);
@@ -164,8 +156,6 @@ export default function EndOfDay() {
           }
           return;
         }
-
-        const userData = userDoc.data();
 
         setIsAuthorized(true);
       } catch {
@@ -176,20 +166,21 @@ export default function EndOfDay() {
       }
     });
 
-    // cleanup 함수
     return () => {
       unsubscribe();
     };
   }, []);
 
-  // Office 변경 시 PDF 목록 다시 로드 (인증된 경우에만)
+  useEffect(() => {
+    setSelectedPaths([]);
+  }, [selectedOffice, dateFilter, yearMonthFilter]);
+
   useEffect(() => {
     if (isAuthorized === true) {
       loadPdfs();
     }
-  }, [selectedOffice, isAuthorized]);
+  }, [selectedOffice, dateFilter, isAuthorized]);
 
-  // PDF 로드: path에서 download URL을 받아 바로 표시
   useEffect(() => {
     if (!viewerOpen || !viewingPdf) {
       if (pdfBlobUrlRef.current) {
@@ -248,7 +239,6 @@ export default function EndOfDay() {
         setPdfBlobUrl(null);
       };
     }
-    const storage = getStorage();
     const storageRef = ref(storage, storagePath);
     getDownloadURL(storageRef)
       .then((downloadUrl) => setViewerSource(downloadUrl, false))
@@ -269,52 +259,133 @@ export default function EndOfDay() {
     };
   }, [viewerOpen, viewingPdf]);
 
-  const [dateFilter, setDateFilter] = useState('');
-  
-  useEffect(() => {
-    let filtered = pdfs;
-    
-    if (dateFilter) {
-      filtered = filtered.filter((pdf) => pdf.date === dateFilter);
-    }
-    
-    setFilteredPdfs(filtered);
-  }, [dateFilter, pdfs]);
-
-  const formatTime = (timestamp: Date | { toDate?: () => Date } | number) => {
+  const formatTime = (timestamp: Date) => {
     if (!timestamp) return '';
-    const date =
-      timestamp instanceof Date
-        ? timestamp
-        : typeof timestamp === 'number'
-          ? new Date(timestamp)
-          : (timestamp as { toDate?: () => Date }).toDate?.() ?? new Date();
-    return date.toLocaleString('en-US', { 
+    return timestamp.toLocaleString('en-US', {
       timeZone: 'America/Los_Angeles',
       month: '2-digit',
       day: '2-digit',
-      year: 'numeric', 
+      year: 'numeric',
       hour: '2-digit',
       minute: '2-digit'
     });
   };
 
-  // Storage path 정규화: 앞 슬래시 제거, 보안 검사 후 반환 (Firebase ref용)
   const normalizeStoragePath = (path: string): string | null => {
     if (typeof path !== 'string' || !path.trim()) return null;
-    const p = path.trim().replace(/^\/*/, ''); // 앞 슬래시 제거
+    const p = path.trim().replace(/^\/*/, '');
     if (!p) return null;
     if (p.includes('..') || p.includes('//')) return null;
     if (p.length > 1024) return null;
     return p;
   };
 
-  // path가 있으면 true (정규화 가능한 경로)
   const isValidStoragePath = (path: string): boolean => {
     return normalizeStoragePath(path) !== null;
   };
 
-  // PDF 뷰어 열기 (path만 사용)
+  const isAllowedDeletePath = (path: string, office: string): boolean => {
+    const p = normalizeStoragePath(path);
+    if (!p || !isValidOffice(office)) return false;
+    if (!p.startsWith(`endofday-pdfs/${office}/`)) return false;
+    return p.toLowerCase().endsWith('.pdf');
+  };
+
+  const deleteStoragePaths = async (paths: string[]) => {
+    const uniquePaths = Array.from(new Set(paths.filter(Boolean)));
+    let deleted = 0;
+    for (const path of uniquePaths) {
+      if (!isAllowedDeletePath(path, selectedOffice)) continue;
+      const storagePath = normalizeStoragePath(path);
+      if (!storagePath) continue;
+      try {
+        await deleteObject(ref(storage, storagePath));
+        deleted += 1;
+      } catch (err) {
+        console.error('Failed to delete:', storagePath, err);
+      }
+    }
+    return deleted;
+  };
+
+  const toggleSelectPath = (path: string) => {
+    if (!path) return;
+    setSelectedPaths((prev) =>
+      prev.includes(path) ? prev.filter((p) => p !== path) : [...prev, path]
+    );
+  };
+
+  const toggleSelectAll = () => {
+    const allPaths = pdfs.map((p) => p.path).filter(Boolean);
+    const allSelected =
+      allPaths.length > 0 && allPaths.every((p) => selectedPaths.includes(p));
+    setSelectedPaths(allSelected ? [] : allPaths);
+  };
+
+  const handleDeleteSelected = async () => {
+    if (!selectedOffice || deleting || selectedPaths.length === 0) return;
+    const ok = window.confirm(
+      `Delete ${selectedPaths.length} selected PDF(s)? This cannot be undone.`
+    );
+    if (!ok) return;
+
+    setDeleting(true);
+    try {
+      const deleted = await deleteStoragePaths(selectedPaths);
+      if (viewingPdf?.path && selectedPaths.includes(viewingPdf.path)) {
+        closeViewer();
+      }
+      setSelectedPaths([]);
+      await loadPdfs();
+      alert(deleted > 0 ? `Deleted ${deleted} file(s).` : 'No files were deleted.');
+    } catch (err) {
+      console.error('Delete selected failed:', err);
+      alert('Failed to delete selected files. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleDeleteMonth = async () => {
+    if (!selectedOffice || !yearMonthFilter || deleting) return;
+    const ok = window.confirm(
+      `Delete ALL PDFs for ${selectedOffice} in ${yearMonthFilter}? This cannot be undone.`
+    );
+    if (!ok) return;
+
+    setDeleting(true);
+    try {
+      const officeRef = ref(storage, `endofday-pdfs/${selectedOffice}/`);
+      const listed = await listAll(officeRef);
+      const dayPrefixes = listed.prefixes.filter((prefix) => {
+        const folder = prefix.name;
+        return (
+          folder.startsWith(`${yearMonthFilter}-`) &&
+          /^\d{4}-\d{2}-\d{2}$/.test(folder)
+        );
+      });
+
+      const allItems = (
+        await Promise.all(dayPrefixes.map((prefix) => collectPdfItemsUnder(prefix)))
+      ).flat();
+
+      const deleted = await deleteStoragePaths(allItems.map((item) => item.fullPath));
+      closeViewer();
+      setSelectedPaths([]);
+      await loadPdfs();
+      alert(
+        deleted > 0
+          ? `Deleted ${deleted} file(s) for ${yearMonthFilter}.`
+          : 'No files found to delete.'
+      );
+    } catch (err) {
+      console.error('Delete month failed:', err);
+      alert('Failed to delete month files. Please try again.');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const openPdfViewer = (pdf: any) => {
     const hasPath = pdf?.path && isValidStoragePath(pdf.path);
     if (hasPath) {
@@ -332,72 +403,20 @@ export default function EndOfDay() {
 
   const goToPrevPdf = () => {
     if (!viewingPdf?.path) return;
-    const i = filteredPdfs.findIndex((p) => p.path === viewingPdf.path);
+    const i = pdfs.findIndex((p) => p.path === viewingPdf.path);
     if (i <= 0) return;
-    const prev = filteredPdfs[i - 1];
+    const prev = pdfs[i - 1];
     if (prev?.path && isValidStoragePath(prev.path)) setViewingPdf(prev);
   };
 
   const goToNextPdf = () => {
     if (!viewingPdf?.path) return;
-    const i = filteredPdfs.findIndex((p) => p.path === viewingPdf.path);
-    if (i < 0 || i >= filteredPdfs.length - 1) return;
-    const next = filteredPdfs[i + 1];
+    const i = pdfs.findIndex((p) => p.path === viewingPdf.path);
+    if (i < 0 || i >= pdfs.length - 1) return;
+    const next = pdfs[i + 1];
     if (next?.path && isValidStoragePath(next.path)) setViewingPdf(next);
   };
 
-  const handleDownloadZip = async () => {
-    if (!selectedOffice || filteredPdfs.length === 0 || zipDownloading) return;
-    setZipDownloading(true);
-    try {
-      const zip = new JSZip();
-      const storage = getStorage();
-      const usedEntryNames = new Set<string>();
-
-      for (let i = 0; i < filteredPdfs.length; i++) {
-        const pdf = filteredPdfs[i];
-        const storagePath = normalizeStoragePath(pdf.path);
-        if (!storagePath) continue;
-        const blob = await getBlob(ref(storage, storagePath));
-        let entryName = (pdf.filename || `file-${i}.pdf`).replace(/[/\\]/g, '_');
-        if (!entryName.toLowerCase().endsWith('.pdf')) entryName += '.pdf';
-        let unique = entryName;
-        let suffix = 0;
-        while (usedEntryNames.has(unique)) {
-          suffix += 1;
-          const base = entryName.replace(/\.pdf$/i, '');
-          unique = `${base}_${suffix}.pdf`;
-        }
-        usedEntryNames.add(unique);
-        zip.file(unique, blob);
-      }
-
-      if (usedEntryNames.size === 0) {
-        alert('No files could be added to the zip.');
-        return;
-      }
-
-      const zipBlob = await zip.generateAsync({ type: 'blob' });
-      const suffix = dateFilter ? dateFilter : 'all-dates';
-      const filename = `endofday-pdfs-${selectedOffice}-${suffix}.zip`;
-      const url = URL.createObjectURL(zipBlob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.rel = 'noopener';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      console.error('ZIP download failed:', err);
-      alert('Failed to download zip. Please try again.');
-    } finally {
-      setZipDownloading(false);
-    }
-  };
-
-  // 키보드: Escape 닫기, 좌우 화살표로 이전·다음 PDF
   useEffect(() => {
     if (!viewerOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -408,34 +427,34 @@ export default function EndOfDay() {
       }
       if (e.key === 'ArrowLeft') {
         e.preventDefault();
-        const i = viewingPdf?.path
-          ? filteredPdfs.findIndex((p) => p.path === viewingPdf.path)
-          : -1;
-        if (i > 0) {
-          const prev = filteredPdfs[i - 1];
-          if (prev?.path && isValidStoragePath(prev.path)) setViewingPdf(prev);
-        }
+        goToPrevPdf();
         return;
       }
       if (e.key === 'ArrowRight') {
         e.preventDefault();
-        const i = viewingPdf?.path
-          ? filteredPdfs.findIndex((p) => p.path === viewingPdf.path)
-          : -1;
-        if (i >= 0 && i < filteredPdfs.length - 1) {
-          const next = filteredPdfs[i + 1];
-          if (next?.path && isValidStoragePath(next.path)) setViewingPdf(next);
-        }
+        goToNextPdf();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewerOpen, viewingPdf, filteredPdfs]);
+  }, [viewerOpen, viewingPdf, pdfs]);
+
+  const monthDays = (() => {
+    if (!yearMonthFilter || !/^\d{4}-\d{2}$/.test(yearMonthFilter)) {
+      return { min: undefined as string | undefined, max: undefined as string | undefined };
+    }
+    const [y, m] = yearMonthFilter.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    return {
+      min: `${yearMonthFilter}-01`,
+      max: `${yearMonthFilter}-${String(lastDay).padStart(2, '0')}`
+    };
+  })();
 
   const styles = {
     body: {
-      fontFamily: "sans-serif",
-      background: '#ffe4e6',
+      fontFamily: 'sans-serif',
+      background: '#fff5f6',
       color: '#333',
       lineHeight: '1.6',
       minHeight: '100vh',
@@ -443,8 +462,8 @@ export default function EndOfDay() {
       padding: '20px'
     },
     container: {
-      width: '67%',
-      maxWidth: 'none',
+      width: '90%',
+      maxWidth: '1200px',
       margin: '0 auto',
       background: 'white',
       borderRadius: '20px',
@@ -458,14 +477,30 @@ export default function EndOfDay() {
       color: '#4a6fa1',
       textAlign: 'center' as const
     },
-    filterSection: {
+    layout: {
       display: 'flex',
-      gap: '20px',
-      alignItems: 'center',
-      marginBottom: '30px',
+      gap: '24px',
+      alignItems: 'flex-start'
+    },
+    sidebar: {
+      width: '240px',
+      flexShrink: 0,
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: '18px',
       padding: '20px',
       background: 'linear-gradient(135deg, rgba(74, 111, 161, 0.05) 0%, rgba(46, 58, 78, 0.05) 100%)',
-      borderRadius: '15px'
+      borderRadius: '15px',
+      boxSizing: 'border-box' as const
+    },
+    filterGroup: {
+      display: 'flex',
+      flexDirection: 'column' as const,
+      gap: '8px'
+    },
+    main: {
+      flex: 1,
+      minWidth: 0
     },
     label: {
       fontWeight: '600',
@@ -473,7 +508,8 @@ export default function EndOfDay() {
       fontSize: '16px'
     },
     select: {
-      width: '200px',
+      width: '100%',
+      boxSizing: 'border-box' as const,
       padding: '10px 15px',
       border: '2px solid rgba(74, 111, 161, 0.2)',
       borderRadius: '10px',
@@ -482,7 +518,8 @@ export default function EndOfDay() {
       fontWeight: '500'
     },
     input: {
-      width: '160px',
+      width: '100%',
+      boxSizing: 'border-box' as const,
       padding: '10px 15px',
       border: '2px solid rgba(74, 111, 161, 0.2)',
       borderRadius: '10px',
@@ -494,7 +531,7 @@ export default function EndOfDay() {
       display: 'flex',
       flexDirection: 'column' as const,
       gap: '12px',
-      marginTop: '20px'
+      marginTop: '0'
     },
     pdfCard: {
       width: '100%',
@@ -532,7 +569,6 @@ export default function EndOfDay() {
     }
   };
 
-  // 인증 확인 중이거나 인증 실패 시 처리
   if (isAuthorized === null) {
     return (
       <div style={styles.body}>
@@ -547,16 +583,16 @@ export default function EndOfDay() {
   }
 
   if (isAuthorized === false) {
-    return null; // 리다이렉트 중이므로 아무것도 렌더링하지 않음
+    return null;
   }
 
   const pdfNavIndex =
     viewerOpen && viewingPdf?.path
-      ? filteredPdfs.findIndex((p) => p.path === viewingPdf.path)
+      ? pdfs.findIndex((p) => p.path === viewingPdf.path)
       : -1;
   const pdfNavShowPrev = viewerOpen && pdfNavIndex > 0;
   const pdfNavShowNext =
-    viewerOpen && pdfNavIndex >= 0 && pdfNavIndex < filteredPdfs.length - 1;
+    viewerOpen && pdfNavIndex >= 0 && pdfNavIndex < pdfs.length - 1;
 
   const navArrowButton: React.CSSProperties = {
     position: 'absolute',
@@ -587,120 +623,214 @@ export default function EndOfDay() {
             End of Day Daily Check Out
           </h2>
 
-          {/* 필터 섹션 */}
-          <div style={styles.filterSection}>
-            <label style={styles.label} htmlFor="office">🏢 Office:</label>
-            <select
-              id="office"
-              value={selectedOffice}
-              onChange={(e: any) => handleOfficeChange(e.target.value)}
-              style={styles.select}
-            >
-              <option value="">--Select Office--</option>
-              {officeOptions.map(office => (
-                <option key={office} value={office}>{office}</option>
-              ))}
-            </select>
+          <div style={styles.layout}>
+            <aside style={styles.sidebar}>
+              <div style={styles.filterGroup}>
+                <label style={styles.label} htmlFor="office">🏢 Office</label>
+                <select
+                  id="office"
+                  value={selectedOffice}
+                  onChange={(e: any) => handleOfficeChange(e.target.value)}
+                  style={styles.select}
+                >
+                  <option value="">--Select Office--</option>
+                  {officeOptions.map(office => (
+                    <option key={office} value={office}>{office}</option>
+                  ))}
+                </select>
+              </div>
 
-            <label style={styles.label} htmlFor="dateFilter">📅 Date:</label>
-            <input
-              type="date"
-              id="dateFilter"
-              value={dateFilter}
-              onChange={(e: any) => setDateFilter(e.target.value)}
-              style={styles.input}
-            />
+              <div style={styles.filterGroup}>
+                <label style={styles.label} htmlFor="yearMonthFilter">📆 Year/Month</label>
+                <input
+                  type="month"
+                  id="yearMonthFilter"
+                  value={yearMonthFilter}
+                  onChange={(e: any) => handleYearMonthChange(e.target.value)}
+                  style={styles.input}
+                  required
+                />
+              </div>
 
-            {selectedOffice && (
-              <button
-                type="button"
-                disabled={zipDownloading || filteredPdfs.length === 0}
-                onClick={handleDownloadZip}
-                style={{
-                  padding: '10px 15px',
-                  background:
-                    zipDownloading || filteredPdfs.length === 0 ? '#b8c5d6' : '#4a6fa1',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor:
-                    zipDownloading || filteredPdfs.length === 0 ? 'not-allowed' : 'pointer',
-                  fontSize: '14px',
-                  fontWeight: '600',
-                  whiteSpace: 'nowrap' as const
-                }}
-              >
-                {zipDownloading ? 'Preparing ZIP…' : '📦 Download ZIP'}
-              </button>
-            )}
+              <div style={styles.filterGroup}>
+                <label style={styles.label} htmlFor="dateFilter">📅 Date</label>
+                <input
+                  type="date"
+                  id="dateFilter"
+                  value={dateFilter}
+                  min={monthDays.min}
+                  max={monthDays.max}
+                  onChange={(e: any) => handleDateChange(e.target.value)}
+                  style={styles.input}
+                  required
+                />
+              </div>
 
-            {selectedOffice && dateFilter && (
-              <button
-                onClick={() => setDateFilter('')}
-                style={{
-                  padding: '10px 15px',
-                  background: '#ff6b6b',
-                  color: 'white',
-                  border: 'none',
-                  borderRadius: '8px',
-                  cursor: 'pointer',
-                  fontSize: '14px',
-                  fontWeight: '600'
-                }}
-              >
-                Clear Filters
-              </button>
-            )}
-        </div>
-
-          {/* PDF 목록 */}
-          {loading ? (
-            <div style={styles.loadingState}>
-              <div style={{fontSize: '24px', marginBottom: '10px'}}>⏳</div>
-              Loading PDFs...
-        </div>
-          ) : !selectedOffice ? (
-            <div style={styles.emptyState}>
-              <div style={{fontSize: '24px', marginBottom: '10px'}}>🏢</div>
-              Please select an office to view PDFs.
-            </div>
-          ) : filteredPdfs.length === 0 ? (
-            <div style={styles.emptyState}>
-              <div style={{fontSize: '24px', marginBottom: '10px'}}>📭</div>
-              No PDFs found for the selected filters.
-            </div>
-          ) : (
-            <div style={styles.pdfList}>
-              {filteredPdfs.map((pdf, index) => (
-                <div
-                  key={`pdf-${index}-${pdf.filename ?? ''}`}
-                  style={styles.pdfCard}
-                  onClick={() => openPdfViewer(pdf)}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.transform = 'translateY(-2px)';
-                    e.currentTarget.style.boxShadow = '0 8px 20px rgba(0, 0, 0, 0.15)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.transform = 'translateY(0)';
-                    e.currentTarget.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.1)';
+              {selectedOffice && yearMonthFilter && (
+                <button
+                  type="button"
+                  disabled={deleting}
+                  onClick={handleDeleteMonth}
+                  style={{
+                    padding: '10px 15px',
+                    background: deleting ? '#f0a0a0' : '#c0392b',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '8px',
+                    cursor: deleting ? 'not-allowed' : 'pointer',
+                    fontSize: '14px',
+                    fontWeight: '600',
+                    whiteSpace: 'nowrap' as const
                   }}
                 >
-                  <div style={styles.pdfTitle}>
-                    {pdf.filename || 'PDF Document'}
-                  </div>
-                  {pdf.createdAt && (
-                    <div style={styles.pdfInfo}>
-                      <strong>Created:</strong> {formatTime(pdf.createdAt)}
-                    </div>
-                  )}
+                  {deleting ? 'Deleting…' : '🗑️ Delete Month'}
+                </button>
+              )}
+            </aside>
+
+            <div style={styles.main}>
+              {loading ? (
+                <div style={styles.loadingState}>
+                  <div style={{fontSize: '24px', marginBottom: '10px'}}>⏳</div>
+                  Loading PDFs...
                 </div>
-              ))}
+              ) : !selectedOffice ? (
+                <div style={styles.emptyState}>
+                  <div style={{fontSize: '24px', marginBottom: '10px'}}>🏢</div>
+                  Please select an office to view PDFs.
+                </div>
+              ) : !dateFilter ? (
+                <div style={styles.emptyState}>
+                  <div style={{fontSize: '24px', marginBottom: '10px'}}>📅</div>
+                  Please select a date to view PDFs.
+                </div>
+              ) : pdfs.length === 0 ? (
+                <div style={styles.emptyState}>
+                  <div style={{fontSize: '24px', marginBottom: '10px'}}>📭</div>
+                  No PDFs found for the selected filters.
+                </div>
+              ) : (
+                <>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '12px',
+                      alignItems: 'center',
+                      marginBottom: '14px',
+                      flexWrap: 'wrap' as const
+                    }}
+                  >
+                    <label
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '8px',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        color: '#4a6fa1',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={
+                          pdfs.length > 0 &&
+                          pdfs.every((p) => selectedPaths.includes(p.path))
+                        }
+                        onChange={toggleSelectAll}
+                        disabled={deleting}
+                      />
+                      Select all
+                    </label>
+                    <button
+                      type="button"
+                      disabled={deleting || selectedPaths.length === 0}
+                      onClick={handleDeleteSelected}
+                      style={{
+                        padding: '8px 14px',
+                        background:
+                          deleting || selectedPaths.length === 0 ? '#f0a0a0' : '#e74c3c',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '8px',
+                        cursor:
+                          deleting || selectedPaths.length === 0
+                            ? 'not-allowed'
+                            : 'pointer',
+                        fontSize: '14px',
+                        fontWeight: '600'
+                      }}
+                    >
+                      {deleting
+                        ? 'Deleting…'
+                        : `🗑️ Delete Selected (${selectedPaths.length})`}
+                    </button>
+                  </div>
+                  <div style={styles.pdfList}>
+                    {pdfs.map((pdf, index) => {
+                      const checked = selectedPaths.includes(pdf.path);
+                      return (
+                        <div
+                          key={`pdf-${index}-${pdf.filename ?? ''}`}
+                          style={{
+                            ...styles.pdfCard,
+                            display: 'flex',
+                            gap: '14px',
+                            alignItems: 'flex-start',
+                            borderColor: checked ? '#4a6fa1' : '#e1e5ea',
+                            background: checked ? 'rgba(74, 111, 161, 0.06)' : 'white'
+                          }}
+                          onClick={() => openPdfViewer(pdf)}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.transform = 'translateY(-2px)';
+                            e.currentTarget.style.boxShadow =
+                              '0 8px 20px rgba(0, 0, 0, 0.15)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.transform = 'translateY(0)';
+                            e.currentTarget.style.boxShadow =
+                              '0 4px 12px rgba(0, 0, 0, 0.1)';
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={deleting}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              toggleSelectPath(pdf.path);
+                            }}
+                            style={{
+                              marginTop: '4px',
+                              width: '18px',
+                              height: '18px',
+                              cursor: 'pointer',
+                              flexShrink: 0
+                            }}
+                            aria-label={`Select ${pdf.filename || 'PDF'}`}
+                          />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={styles.pdfTitle}>
+                              {pdf.filename || 'PDF Document'}
+                            </div>
+                            {pdf.createdAt && (
+                              <div style={styles.pdfInfo}>
+                                <strong>Created:</strong> {formatTime(pdf.createdAt)}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
-          )}
+          </div>
         </div>
       </div>
 
-      {/* PDF 뷰어 모달 (클릭한 해당 PDF만 표시, iframe 없음) */}
       {viewerOpen && viewingPdf && (
         <div
           style={{
@@ -749,7 +879,6 @@ export default function EndOfDay() {
             </button>
           )}
 
-          {/* 닫기 버튼 */}
           <button
             onClick={closeViewer}
             style={{
@@ -774,7 +903,6 @@ export default function EndOfDay() {
             ×
           </button>
 
-          {/* PDF 정보 */}
           <div
             style={{
               position: 'absolute',
@@ -793,7 +921,6 @@ export default function EndOfDay() {
             {viewingPdf.filename || 'PDF Document'}
           </div>
 
-          {/* PDF 뷰어: blob URL로만 표시 (iframe 없음, Storage URL을 DOM에 노출하지 않음) */}
           {pdfLoading ? (
             <div style={{
               width: '90%',
@@ -841,3 +968,5 @@ export default function EndOfDay() {
     </>
   );
 }
+
+

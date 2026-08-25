@@ -63,6 +63,7 @@ type LocationSummary = {
   rose?: string;
   total?: string;
   mailedProduction?: string;
+  daysSinceSubmitted?: string;
 };
 
 type ProductionSideMetrics = {
@@ -148,6 +149,7 @@ type ColumnFieldId =
   | 'location.rose'
   | 'location.total'
   | 'location.mailedProduction'
+  | 'location.daysSinceSubmitted'
   | 'side.add'
   | 'side.noShow'
   | 'side.scheduled'
@@ -230,6 +232,7 @@ const FIELD_GROUPS: { label: string; options: { id: ColumnFieldId; label: string
       { id: 'main.justPaper', label: 'Just Prophy' },
       { id: 'main.prophyTotal', label: 'Actual Prophy' },
       { id: 'sugar.paper', label: 'Prophy Documented' },
+      { id: 'location.daysSinceSubmitted', label: 'Days Since Submitted' },
     ],
   },
   {
@@ -2306,120 +2309,6 @@ export default function SimpleFormsDropdownViewPage() {
                     })}
                   </tr>
                 ) : null}
-              </thead>
-              <tbody>
-                {columnTableGroups.map((group) => {
-                  const dateStr = group.date;
-                  const rowKey = filterMode === 'month' ? dateStr : group.docs[0]?.id || dateStr;
-                  return (
-                    <tr key={rowKey}>
-                      <td style={{ ...cellStyle, fontWeight: 600, color: '#374151' }}>
-                        {formatDayColumn(dateStr)}
-                      </td>
-                      <td style={cellStyle}>{formatDateMDY(dateStr)}</td>
-                      {columnSlots.flatMap((slotId, slotIndex) => {
-                        if (isShortProcBundle(slotId)) {
-                          const metric = bundleToMetric(slotId);
-                          return FIXED_REASON_OPTIONS.map((label) => {
-                            let sum = 0;
-                            let hasValue = false;
-                            for (const doc of group.docs) {
-                              const raw = getReasonCellValue(doc, label, metric);
-                              if (String(raw).trim() === '') continue;
-                              hasValue = true;
-                              sum += parseNumber(raw);
-                            }
-                            return (
-                              <td key={`c-${rowKey}-${slotIndex}-${label}`} style={cellStyle}>
-                                {hasValue ? formatNumberWithCommas(sum) : ''}
-                              </td>
-                            );
-                          });
-                        }
-                        if (isOperatingBundle(slotId)) {
-                          const doc = group.docs[0];
-                          const [checkIn, checkOut, hoursOpen, closer] = doc
-                            ? getOperatingRowValues(doc)
-                            : ['', '', '', ''];
-                          const values = [checkIn, checkOut, hoursOpen, closer];
-                          return values.map((val, ci) => (
-                            <td
-                              key={`c-op-${rowKey}-${slotIndex}-${ci}`}
-                              style={operatingColumnTdStyle(ci, cellStyle)}
-                            >
-                              {String(val).trim() !== '' ? val : '—'}
-                            </td>
-                          ));
-                        }
-                        if (isNameBundle(slotId)) {
-                          const cfg = nameBundleBySlot[slotIndex] ?? {
-                            personName: '',
-                            metrics: ['docperf.customer' as ColumnFieldId],
-                          };
-                          const metrics = cfg.metrics.length > 0 ? cfg.metrics : (['docperf.customer' as ColumnFieldId]);
-                          return metrics.map((metric, mi) => {
-                            let sum = 0;
-                            let hasValue = false;
-                            for (const doc of group.docs) {
-                              const raw = getNamedPersonRowMetricValue(doc, cfg.personName, metric);
-                              if (String(raw).trim() === '') continue;
-                              hasValue = true;
-                              sum += parseNumber(raw);
-                            }
-                            return (
-                              <td key={`c-${rowKey}-${slotIndex}-${mi}`} style={cellStyle}>
-                                {hasValue ? formatMetricCellDisplay(metric, String(sum)) : '—'}
-                              </td>
-                            );
-                          });
-                        }
-                        if (isPositionBundle(slotId)) {
-                          const cfg = positionBundleBySlot[slotIndex] ?? {
-                            position: '',
-                            metrics: ['docperf.customer' as ColumnFieldId],
-                          };
-                          const metrics = cfg.metrics.length > 0 ? cfg.metrics : (['docperf.customer' as ColumnFieldId]);
-                          const people = collectFixedNamesForPosition(rows, cfg.position);
-                          const cols = people.length > 0 ? people : [''];
-                          return metrics.flatMap((metric, mi) =>
-                            cols.map((person, pi) => {
-                              const emptySlot = people.length === 0;
-                              if (emptySlot) {
-                                return (
-                                  <td key={`c-pb-${rowKey}-${slotIndex}-${mi}-${pi}`} style={cellStyle}>
-                                    —
-                                  </td>
-                                );
-                              }
-                              let sum = 0;
-                              let hasValue = false;
-                              for (const doc of group.docs) {
-                                const raw = getPositionPersonRowMetricValue(doc, cfg.position, person, metric);
-                                if (String(raw).trim() === '') continue;
-                                hasValue = true;
-                                sum += parseNumber(raw);
-                              }
-                              return (
-                                <td key={`c-pb-${rowKey}-${slotIndex}-${mi}-${pi}`} style={cellStyle}>
-                                  {hasValue ? formatMetricCellDisplay(metric, String(sum)) : '—'}
-                                </td>
-                              );
-                            })
-                          );
-                        }
-                        const fieldId = slotId as ColumnFieldId;
-                        const { sum, hasValue } = sumFieldAcrossDocs(group.docs, fieldId);
-                        return [
-                          <td key={`c-${rowKey}-${slotIndex}`} style={cellStyle}>
-                            {hasValue ? formatAggregatedFieldDisplay(fieldId, sum, hasValue) : '—'}
-                          </td>,
-                        ];
-                      })}
-                    </tr>
-                  );
-                })}
-              </tbody>
-              <tfoot>
                 <tr style={footerRowStyle}>
                   <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Total</td>
                   <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
@@ -2539,7 +2428,119 @@ export default function SimpleFormsDropdownViewPage() {
                     ];
                   })}
                 </tr>
-              </tfoot>
+              </thead>
+              <tbody>
+                {columnTableGroups.map((group) => {
+                  const dateStr = group.date;
+                  const rowKey = filterMode === 'month' ? dateStr : group.docs[0]?.id || dateStr;
+                  return (
+                    <tr key={rowKey}>
+                      <td style={{ ...cellStyle, fontWeight: 600, color: '#374151' }}>
+                        {formatDayColumn(dateStr)}
+                      </td>
+                      <td style={cellStyle}>{formatDateMDY(dateStr)}</td>
+                      {columnSlots.flatMap((slotId, slotIndex) => {
+                        if (isShortProcBundle(slotId)) {
+                          const metric = bundleToMetric(slotId);
+                          return FIXED_REASON_OPTIONS.map((label) => {
+                            let sum = 0;
+                            let hasValue = false;
+                            for (const doc of group.docs) {
+                              const raw = getReasonCellValue(doc, label, metric);
+                              if (String(raw).trim() === '') continue;
+                              hasValue = true;
+                              sum += parseNumber(raw);
+                            }
+                            return (
+                              <td key={`c-${rowKey}-${slotIndex}-${label}`} style={cellStyle}>
+                                {hasValue ? formatNumberWithCommas(sum) : ''}
+                              </td>
+                            );
+                          });
+                        }
+                        if (isOperatingBundle(slotId)) {
+                          const doc = group.docs[0];
+                          const [checkIn, checkOut, hoursOpen, closer] = doc
+                            ? getOperatingRowValues(doc)
+                            : ['', '', '', ''];
+                          const values = [checkIn, checkOut, hoursOpen, closer];
+                          return values.map((val, ci) => (
+                            <td
+                              key={`c-op-${rowKey}-${slotIndex}-${ci}`}
+                              style={operatingColumnTdStyle(ci, cellStyle)}
+                            >
+                              {String(val).trim() !== '' ? val : '—'}
+                            </td>
+                          ));
+                        }
+                        if (isNameBundle(slotId)) {
+                          const cfg = nameBundleBySlot[slotIndex] ?? {
+                            personName: '',
+                            metrics: ['docperf.customer' as ColumnFieldId],
+                          };
+                          const metrics = cfg.metrics.length > 0 ? cfg.metrics : (['docperf.customer' as ColumnFieldId]);
+                          return metrics.map((metric, mi) => {
+                            let sum = 0;
+                            let hasValue = false;
+                            for (const doc of group.docs) {
+                              const raw = getNamedPersonRowMetricValue(doc, cfg.personName, metric);
+                              if (String(raw).trim() === '') continue;
+                              hasValue = true;
+                              sum += parseNumber(raw);
+                            }
+                            return (
+                              <td key={`c-${rowKey}-${slotIndex}-${mi}`} style={cellStyle}>
+                                {hasValue ? formatMetricCellDisplay(metric, String(sum)) : '—'}
+                              </td>
+                            );
+                          });
+                        }
+                        if (isPositionBundle(slotId)) {
+                          const cfg = positionBundleBySlot[slotIndex] ?? {
+                            position: '',
+                            metrics: ['docperf.customer' as ColumnFieldId],
+                          };
+                          const metrics = cfg.metrics.length > 0 ? cfg.metrics : (['docperf.customer' as ColumnFieldId]);
+                          const people = collectFixedNamesForPosition(rows, cfg.position);
+                          const cols = people.length > 0 ? people : [''];
+                          return metrics.flatMap((metric, mi) =>
+                            cols.map((person, pi) => {
+                              const emptySlot = people.length === 0;
+                              if (emptySlot) {
+                                return (
+                                  <td key={`c-pb-${rowKey}-${slotIndex}-${mi}-${pi}`} style={cellStyle}>
+                                    —
+                                  </td>
+                                );
+                              }
+                              let sum = 0;
+                              let hasValue = false;
+                              for (const doc of group.docs) {
+                                const raw = getPositionPersonRowMetricValue(doc, cfg.position, person, metric);
+                                if (String(raw).trim() === '') continue;
+                                hasValue = true;
+                                sum += parseNumber(raw);
+                              }
+                              return (
+                                <td key={`c-pb-${rowKey}-${slotIndex}-${mi}-${pi}`} style={cellStyle}>
+                                  {hasValue ? formatMetricCellDisplay(metric, String(sum)) : '—'}
+                                </td>
+                              );
+                            })
+                          );
+                        }
+                        const fieldId = slotId as ColumnFieldId;
+                        const { sum, hasValue } = sumFieldAcrossDocs(group.docs, fieldId);
+                        return [
+                          <td key={`c-${rowKey}-${slotIndex}`} style={cellStyle}>
+                            {hasValue ? formatAggregatedFieldDisplay(fieldId, sum, hasValue) : '—'}
+                          </td>,
+                        ];
+                      })}
+                    </tr>
+                  );
+                })}
+              </tbody>
             </table>
           </div>
         )}
@@ -2630,6 +2631,34 @@ export default function SimpleFormsDropdownViewPage() {
                     </button>
                   </th>
                 </tr>
+                <tr style={footerRowStyle}>
+                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Total</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  {personModeMetricTotals.map((total, mi) => (
+                    <td key={`person-total-${mi}`} style={cellStyle}>
+                      {formatTotalCell(total, isCurrencyField(personModeMetrics[mi] ?? ''))}
+                    </td>
+                  ))}
+                  <td style={cellStyle} />
+                </tr>
+                <tr style={averageRowStyle}>
+                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Average</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  {personModeMetricTotals.map((total, mi) => {
+                    const denom = dayCountForAverage > 0 ? dayCountForAverage : 1;
+                    return (
+                      <td key={`person-avg-${mi}`} style={cellStyle}>
+                        {formatTotalCell(
+                          Math.round(total / denom),
+                          isCurrencyField(personModeMetrics[mi] ?? '')
+                        )}
+                      </td>
+                    );
+                  })}
+                  <td style={cellStyle} />
+                </tr>
               </thead>
               <tbody>
                 {rows.map((doc) => {
@@ -2661,36 +2690,6 @@ export default function SimpleFormsDropdownViewPage() {
                   );
                 })}
               </tbody>
-              <tfoot>
-                <tr style={footerRowStyle}>
-                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Total</td>
-                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
-                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
-                  {personModeMetricTotals.map((total, mi) => (
-                    <td key={`person-total-${mi}`} style={cellStyle}>
-                      {formatTotalCell(total, isCurrencyField(personModeMetrics[mi] ?? ''))}
-                    </td>
-                  ))}
-                  <td style={cellStyle} />
-                </tr>
-                <tr style={averageRowStyle}>
-                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Average</td>
-                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
-                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
-                  {personModeMetricTotals.map((total, mi) => {
-                    const denom = dayCountForAverage > 0 ? dayCountForAverage : 1;
-                    return (
-                      <td key={`person-avg-${mi}`} style={cellStyle}>
-                        {formatTotalCell(
-                          Math.round(total / denom),
-                          isCurrencyField(personModeMetrics[mi] ?? '')
-                        )}
-                      </td>
-                    );
-                  })}
-                  <td style={cellStyle} />
-                </tr>
-              </tfoot>
             </table>
           </div>
         )}
@@ -2739,4 +2738,5 @@ export default function SimpleFormsDropdownViewPage() {
     </main>
   );
 }
+
 

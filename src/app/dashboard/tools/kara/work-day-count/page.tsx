@@ -111,7 +111,7 @@ function normalizeRows(raw: unknown): RowData[] {
 function serializeRows(rows: RowData[]) {
   return rows.map((row) => ({
     Name: row.Name,
-    'Current Date': row['Current Date'],
+    'Curent Date': row['Current Date'],
     'Contract Length': row['Contract Length'],
     'Days Missed / Not Completed Days': row['Days Missed / Not Completed Days'],
     'Total Days Completed': row['Total Days Completed'],
@@ -171,6 +171,40 @@ function calcTermDate(dateStr: string, daysLeftStr: string): string {
   return formatUsDate(date);
 }
 
+function countWeekdaysBetween(fromStr: string, toStr: string): number | null {
+  const from = parseUsDate(fromStr);
+  const to = parseUsDate(toStr);
+  if (!from || !to) return null;
+
+  const start = new Date(Date.UTC(from.year, from.month - 1, from.day, 12));
+  const end = new Date(Date.UTC(to.year, to.month - 1, to.day, 12));
+  if (start.getTime() === end.getTime()) return 0;
+
+  const direction = end.getTime() > start.getTime() ? 1 : -1;
+  let count = 0;
+  const cursor = new Date(start.getTime());
+  while (cursor.getTime() !== end.getTime()) {
+    cursor.setUTCDate(cursor.getUTCDate() + direction);
+    const weekday = cursor.getUTCDay();
+    if (weekday !== 0 && weekday !== 6) {
+      count += 1;
+    }
+  }
+
+  return direction * count;
+}
+
+function calcDaysLeftForDate(previousDate: string, nextDate: string, daysLeftStr: string): string {
+  if (daysLeftStr.trim() === '') return '';
+  const daysLeft = Number(daysLeftStr);
+  if (!Number.isFinite(daysLeft) || !Number.isInteger(daysLeft)) return daysLeftStr;
+
+  const elapsed = countWeekdaysBetween(previousDate, nextDate);
+  if (elapsed === null) return daysLeftStr;
+
+  return String(daysLeft - elapsed);
+}
+
 function getCellHighlightBg(highlights: HighlightValue[], column: Column): string | undefined {
   let bg: string | undefined;
   if (highlights.includes('Contract Terminated')) bg = colors.red;
@@ -195,7 +229,7 @@ const COLUMN_WIDTHS: Partial<Record<Column, string>> = {
   Name: '16%',
   'Current Date': '10%',
   'Contract Length': '12%',
-  'Days Missed / Not Completed Days': '25%',
+  'Days Missed / Not Completed Days': '15%',
   'Total Days Completed': '15%',
   'Total Days Left to Complete': '18%',
   'Estimated Term Date': '14%',
@@ -345,6 +379,15 @@ export default function PageW() {
 
   const handleEditToggle = async () => {
     if (!isEditing) {
+      const today = getCaliforniaDate();
+      setRows((prev) =>
+        prev.map((row) => {
+          const nextRow = { ...row, Date: today };
+          nextRow['Total Days Left to Complete'] = calcDaysLeftForDate(row['Current Date'], today, row['Total Days Left to Complete']);
+          nextRow['Estimated Term Date'] = calcTermDate(nextRow['Current Date'], nextRow['Total Days Left to Complete']);
+          return nextRow;
+        })
+      );
       setStatusMessage('');
       setError('');
       setIsEditing(true);
@@ -401,7 +444,7 @@ export default function PageW() {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 }}>
             <h1 style={{ margin: 0, fontSize: 24, fontWeight: 700, color: colors.title }}>
-              Doctor Work Day Count / Estimated Term Date
+              Work Day Count / Estimated Term Date
             </h1>
             <div
               style={{
@@ -479,7 +522,7 @@ export default function PageW() {
             color: colors.text,
           }}
         >
-          <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>Doctor Work Day Count As Of:</span>
+          <span style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>Work Day Count As Of:</span>
           {isEditing ? (
             <input
               type="text"
@@ -685,3 +728,4 @@ export default function PageW() {
     </main>
   );
 }
+
