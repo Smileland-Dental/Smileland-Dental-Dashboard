@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { doc, collection, getDocs, getDoc, updateDoc, deleteDoc, addDoc } from "firebase/firestore";
+import { doc, collection, getDocs, getDoc, updateDoc, deleteDoc, setDoc } from "firebase/firestore";
 import { db } from "@/lib/firebase.config";
 
 function sanitizeFirebaseDataClient(data: any, depth: number = 0): any {
@@ -132,7 +132,7 @@ export default function ShowCheckSystem() {
 
   const [loading, setLoading] = useState(false);
   const [appointments, setAppointments] = useState<any[]>([]);
-  const appointmentsRef = useRef<any[]>([]); // 최신 appointments 추적
+  const appointmentsRef = useRef<any[]>([]); 
   const [filteredAppointments, setFilteredAppointments] = useState<any[]>([]);
   const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth);
   const [selectedDate, setSelectedDate] = useState(getCurrentDate);
@@ -536,53 +536,51 @@ export default function ShowCheckSystem() {
         }));
       } else {
         const snapshot = await getDocs(collection(db, "show-noshow"));
-        let targetDocId: string | null = null;
-        let targetPatients: any[] | null = null;
+        const remainingSourcePatients = [...patients];
+        remainingSourcePatients.splice(patientIndex, 1);
+
+        const extraDocIds: string[] = [];
+        let destPatients: any[] = [];
 
         snapshot.forEach((docSnap) => {
-          if (targetDocId || docSnap.id === editingAppointment.docId) return;
+          if (docSnap.id === editingAppointment.docId) return;
           const data = docSnap.data();
-          if (typeof data.appt_date === 'string' && data.appt_date.trim() === newDate) {
-            targetDocId = docSnap.id;
-            targetPatients = Array.isArray(data.patients) ? data.patients : [];
-          }
+          const matchesDate =
+            docSnap.id === newDate ||
+            (typeof data.appt_date === 'string' && data.appt_date.trim() === newDate);
+          if (!matchesDate) return;
+          if (Array.isArray(data.patients)) destPatients.push(...data.patients);
+          if (docSnap.id !== newDate) extraDocIds.push(docSnap.id);
         });
 
-        if (!targetDocId && patients.length === 1) {
-          patients[patientIndex] = updatedPatient;
-          await updateDoc(sourceRef, sanitizeFirebaseDataClient({
-            patients,
-            appt_date: newDate,
-            lastUpdated: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          }));
+        if (editingAppointment.docId === newDate) {
+          destPatients = [...remainingSourcePatients, ...destPatients, updatedPatient];
         } else {
-          patients.splice(patientIndex, 1);
-          if (patients.length === 0) {
+          destPatients = [...destPatients, updatedPatient];
+        }
+
+        await setDoc(doc(db, "show-noshow", newDate), sanitizeFirebaseDataClient({
+          appt_date: newDate,
+          patients: destPatients,
+          lastUpdated: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          createdAt: new Date().toISOString(),
+        }));
+
+        if (editingAppointment.docId !== newDate) {
+          if (remainingSourcePatients.length === 0) {
             await deleteDoc(sourceRef);
           } else {
             await updateDoc(sourceRef, sanitizeFirebaseDataClient({
-              patients,
+              patients: remainingSourcePatients,
               lastUpdated: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
             }));
           }
+        }
 
-          if (targetDocId) {
-            await updateDoc(doc(db, "show-noshow", targetDocId), sanitizeFirebaseDataClient({
-              patients: [...(targetPatients || []), updatedPatient],
-              lastUpdated: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            }));
-          } else {
-            await addDoc(collection(db, "show-noshow"), sanitizeFirebaseDataClient({
-              appt_date: newDate,
-              patients: [updatedPatient],
-              lastUpdated: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-              createdAt: new Date().toISOString(),
-            }));
-          }
+        for (const extraId of extraDocIds) {
+          await deleteDoc(doc(db, "show-noshow", extraId));
         }
       }
 
@@ -927,17 +925,17 @@ export default function ShowCheckSystem() {
                             No Show
                           </button>
                           <button
-                            onClick={() => handleDelete(appointment)}
-                            style={deleteButtonStyle}
-                          >
-                            Delete
-                          </button>
-                          <button
                             onClick={() => updateShowStatus(appointment, 'pending')}
                             style={pendingButtonStyle}
                             disabled={appointment.showStatus === 'pending'}
                           >
                             Pending
+                          </button>
+                          <button
+                            onClick={() => handleDelete(appointment)}
+                            style={deleteButtonStyle}
+                          >
+                            Delete
                           </button>
                           <button
                             onClick={() => openEditModal(appointment)}

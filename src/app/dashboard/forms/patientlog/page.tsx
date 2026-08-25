@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { doc, setDoc, collection, getDocs, deleteDoc, getDoc, query, where } from "firebase/firestore";
+import { doc, setDoc, collection, getDocs, deleteDoc, getDoc, query, where, arrayUnion } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase.config";
 import { getAuth, onAuthStateChanged } from 'firebase/auth';
 import { getStorage, ref, uploadBytes } from 'firebase/storage';
@@ -14,6 +14,7 @@ interface PatientRowProps {
   patientOfficeOptions: string[];
   getVisitTypeOptions: (office: string) => string[];
   remarkOptions: string[];
+  sourceOptions: string[];
   otherDutyOptions: string[];
   inputStyle: React.CSSProperties;
   buttonStyle: React.CSSProperties;
@@ -26,6 +27,7 @@ const PatientRow = React.memo(({
   patientOfficeOptions, 
   getVisitTypeOptions, 
   remarkOptions, 
+  sourceOptions,
   otherDutyOptions,
   inputStyle,
   buttonStyle
@@ -121,6 +123,54 @@ const PatientRow = React.memo(({
         </select>
       </td>
       <td style={{ padding: '8px' }}>
+        {row.isOther ? (
+          <input
+            type="text"
+            autoFocus
+            value={row.source}
+            onChange={(e) =>
+              updatePatientRow(row.id, 'source', e.target.value)
+            }
+            placeholder="Enter source"
+            style={{
+              ...inputStyle,
+              margin: 0,
+              fontSize: '14px',
+            }}
+          />
+        ) : (
+          <select
+            value={row.source}
+            onChange={(e) => {
+              const value = e.target.value;
+
+              if (value === '__OTHER__') {
+                updatePatientRow(row.id, 'source', '');
+                updatePatientRow(row.id, 'isOther', true);
+              } else {
+                updatePatientRow(row.id, 'source', value);
+                updatePatientRow(row.id, 'isOther', false);
+              }
+            }}
+            style={{
+              ...inputStyle,
+              margin: 0,
+              fontSize: '14px',
+            }}
+          >
+            <option value=""></option>
+
+            {sourceOptions.map(source => (
+              <option key={source} value={source}>
+                {source}
+              </option>
+            ))}
+
+            <option value="__OTHER__">Other</option>
+          </select>
+        )}
+      </td>
+      <td style={{ padding: '8px' }}>
         <select
           value={row.other_duty}
           onChange={(e) => updatePatientRow(row.id, 'other_duty', e.target.value)}
@@ -149,7 +199,6 @@ const PatientRow = React.memo(({
     </tr>
   );
 }, (prevProps, nextProps) => {
-  // 커스텀 비교 함수로 불필요한 리렌더링 방지
   return (
     prevProps.row.id === nextProps.row.id &&
     prevProps.row.name === nextProps.row.name &&
@@ -160,62 +209,49 @@ const PatientRow = React.memo(({
     prevProps.row.call_out === nextProps.row.call_out &&
     prevProps.row.time === nextProps.row.time &&
     prevProps.row.remark === nextProps.row.remark &&
+    prevProps.row.source === nextProps.row.source &&
+    prevProps.row.isOther === nextProps.row.isOther &&
     prevProps.row.other_duty === nextProps.row.other_duty
   );
 });
 
-// Firebase 데이터 sanitize 함수 (강화된 버전)
 function sanitizeFirebaseDataClient(data: any, depth: number = 0): any {
-  // 깊이 제한 (순환 참조 및 깊은 중첩 방지)
   if (depth > 20) return null;
   
-  // 기본적인 데이터 검증
   if (data === null || data === undefined) return null;
   
-  // 원시 타입 처리
   if (typeof data !== 'object') {
-    // 문자열인 경우 길이 제한 및 특수 문자 제거
     if (typeof data === 'string') {
-      // Firebase 문자열 필드 최대 크기: 1MB (안전하게 900KB로 제한)
       if (data.length > 900 * 1024) {
         return data.slice(0, 900 * 1024);
       }
-      // 위험한 문자 제거 (XSS 방지)
       return data.replace(/[\x00-\x1F\x7F-\x9F]/g, '').trim();
     }
-    // 숫자, 불린 등은 그대로 반환
     if (typeof data === 'number' && (isNaN(data) || !isFinite(data))) {
       return 0;
     }
     return data;
   }
   
-  // 배열 처리
   if (Array.isArray(data)) {
-    // 배열 크기 제한 (Firebase 제한 고려)
     if (data.length > 10000) {
       return data.slice(0, 10000).map(item => sanitizeFirebaseDataClient(item, depth + 1));
     }
     return data.map(item => sanitizeFirebaseDataClient(item, depth + 1));
   }
   
-  // 객체 처리
   const sanitized: any = {};
   let keyCount = 0;
-  const maxKeys = 1000; // Firebase 문서 필드 수 제한 고려
+  const maxKeys = 1000;
   
   for (const key in data) {
     if (Object.prototype.hasOwnProperty.call(data, key)) {
-      // 키 개수 제한
       if (keyCount >= maxKeys) break;
       
-      // 키 길이 제한 (Firebase 제한)
       if (key.length > 1500 || key.length === 0) continue;
       
-      // 키에 허용되지 않은 문자 제거
       const safeKey = key.replace(/[.$[\]#\/]/g, '_').slice(0, 1500);
       
-      // 값 sanitize
       sanitized[safeKey] = sanitizeFirebaseDataClient(data[key], depth + 1);
       keyCount++;
     }
@@ -224,22 +260,18 @@ function sanitizeFirebaseDataClient(data: any, depth: number = 0): any {
   return sanitized;
 }
 
-// Firebase Document ID sanitize 함수
 function sanitizeFirebaseDocIdClient(docId: string): string {
-  // Firebase Document ID 제한: 1-1500자, 특수문자 제한
   return docId
-    .replace(/[\/\s]/g, '_') // 슬래시와 공백을 언더스코어로
-    .replace(/[^a-zA-Z0-9_-]/g, '') // 허용된 문자만 유지
-    .slice(0, 1500); // 길이 제한
+    .replace(/[\/\s]/g, '_') 
+    .replace(/[^a-zA-Z0-9_-]/g, '') 
+    .slice(0, 1500); 
 }
 
-// PDF 생성 유틸 함수
 function safeStr(v: unknown, max: number): string {
   if (v == null) return '';
   return String(v).trim().slice(0, max).replace(/[<>]/g, '');
 }
 
-// 시간을 12시간 형식으로 변환하는 함수
 function convertTo12Hour(timeStr: string): string {
   if (!timeStr || timeStr === '-') return '-';
   try {
@@ -255,7 +287,6 @@ function convertTo12Hour(timeStr: string): string {
   }
 }
 
-// Patient Log PDF 생성 함수
 function createPatientLogPDFDocument(props: {
   safeDutyDate: string;
   safeUserName: string;
@@ -305,12 +336,10 @@ function createPatientLogPDFDocument(props: {
 
   const s = pdfStyles;
 
-  // 헤더
   const header = React.createElement(View, { style: s.header },
     React.createElement(Text, { style: s.headerTitle }, 'Patient Log'),
   );
 
-  // 정보 섹션
   const infoSection = React.createElement(View, { style: s.infoSection },
     React.createElement(Text, { style: s.infoItem }, `Duty Date: ${safeDutyDate || '-'}`),
     React.createElement(Text, { style: s.infoItem }, `Name: ${safeUserName || '-'}`),
@@ -318,7 +347,6 @@ function createPatientLogPDFDocument(props: {
     React.createElement(Text, { style: s.infoItem }, `Work Hours: ${convertTo12Hour(safeWorkHoursFrom)} - ${convertTo12Hour(safeWorkHoursTo)}`),
   );
 
-  // 통계 섹션
   const stats = React.createElement(View, { style: s.stats },
     React.createElement(View, { style: s.statItem },
       React.createElement(Text, { style: s.statValue }, String(totalAppointments)),
@@ -334,7 +362,6 @@ function createPatientLogPDFDocument(props: {
     ),
   );
 
-  // 테이블 헤더
   const tableHeader = React.createElement(View, { style: s.tableHeader },
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'No.')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Patient\'s Name')),
@@ -345,10 +372,10 @@ function createPatientLogPDFDocument(props: {
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Call Out')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Time')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Remark')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Source')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Other Duty')),
   );
 
-  // 테이블 데이터 행
   const tableRows = patientList.map((row: any, index: number) => {
     const safeName = safeStr(row?.name, 50);
     const safeOffice = safeStr(row?.office, 50);
@@ -356,8 +383,9 @@ function createPatientLogPDFDocument(props: {
     const safeVisitType = safeStr(row?.visit_type || row?.visitType, 50);
     const safeTime = safeStr(row?.time, 20);
     const safeRemark = safeStr(row?.remark, 100);
+    const safeSource = safeStr(row?.source, 100);
+    const safeIsOther = safeStr(row?.isOther, 100);
     const safeOtherDuty = safeStr(row?.other_duty || row?.otherDuty, 100);
-    // 체크박스 값 확인: call_in 또는 callIn이 true이면 'O', 아니면 빈 문자열
     const callIn = row?.call_in === true || row?.callIn === true;
     const callOut = row?.call_out === true || row?.callOut === true;
 
@@ -371,18 +399,18 @@ function createPatientLogPDFDocument(props: {
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, callOut ? 'O' : '')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, convertTo12Hour(safeTime))),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeRemark || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeSource || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeIsOther || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeOtherDuty || '-')),
     );
   });
 
-  // 테이블
   const table = patientList.length > 0
     ? React.createElement(View, { style: s.table }, tableHeader, ...tableRows)
     : React.createElement(View, { style: { padding: 40, alignItems: 'center' } },
         React.createElement(Text, { style: { fontSize: 10, color: '#666' } }, 'No patient data recorded.'),
       );
 
-  // Daily Work Report
   const dailyReport = safeDailyWorkReport
     ? React.createElement(View, { style: s.dailyReport },
         React.createElement(Text, { style: s.dailyReportTitle }, 'Daily Work Report'),
@@ -390,7 +418,6 @@ function createPatientLogPDFDocument(props: {
       )
     : null;
 
-  // 푸터
   const footer = React.createElement(View, { style: s.footer },
     React.createElement(Text, null, `Generated: ${generatedDate}`),
   );
@@ -409,7 +436,6 @@ function createPatientLogPDFDocument(props: {
 
 export default function PatientLogSystem(): React.ReactElement {
   
-  // 기본 상태
   const [loading, setLoading] = useState(false);
   const [autoSaveStatus, setAutoSaveStatus] = useState('');
   const [submitStatus, setSubmitStatus] = useState('');
@@ -420,21 +446,20 @@ export default function PatientLogSystem(): React.ReactElement {
     workOffice: string;
     workHoursFrom: string;
     workHoursTo: string;
-  } | null>(null); // 이전 basic information 추적
+  } | null>(null); 
   const previousFormDataRef = useRef<{
     dutyDate: string;
     userName: string;
     workOffice: string;
     workHoursFrom: string;
     workHoursTo: string;
-  } | null>(null); // 이전 basic information ref (최신 값 추적)
-  const tableSaveEnabledRef = useRef(false); // 테이블/Daily Work Report 입력 후에만 자동 저장 허용
-  const submitInProgressRef = useRef(false); // Submit 중 autoSave 차단
-  const pendingAutoSaveRef = useRef<Promise<void> | null>(null); // 진행 중인 autoSave 추적
-  const [isUnlocked, setIsUnlocked] = useState(false); // 아래 섹션 lock 상태
-  const [userOfficesOptions, setuserOfficesOptions] = useState<string[]>([]); // DB offices 기반 Work Office 옵션
+  } | null>(null);
+  const tableSaveEnabledRef = useRef(false);
+  const submitInProgressRef = useRef(false); 
+  const pendingAutoSaveRef = useRef<Promise<void> | null>(null); 
+  const [isUnlocked, setIsUnlocked] = useState(false); 
+  const [userOfficesOptions, setuserOfficesOptions] = useState<string[]>([]); 
 
-  // 폼 데이터 상태 (원본과 동일한 구조)
   const [formData, setFormData] = useState({
     dutyDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
     userName: '',
@@ -444,7 +469,6 @@ export default function PatientLogSystem(): React.ReactElement {
     dailyWorkReport: ''
   });
 
-  // 환자 로그 상태 (원본과 동일한 필드명) - 기본 30행
   const [patientRows, setPatientRows] = useState(() => {
     return Array.from({ length: 30 }, (_, index) => ({
       id: index + 1,
@@ -456,11 +480,12 @@ export default function PatientLogSystem(): React.ReactElement {
       call_out: false,
       time: '',
       remark: '',
+      source: '',
+      isOther: '',
       other_duty: ''
     }));
   });
 
-  // 실시간 카운트 계산
   const appointments = patientRows.filter(row => row.appt_date && row.name).length;
   const incomingCalls = patientRows.filter(row => row.call_in).length;
   const outgoingCalls = patientRows.filter(row => row.call_out).length;
@@ -481,6 +506,8 @@ export default function PatientLogSystem(): React.ReactElement {
 
 
   const remarkOptions = ['Disc', 'Elsewhere', 'LMA', 'LMW', 'NA', 'Not Interested', 'Will Call Back', 'Wrong'];
+
+  const sourceOptions = ['Google', 'Social Media', 'Physician', 'Friend/Family', 'Insurance', 'Passed By'];
 
   const otherDutyOptions = [
     'Accounts with Balances', 'Booking ASL Interpreters', 'Break', 'Confirming', 
@@ -505,6 +532,8 @@ export default function PatientLogSystem(): React.ReactElement {
         row.call_out ||
         row.time ||
         row.remark ||
+        row.source ||
+        row.isOther ||
         row.other_duty
       )
     );
@@ -693,7 +722,6 @@ export default function PatientLogSystem(): React.ReactElement {
             const previousData = previousDocSnap.data();
 
             if (previousData.patientRows && Array.isArray(previousData.patientRows)) {
-              // 기존 patientRows를 state에 반영
               const loadedRows = previousData.patientRows.map((row: any, index: number) => ({
                 ...row,
                 id: index + 1
@@ -714,6 +742,8 @@ export default function PatientLogSystem(): React.ReactElement {
                   call_out: false,
                   time: '',
                   remark: '',
+                  source: '',
+                  isOther: '',
                   other_duty: ''
                 };
               });
@@ -763,13 +793,14 @@ export default function PatientLogSystem(): React.ReactElement {
               call_out: false,
               time: '',
               remark: '',
+              source: '',
+              isOther: '',
               other_duty: ''
             };
           });
           
           setPatientRows(newRows);
           
-          // Daily Work Report도 로드
           if (matchingLog.dailyWorkReport) {
             setFormData(prev => ({
               ...prev,
@@ -789,7 +820,6 @@ export default function PatientLogSystem(): React.ReactElement {
         previousFormDataRef.current = newPreviousFormData;
       }
     } catch (error) {
-      // 에러 발생 시 조용히 처리
     }
   };
 
@@ -815,42 +845,33 @@ export default function PatientLogSystem(): React.ReactElement {
         alert(`You have data for these other dates: ${datesList}`);
       }
     } catch (error) {
-      // 에러 발생 시 조용히 처리
     }
   }, [formData.userName, formData.workOffice, formData.dutyDate]);
 
-  // 기본 정보가 입력되면 기존 데이터 로드 (unlock 후에만)
   useEffect(() => {
-    // unlock되지 않았으면 로드하지 않음
     if (!isUnlocked) return;
     
     const timeoutId = setTimeout(() => {
       loadExistingData();
-    }, 50); // 0.05초 debounce로 매우 빠르게
+    }, 50);
 
     return () => clearTimeout(timeoutId);
   }, [formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo, isUnlocked]);
 
-  // unlock된 상태에서 basic information이 변경되면 다시 lock
   useEffect(() => {
-    // unlock되지 않았으면 실행하지 않음
     if (!isUnlocked) return;
     
-    // previousFormData가 없으면 (처음 unlock한 경우) 실행하지 않음
     const prevFormData = previousFormDataRef.current;
     if (!prevFormData) return;
     
-    // basic information이 변경되었는지 확인
     if (prevFormData.dutyDate !== formData.dutyDate ||
         prevFormData.userName !== formData.userName ||
         prevFormData.workOffice !== formData.workOffice ||
         prevFormData.workHoursFrom !== formData.workHoursFrom ||
         prevFormData.workHoursTo !== formData.workHoursTo) {
-      // basic information이 변경되었으면 다시 lock
       tableSaveEnabledRef.current = false;
       setIsUnlocked(false);
       
-      // patientRows 초기화
       setPatientRows(() => {
         return Array.from({ length: 30 }, (_, index) => ({
           id: index + 1,
@@ -862,27 +883,26 @@ export default function PatientLogSystem(): React.ReactElement {
           call_out: false,
           time: '',
           remark: '',
+          source: '',
+          isOther: '',
           other_duty: ''
         }));
       });
       
-      // dailyWorkReport 초기화
       setFormData(prev => ({
         ...prev,
         dailyWorkReport: ''
       }));
       
-      // previousFormData 초기화
       setPreviousFormData(null);
       previousFormDataRef.current = null;
     }
   }, [formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo, isUnlocked]);
 
-  // 이름이나 오피스가 변경되면 미제출 데이터 확인
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       checkUnsubmittedData();
-    }, 500); // 0.5초 debounce
+    }, 500); 
 
     return () => clearTimeout(timeoutId);
   }, [formData.userName, formData.workOffice, checkUnsubmittedData]);
@@ -952,6 +972,7 @@ export default function PatientLogSystem(): React.ReactElement {
         visit_type: 50,
         time: 20,
         remark: 200,
+        source: 200,
         other_duty: 200
       };
       
@@ -966,11 +987,9 @@ export default function PatientLogSystem(): React.ReactElement {
     return value;
   }, []);
 
-  // 폼 데이터 업데이트 (입력 검증 포함)
   const updateFormData = useCallback((field: string, value: any) => {
     const validatedValue = validateInput(field, value);
     setFormData(prev => {
-      // 값이 같으면 업데이트하지 않음
       if ((prev as any)[field] === validatedValue) return prev;
       if (field === 'dailyWorkReport' && isUnlocked) {
         tableSaveEnabledRef.current = true;
@@ -993,12 +1012,13 @@ export default function PatientLogSystem(): React.ReactElement {
         call_out: false,
         time: '',
         remark: '',
+        source: '',
+        isOther: '',
         other_duty: ''
       }];
     });
   }, []);
 
-  // 환자 행 삭제 (useCallback 최적화)
   const removePatientRow = useCallback((id: number) => {
     tableSaveEnabledRef.current = true;
     setPatientRows(prevRows => {
@@ -1009,7 +1029,6 @@ export default function PatientLogSystem(): React.ReactElement {
     });
   }, []);
 
-  // 환자 행 업데이트 (입력 검증 포함)
   const updatePatientRow = useCallback((id: number, field: string, value: any) => {
     const validatedValue = validateInput(field, value);
     
@@ -1022,7 +1041,6 @@ export default function PatientLogSystem(): React.ReactElement {
       
       const row = prevRows[rowIndex];
       
-      // 값이 같으면 업데이트하지 않음
       if ((row as any)[field] === validatedValue) {
         return prevRows;
       }
@@ -1031,17 +1049,14 @@ export default function PatientLogSystem(): React.ReactElement {
       
       const updatedRow = { ...row, [field]: validatedValue };
       
-      // Office가 변경되면 visit_type을 초기화
       if (field === 'office' && row.office !== validatedValue) {
         updatedRow.visit_type = '';
       }
-      // Call In 또는 Call Out이 체크되면 현재 시간을 Time에 자동 입력
       if ((field === 'call_in' || field === 'call_out') && validatedValue === true) {
         const now = new Date();
         const timeString = now.toTimeString().slice(0, 5);
         updatedRow.time = timeString;
       }
-      // Call In과 Call Out이 모두 체크 해제되면 Time을 비움
       if ((field === 'call_in' && validatedValue === false && !row.call_out) || 
           (field === 'call_out' && validatedValue === false && !row.call_in)) {
         updatedRow.time = '';
@@ -1053,7 +1068,6 @@ export default function PatientLogSystem(): React.ReactElement {
     });
   }, [validateInput]);
 
-  // 폼 초기화 함수
   const resetForm = () => {
     setFormData({
       dutyDate: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }),
@@ -1073,6 +1087,8 @@ export default function PatientLogSystem(): React.ReactElement {
       call_out: false,
       time: '',
       remark: '',
+      source: '',
+      isOther: '',
       other_duty: ''
     }]);
     setPreviousFormData(null);
@@ -1082,7 +1098,6 @@ export default function PatientLogSystem(): React.ReactElement {
   };
 
   const handleSubmit = async () => {
-    // 이미 제출 중이면 중복 호출 방지
     if (loading) {
       return;
     }
@@ -1092,7 +1107,6 @@ export default function PatientLogSystem(): React.ReactElement {
       return;
     }
 
-    // 인증 상태 확인
     const auth = getAuth();
     const currentUser = auth.currentUser;
     if (!currentUser) {
@@ -1106,7 +1120,6 @@ export default function PatientLogSystem(): React.ReactElement {
         try {
           await pendingAutoSaveRef.current;
         } catch {
-          // autoSave 실패해도 제출은 계속
         }
       }
 
@@ -1116,22 +1129,18 @@ export default function PatientLogSystem(): React.ReactElement {
 
       const currentDocId = sanitizeFirebaseDocIdClient(generateDocId(formData.dutyDate, formData.userName, formData.workOffice, formData.workHoursFrom, formData.workHoursTo));
 
-      // 1. 클라이언트 사이드에서 PDF 생성
       setSubmitStatus('Submitting...');
       setProgress(30);
       
-      // PDF용 데이터 준비
       const patientListForPdf = patientRows.filter(row => 
         row.name || row.office || row.appt_date || row.visit_type || 
-        row.call_in || row.call_out || row.time || row.remark || row.other_duty
+        row.call_in || row.call_out || row.time || row.remark || row.source || row.other_duty
       );
       
-      // 통계 계산
       const totalAppointments = patientListForPdf.filter(row => row.appt_date && row.name).length;
       const incomingCalls = patientListForPdf.filter(row => row.call_in).length;
       const outgoingCalls = patientListForPdf.filter(row => row.call_out).length;
       
-      // 날짜 포맷팅
       const generatedDate = new Date().toLocaleDateString('en-US', { 
         year: 'numeric', 
         month: 'long', 
@@ -1141,7 +1150,6 @@ export default function PatientLogSystem(): React.ReactElement {
         hour12: true
       });
       
-      // 데이터 sanitize
       const safeDutyDate = (formData.dutyDate || '').trim().slice(0, 50).replace(/[<>]/g, '');
       const safeUserName = (formData.userName || '').trim().slice(0, 100).replace(/[<>]/g, '');
       const safeWorkOffice = (formData.workOffice || '').trim().slice(0, 100).replace(/[<>]/g, '');
@@ -1149,7 +1157,6 @@ export default function PatientLogSystem(): React.ReactElement {
       const safeWorkHoursTo = (formData.workHoursTo || '').trim().slice(0, 20).replace(/[<>]/g, '');
       const safeDailyWorkReport = (formData.dailyWorkReport || '').trim().slice(0, 2000).replace(/[<>]/g, '');
       
-      // PDF 문서 생성
       setSubmitStatus('Processing...');
       setProgress(50);
       
@@ -1167,13 +1174,11 @@ export default function PatientLogSystem(): React.ReactElement {
         generatedDate,
       });
       
-      // PDF blob 생성
       setSubmitStatus('Processing...');
       setProgress(60);
       
       const pdfBlob = await pdf(pdfDoc).toBlob();
       
-      // 파일명 생성 (강화된 검증)
       const safeDate = (formData.dutyDate || new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' }))
         .replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 50);
       const safeName = (formData.userName || 'Unknown')
@@ -1195,14 +1200,13 @@ export default function PatientLogSystem(): React.ReactElement {
       
       try {
         const storage = getStorage();
-        const storageRef = ref(storage, `endofday-pdfs/${safeOffice}/${safeDate}/${filename}`);
+        const storageRef = ref(storage, `endofday-pdfs/Call_Center/${safeDate}/${filename}`);
         
         await uploadBytes(storageRef, pdfBlob);
         
         try {
           await deleteDoc(doc(db, 'patient-logs', currentDocId));
         } catch (deleteError) {
-          // 문서가 없어도 무시
         }
         
         const rowsWithDate = patientListForPdf.filter(row => row.appt_date && row.appt_date.trim() !== '');
@@ -1219,33 +1223,23 @@ export default function PatientLogSystem(): React.ReactElement {
         for (const [apptDate, patients] of byApptDate) {
           const showDocId = apptDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
           const docRef = doc(db, 'show-noshow', showDocId);
-          const existing = await getDoc(docRef);
-          const existingPatients = existing.exists() && Array.isArray(existing.data()?.patients)
-            ? existing.data()!.patients
-            : [];
-          const mergedPatients = [...existingPatients, ...patients];
-          await setDoc(docRef, sanitizeFirebaseDataClient({
-            appt_date: apptDate,
-            patients: mergedPatients,
-          }));
+          const sanitizedPatients = patients.map((p) => sanitizeFirebaseDataClient(p));
+          await setDoc(docRef, {
+            ...sanitizeFirebaseDataClient({ appt_date: apptDate }),
+            patients: arrayUnion(...sanitizedPatients),
+          }, { merge: true });
         }
         if (byApptDate.size === 0) {
           const showDocId = formData.dutyDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
           const docRef = doc(db, 'show-noshow', showDocId);
-          const existing = await getDoc(docRef);
-          const existingPatients = existing.exists() && Array.isArray(existing.data()?.patients)
-            ? existing.data()!.patients
-            : [];
           await setDoc(docRef, sanitizeFirebaseDataClient({
             appt_date: formData.dutyDate,
-            patients: existingPatients,
-          }));
+          }), { merge: true });
         }
         
         setSubmitStatus('Submitted Successfully!');
         setProgress(100);
         
-        // 폼 초기화
         resetForm();
         
         setTimeout(() => {
@@ -1254,10 +1248,8 @@ export default function PatientLogSystem(): React.ReactElement {
           setProgress(0);
         }, 2000);
       } catch (storageError: any) {
-        // 에러 메시지 추출 및 보안 강화
         const errorMessage = storageError?.message || 'Error';
         
-        // 민감한 정보 필터링
         const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
         const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
           errorMessage.toLowerCase().includes(keyword.toLowerCase())
@@ -1274,10 +1266,8 @@ export default function PatientLogSystem(): React.ReactElement {
       }
 
     } catch (error) {
-      // 에러 메시지 추출 및 보안 강화
       const errorMessage = (error as any).message || 'Error';
       
-      // 민감한 정보 필터링
       const sensitiveKeywords = ['password', 'token', 'secret', 'key', 'credential', 'auth', 'login', 'session', 'cookie', 'bearer', 'jwt', 'api', 'apikey'];
       const hasSensitiveInfo = sensitiveKeywords.some(keyword => 
         errorMessage.toLowerCase().includes(keyword.toLowerCase())
@@ -1287,24 +1277,21 @@ export default function PatientLogSystem(): React.ReactElement {
         ? 'An error occurred while submitting.' 
         : (errorMessage.length > 100 ? errorMessage.substring(0, 100) + '...' : errorMessage).replace(/[<>\"'&]/g, '');
       
-      // 화면에 에러 메시지 표시
       setSubmitStatus('❌ Submission failed: ' + safeErrorMessage);
       setProgress(0);
       
-      // 사용자에게 alert로도 표시 (콘솔이 막혀있으므로)
       alert('❌ Submission failed. Please try again.');
       
       setTimeout(() => {
         setLoading(false);
         setSubmitStatus('');
         setProgress(0);
-      }, 5000); // 5초로 연장하여 사용자가 메시지를 읽을 수 있도록
+      }, 5000);
     } finally {
       submitInProgressRef.current = false;
     }
   };
 
-  // 제출 중 브라우저 네비게이션 방지
   useEffect(() => {
     const handleBeforeUnload = (e: any) => {
       if (loading) {
@@ -1332,9 +1319,8 @@ export default function PatientLogSystem(): React.ReactElement {
     };
   }, [loading]);
 
-  // 원본 HTML 스타일을 React 스타일로 변환
   const containerStyle = {
-    maxWidth: '1500px',
+    maxWidth: '2000px',
     margin: '40px auto',
     padding: '30px',
     backgroundColor: 'rgba(255, 255, 255, 0.95)',
@@ -1386,7 +1372,6 @@ export default function PatientLogSystem(): React.ReactElement {
   return (
     <>
       <div style={bodyStyle}>
-        {/* 로딩 모달 */}
         {loading && (
           <div style={{
             position: "fixed",
@@ -1447,7 +1432,6 @@ export default function PatientLogSystem(): React.ReactElement {
         )}
 
         <div style={containerStyle}>
-        {/* 헤더 */}
         <div style={{ position: 'relative' }}>
         <h1 style={{ 
           color: '#0077B6', 
@@ -1476,7 +1460,6 @@ export default function PatientLogSystem(): React.ReactElement {
           )}
         </div>
 
-        {/* 기본 정보 섹션 */}
         <div style={sectionStyle}>
           <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '20px' }}>
             <div style={{ flex: '1', minWidth: '200px' }}>
@@ -1572,7 +1555,6 @@ export default function PatientLogSystem(): React.ReactElement {
             </div>
           </div>
 
-          {/* Unlock 버튼 */}
           {!isUnlocked && (
             <div style={{ display: 'flex', justifyContent: 'center', marginTop: '20px' }}>
               <button
@@ -1592,13 +1574,12 @@ export default function PatientLogSystem(): React.ReactElement {
                   fontSize: '1.1em'
                 }}
               >
-                🔓 Unlock Patient Log
+                🔓 Unlock
               </button>
             </div>
           )}
         </div>
 
-        {/* 환자 로그 테이블 */}
         <div style={sectionStyle}>
           {formData.userName && formData.userName.trim().endsWith(' ') && (
             <div style={{ marginBottom: '20px' }}>
@@ -1616,7 +1597,6 @@ export default function PatientLogSystem(): React.ReactElement {
             </div>
           )}
 
-          {/* 실시간 카운트 표시 */}
           <div style={{ 
             display: 'flex', 
             justifyContent: 'center',
@@ -1662,7 +1642,6 @@ export default function PatientLogSystem(): React.ReactElement {
             </div>
           </div>
 
-          {/* Unlock 체크 후 테이블 표시 */}
           {!isUnlocked ? (
             <div style={{
               padding: '40px',
@@ -1689,6 +1668,7 @@ export default function PatientLogSystem(): React.ReactElement {
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Call Out</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Time</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '150px' }}>Remark</th>
+                  <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '150px' }}>Source</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '150px' }}>Other Duty</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Action</th>
                 </tr>
@@ -1703,6 +1683,7 @@ export default function PatientLogSystem(): React.ReactElement {
                     patientOfficeOptions={patientOfficeOptions}
                     getVisitTypeOptions={getVisitTypeOptions}
                     remarkOptions={remarkOptions}
+                    sourceOptions={sourceOptions}
                     otherDutyOptions={otherDutyOptions}
                     inputStyle={inputStyle}
                     buttonStyle={buttonStyle}
@@ -1721,7 +1702,6 @@ export default function PatientLogSystem(): React.ReactElement {
           )}
         </div>
 
-        {/* 일일 업무 보고서 */}
         <div style={sectionStyle}>
           <h2 style={{ color: '#0077B6', marginBottom: '15px' }}>Daily Work Report</h2>
           {!isUnlocked ? (
@@ -1750,7 +1730,6 @@ export default function PatientLogSystem(): React.ReactElement {
           )}
         </div>
 
-        {/* PDF 생성 버튼 */}
         <div style={{ display: 'flex', justifyContent: 'center', gap: '20px', marginBottom: '30px' }}>
           {!isUnlocked ? (
             <div style={{
