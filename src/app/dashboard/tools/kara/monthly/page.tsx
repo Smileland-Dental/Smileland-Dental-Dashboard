@@ -31,6 +31,11 @@ type SugarRow = {
   paper?: string;
 };
 
+type DiagnoseRow = {
+  sName?: string;
+  diagnose?: string;
+};
+
 type ReasonRow = {
   reason?: string;
   orangeJuice?: string;
@@ -68,6 +73,7 @@ type FormDoc = {
   prophyTotal?: string;
   tableRows?: TableRow[];
   sugarRows?: SugarRow[];
+  diagnoseRows?: DiagnoseRow[];
   reasonRows?: ReasonRow[];
   extraInputRows?: ExtraInputRow[];
   locationSummary?: { pineapple?: string; rose?: string; mailedProduction?: string };
@@ -108,12 +114,14 @@ type Aggregate = {
   coffeeRows: Array<{ position: string; name: string; doctorPreventative: number; doctorRestorative: number; doctorCraProduction: number; sales: number; coffeeNew: number; coffeeReturn: number; coffeeTotal: number; coffeeNo: number; renderedCoffee: number; coffeeYes: number; orangeJuiceNew: number; orangeJuiceReturn: number; orangeJuiceTotal: number }>;
   additionalRows: Array<{ position: string; name: string; customer: number; icecream: number; cake: number; donut: number; tart: number; peach: number; peppermint: number; total: number }>;
   sugarRows: Array<{ position: string; name: string; sugar: number; sugarGood: number; sugarBad: number; paper: number }>;
+  diagnoseRows: Array<{ sName: string; diagnose: number }>;
   reasonRows: Array<{ reason: string; orangeJuice: number; paper: number; coffee: number }>;
 };
 
 type AggregateCoffeeRow = Aggregate['coffeeRows'][number];
 type AggregateAdditionalRow = Aggregate['additionalRows'][number];
 type AggregateSugarRow = Aggregate['sugarRows'][number];
+type AggregateDiagnoseRow = Aggregate['diagnoseRows'][number];
 type AggregateReasonRow = Aggregate['reasonRows'][number];
 
 const tableCellStyle: React.CSSProperties = { border: '1px solid #e5e7eb', padding: 8 };
@@ -980,6 +988,10 @@ function createMonthlyReportPdfDocument({
     positionGroupStart: isPositionGroupStart(aggregate.sugarRows, index),
   }));
   const sugarPositionSubtotalRows = buildSugarPositionSubtotalPdfSummary(aggregate.sugarRows);
+  const diagnoseRows: string[][] = aggregate.diagnoseRows.map((r: AggregateDiagnoseRow) => [
+    safeStr(r.sName),
+    formatAmount(r.diagnose),
+  ]);
   const reasonRows: string[][] = aggregate.reasonRows.map((r: AggregateReasonRow) => [
     safeStr(r.reason),
     formatAmount(r.orangeJuice),
@@ -1212,6 +1224,14 @@ function createMonthlyReportPdfDocument({
         )}
 
         {renderPdfTable(
+          ['Name', 'Sealant Diagnose'],
+          diagnoseRows,
+          [40, 30],
+          undefined,
+          'Sealant Diagnose'
+        )}
+        
+        {renderPdfTable(
           ['Reasoning', 'OE', 'Pro', 'CRA'],
           reasonRows,
           [40, 20, 20, 20],
@@ -1358,6 +1378,7 @@ function MonthlyReportPageContent() {
           coffeeRows: [],
           additionalRows: [],
           sugarRows: [],
+          diagnoseRows: [],
           reasonRows: [],
         };
         map.set(key, agg);
@@ -1439,6 +1460,15 @@ function MonthlyReportPageContent() {
       });
       agg.sugarRows = Array.from(sugarMap.values()).sort(compareByPositionThenName);
 
+      const diagnoseMap = new Map(agg.diagnoseRows.map((r) => [r.sName, r]));
+      (doc.diagnoseRows || []).forEach((row) => {
+        const sName = String(row.sName ?? '').trim() || '-';
+        const prev = diagnoseMap.get(sName) || { sName, diagnose: 0 };
+        prev.diagnose = addAmount(prev.diagnose, row.diagnose);
+        diagnoseMap.set(sName, prev);
+      });
+      agg.diagnoseRows = Array.from(diagnoseMap.values()).sort((a, b) => a.sName.localeCompare(b.sName));
+      
       const reasonMap = new Map(agg.reasonRows.map((r) => [r.reason, r]));
       (doc.reasonRows || []).forEach((row) => {
         const reason = String(row.reason ?? '').trim() || '-';
@@ -2143,6 +2173,31 @@ function MonthlyReportPageContent() {
                           <td style={tableCellStyle}>-</td>
                         </tr>
                       </tfoot>
+                    </table>
+                  </div>
+
+                  <h3 style={{ margin: '16px 0 10px' }}>Sealant Diagnose</h3>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '50%', minWidth: 700, borderCollapse: 'collapse', fontSize: 14 }}>
+                      <thead>
+                        <tr>
+                          {['Name', 'Sealant Diagnose'].map((h, idx) => (
+                            <th key={`${h}_${idx}`} style={tableHeaderStyle}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedAggregate.diagnoseRows.length === 0 ? (
+                          <tr><td colSpan={4} style={tableEmptyCellStyle}>No data is available.</td></tr>
+                        ) : (
+                          selectedAggregate.diagnoseRows.map((r) => (
+                            <tr key={r.sName}>
+                              <td style={tableCellStyle}>{r.sName}</td>
+                              <td style={tableCellStyle}>{formatAmount(r.diagnose)}</td>
+                            </tr>
+                          ))
+                        )}
+                      </tbody>
                     </table>
                   </div>
 

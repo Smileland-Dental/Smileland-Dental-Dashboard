@@ -9,27 +9,24 @@ const RECEIPT_STORAGE_FOLDER = 'reimbursement-receipts';
 
 type ReceiptUploadStatus = 'pending' | 'uploading' | 'failed';
 
-// 🔒 보안: 입력 데이터 sanitization 함수
 const sanitizeInput = (input: string, maxLength: number = 1000): string => {
   if (!input) return '';
   return String(input)
-    .replace(/[<>]/g, '') // Remove < and >
+    .replace(/[<>]/g, '')
     .substring(0, maxLength)
     .trim();
 };
 
-// 🔒 보안: 파일명 sanitization (path traversal 방지)
 const sanitizeFileName = (fileName: string): string => {
   return fileName
-    .replace(/[<>:"/\\|?*]/g, '') // Remove dangerous characters
-    .replace(/\.\./g, '') // Remove path traversal attempts
-    .substring(0, 255); // Limit length
+    .replace(/[<>:"/\\|?*]/g, '') 
+    .replace(/\.\./g, '')
+    .substring(0, 255);
 };
 
 const ALLOWED_RECEIPT_MIME = new Set(['image/jpeg', 'image/jpg', 'image/png']);
 const ALLOWED_RECEIPT_EXT = /\.(jpe?g|png)$/i;
 
-/** Receipt: JPG, JPEG, PNG only (MIME + extension if type missing) */
 function isAllowedReceiptImageFile(file: File): boolean {
   const type = (file.type || '').toLowerCase().trim();
   if (type && ALLOWED_RECEIPT_MIME.has(type)) {
@@ -41,7 +38,6 @@ function isAllowedReceiptImageFile(file: File): boolean {
   return ALLOWED_RECEIPT_EXT.test(file.name || '');
 }
 
-// Interfaces
 interface ReceiptFile {
   name: string;
   file?: File;
@@ -304,6 +300,7 @@ const ReimbursementRequest = () => {
     return purchaseList.map((purchase: Purchase, index: number) => ({
       name: sanitizeInput(formData.name, 100),
       cardLastFour: '', 
+      date: sanitizeInput(formData.date, 100),
       office: sanitizeInput(formData.office, 50),
       vendor: sanitizeInput(purchase.vendor, 200),
       reason: sanitizeInput(purchase.reason, 500),
@@ -341,7 +338,7 @@ const ReimbursementRequest = () => {
       return;
     }
 
-    const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+    const MAX_FILE_SIZE = 10 * 1024 * 1024;
     const MAX_FILES = 10;
     const fileArray = Array.from(files).slice(0, MAX_FILES);
 
@@ -758,3 +755,4 @@ const ReimbursementRequest = () => {
 };
 
 export default ReimbursementRequest;
+

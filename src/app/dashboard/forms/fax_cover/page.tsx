@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { doc, setDoc, getDoc, deleteDoc } from "firebase/firestore";
 import { db, auth } from "@/lib/firebase.config";
 import { getStorage, ref, uploadBytes } from 'firebase/storage';
@@ -9,7 +9,6 @@ import { pdf, Document, Page, View, Text, StyleSheet } from '@react-pdf/renderer
 
 const validateInput = (value: string, maxLength: number = 500): string => {
   if (typeof value !== 'string') return '';
-  // 길이 제한
   if (value.length > maxLength) {
     return value.substring(0, maxLength);
   }
@@ -18,7 +17,6 @@ const validateInput = (value: string, maxLength: number = 500): string => {
 
 const validateDate = (date: string): boolean => {
   if (!date || typeof date !== 'string') return false;
-  // MM/DD/YYYY 또는 YYYY-MM-DD 형식 확인
   const dateRegex1 = /^\d{2}\/\d{2}\/\d{4}$/;
   const dateRegex2 = /^\d{4}-\d{2}-\d{2}$/;
   return dateRegex1.test(date) || dateRegex2.test(date);
@@ -53,7 +51,6 @@ const FIXED_FORM_NAMES = [
             'Other:'
           ];
 
-
 const getCaliforniaFormattedDate = (): string => {
   const californiaTime = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
   return californiaTime.toLocaleDateString('en-US', {
@@ -74,6 +71,16 @@ const convertDateToISO = (dateStr: string): string => {
     return `${year}-${month}-${day}`;
   }
   return '';
+};
+
+const getCaliforniaISODate = (): string => convertDateToISO(getCaliforniaFormattedDate());
+
+const formatDateForDisplay = (dateStr: string): string => {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    const [year, month, day] = dateStr.split('-');
+    return `${month}/${day}/${year}`;
+  }
+  return dateStr;
 };
 
 const convertTo12Hour = (timeStr: string): string => {
@@ -123,7 +130,7 @@ const createEmptyProductionRow = () => ({ date: '', note: '', status: '' });
 
 const createInitialData = () => ({
   formData: {
-    date: getCaliforniaFormattedDate(),
+    date: getCaliforniaISODate(),
     officeTimeCheckIn: '',
     officeName: '',
     timeCheckOut: '',
@@ -217,7 +224,7 @@ const validateAllFormData = (params: {
 
 const parseFirestoreDocument = (data: Record<string, unknown>): FormState => {
   const initial = createInitialData();
-  const dateValue = (data.date as string) || getCaliforniaFormattedDate();
+  const dateValue = convertDateToISO((data.date as string) || '') || convertDateToISO((data.faxDate as string) || '') || getCaliforniaISODate();
 
   const tableData = data.tableData && Array.isArray(data.tableData)
     ? FIXED_FORM_NAMES.map((fixedName, index) => {
@@ -350,14 +357,14 @@ export default function FaxCoverPage() {
     const s = pdfStyles;
 
     const header = React.createElement(View, { style: s.header },
-      React.createElement(Text, { style: s.headerTitle }, 'Fax'),
+      React.createElement(Text, { style: s.headerTitle }, 'End of Day Fax Cover'),
       React.createElement(Text, { style: s.headerSubtitle }, '(Check out only when leaving the office)'),
     );
 
     const infoSection1 = React.createElement(View, { style: s.infoSection },
       React.createElement(View, { style: s.infoItem },
         React.createElement(Text, { style: s.infoLabel }, 'Date: '),
-        React.createElement(Text, null, safeStr(formData.date, 20)),
+        React.createElement(Text, null, safeStr(formatDateForDisplay(formData.date), 20)),
       ),
       React.createElement(View, { style: s.infoItem },
         React.createElement(Text, { style: s.infoLabel }, 'Office: '),
@@ -528,6 +535,7 @@ export default function FaxCoverPage() {
   const [tableData, setTableData] = useState(initialData.tableData);
 
   const [lastSavedSnapshot, setLastSavedSnapshot] = useState(() => serializeFormState(initialData));
+  const isSwitchingDateRef = useRef(false);
 
   const getCurrentFormState = useCallback((): FormState => ({
     formData,
@@ -557,8 +565,11 @@ export default function FaxCoverPage() {
     setTimeout(() => setIsUpdatingFromFirebase(false), 100);
   }, []);
 
-  const resetToInitialData = useCallback(() => {
+  const resetToInitialData = useCallback((preserveDate?: string) => {
     const initial = createInitialData();
+    if (preserveDate) {
+      initial.formData.date = preserveDate;
+    }
     setFormData(initial.formData);
     setTableData(initial.tableData);
     setProductionData(initial.productionData);
@@ -570,17 +581,19 @@ export default function FaxCoverPage() {
   }, []);
 
   const autoSave = useCallback(async () => {
+    if (isSwitchingDateRef.current) return;
     if (!faxDate || isUpdatingFromFirebase || !selectedOffice || !validateOffice(selectedOffice)) return;
 
     const current = getCurrentFormState();
     if (current.formData.date && !validateDate(current.formData.date)) return;
+
+    const currentIso = convertDateToISO(current.formData.date);
+    if (currentIso && currentIso !== faxDate) return;
     if (!isFormDirty()) return;
 
     try {
       const validated = validateAllFormData(current);
-
-      const isoDate = convertDateToISO(validated.validatedFormData.date) || faxDate;
-      const docInfo = buildDocId(selectedOffice, isoDate);
+      const docInfo = buildDocId(selectedOffice, faxDate);
       if (!docInfo) return;
 
       await setDoc(doc(db, "fax-cover", docInfo.docId), {
@@ -656,15 +669,20 @@ export default function FaxCoverPage() {
 
     const loadData = async () => {
       try {
+        setIsUpdatingFromFirebase(true);
         const docSnap = await getDoc(doc(db, "fax-cover", docInfo.docId));
         if (cancelled) return;
 
         if (docSnap.exists()) {
           applyFormSnapshot(parseFirestoreDocument(docSnap.data()));
         } else {
-          resetToInitialData();
+          resetToInitialData(isoDate);
+          setTimeout(() => setIsUpdatingFromFirebase(false), 100);
         }
       } catch (error) {
+        if (!cancelled) setIsUpdatingFromFirebase(false);
+      } finally {
+        if (!cancelled) isSwitchingDateRef.current = false;
       }
     };
 
@@ -1131,22 +1149,16 @@ export default function FaxCoverPage() {
           <div style={{ ...styles.formGroup, flex: '1', minWidth: '200px' }}>
             <label style={styles.label} htmlFor="faxDate">Date:</label>
             <input
-              type="text"
+              type="date"
               id="faxDate"
-              value={formData.date}
+              value={convertDateToISO(formData.date)}
               onChange={(e) => {
-                const validated = validateInput(e.target.value, 20);
-                setFormData(prev => ({ ...prev, date: validated }));
+                const nextDate = e.target.value;
+                if (!nextDate || !validateDate(nextDate)) return;
+                if (nextDate === convertDateToISO(formData.date)) return;
+                isSwitchingDateRef.current = true;
+                setFormData(prev => ({ ...prev, date: nextDate }));
               }}
-              onBlur={(e) => {
-                if (formData.date && selectedOffice) {
-                  const isoDate = convertDateToISO(formData.date);
-                  if (isoDate) {
-                    setFaxDate(isoDate);
-                  }
-                }
-              }}
-              maxLength={20}
               style={styles.input}
             />
           </div>
@@ -1430,57 +1442,59 @@ export default function FaxCoverPage() {
             Today
           </h3>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="addOns" style={styles.label}>
-              Add On's
-            </label>
-            <input
-              type="text"
-              id="addOns"
-              name="addOns"
-              value={todayData.addOns}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 500);
-                setTodayData(prev => ({ ...prev, addOns: validated }));
-              }}
-              maxLength={500}
-              style={styles.input}
-            />
-          </div>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="addOns" style={styles.label}>
+                Add On's
+              </label>
+              <input
+                type="text"
+                id="addOns"
+                name="addOns"
+                value={todayData.addOns}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 500);
+                  setTodayData(prev => ({ ...prev, addOns: validated }));
+                }}
+                maxLength={500}
+                style={styles.input}
+              />
+            </div>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="noShows" style={styles.label}>
-              No Shows
-            </label>
-            <input
-              type="text"
-              id="noShows"
-              name="noShows"
-              value={todayData.noShows}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 500);
-                setTodayData(prev => ({ ...prev, noShows: validated }));
-              }}
-              style={styles.input}
-            />
-          </div>
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="noShows" style={styles.label}>
+                No Shows
+              </label>
+              <input
+                type="text"
+                id="noShows"
+                name="noShows"
+                value={todayData.noShows}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 500);
+                  setTodayData(prev => ({ ...prev, noShows: validated }));
+                }}
+                style={styles.input}
+              />
+            </div>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="seen" style={styles.label}>
-              Seen
-            </label>
-            <input
-              type="text"
-              id="seen"
-              name="seen"
-              value={todayData.seen}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 500);
-                setTodayData(prev => ({ ...prev, seen: validated }));
-              }}
-              maxLength={500}
-              style={styles.input}
-            />
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="seen" style={styles.label}>
+                Seen
+              </label>
+              <input
+                type="text"
+                id="seen"
+                name="seen"
+                value={todayData.seen}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 500);
+                  setTodayData(prev => ({ ...prev, seen: validated }));
+                }}
+                maxLength={500}
+                style={styles.input}
+              />
+            </div>
           </div>
         </div>
         )}
@@ -1496,39 +1510,41 @@ export default function FaxCoverPage() {
             Next Day
           </h3>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="opener" style={styles.label}>
-              Opener
-            </label>
-            <input
-              type="text"
-              id="opener"
-              name="opener"
-              value={nextDayData.opener}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 200);
-                setNextDayData(prev => ({ ...prev, opener: validated }));
-              }}
-              style={styles.input}
-            />
-          </div>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="opener" style={styles.label}>
+                Opener
+              </label>
+              <input
+                type="text"
+                id="opener"
+                name="opener"
+                value={nextDayData.opener}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 200);
+                  setNextDayData(prev => ({ ...prev, opener: validated }));
+                }}
+                style={styles.input}
+              />
+            </div>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="closer" style={styles.label}>
-              Closer
-            </label>
-            <input
-              type="text"
-              id="closer"
-              name="closer"
-              value={nextDayData.closer}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 200);
-                setNextDayData(prev => ({ ...prev, closer: validated }));
-              }}
-              maxLength={200}
-              style={styles.input}
-            />
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="closer" style={styles.label}>
+                Closer
+              </label>
+              <input
+                type="text"
+                id="closer"
+                name="closer"
+                value={nextDayData.closer}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 200);
+                  setNextDayData(prev => ({ ...prev, closer: validated }));
+                }}
+                maxLength={200}
+                style={styles.input}
+              />
+            </div>
           </div>
         </div>
         )}
@@ -1544,39 +1560,41 @@ export default function FaxCoverPage() {
             Call Log
           </h3>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="whoCalled" style={styles.label}>
-              Who called
-            </label>
-            <input
-              type="text"
-              id="whoCalled"
-              name="whoCalled"
-              value={callLogData.whoCalled}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 500);
-                setCallLogData(prev => ({ ...prev, whoCalled: validated }));
-              }}
-              style={styles.input}
-            />
-          </div>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="whoCalled" style={styles.label}>
+                Who called
+              </label>
+              <input
+                type="text"
+                id="whoCalled"
+                name="whoCalled"
+                value={callLogData.whoCalled}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 500);
+                  setCallLogData(prev => ({ ...prev, whoCalled: validated }));
+                }}
+                style={styles.input}
+              />
+            </div>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="appointmentsMade" style={styles.label}>
-              How many appointments made
-            </label>
-            <input
-              type="text"
-              id="appointmentsMade"
-              name="appointmentsMade"
-              value={callLogData.appointmentsMade}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 500);
-                setCallLogData(prev => ({ ...prev, appointmentsMade: validated }));
-              }}
-              maxLength={500}
-              style={styles.input}
-            />
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="appointmentsMade" style={styles.label}>
+                How many appointments made
+              </label>
+              <input
+                type="text"
+                id="appointmentsMade"
+                name="appointmentsMade"
+                value={callLogData.appointmentsMade}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 500);
+                  setCallLogData(prev => ({ ...prev, appointmentsMade: validated }));
+                }}
+                maxLength={500}
+                style={styles.input}
+              />
+            </div>
           </div>
         </div>
         )}
@@ -1592,40 +1610,42 @@ export default function FaxCoverPage() {
             (For Corporate Use Only)
           </h3>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="officeSupervisorManager" style={styles.label}>
-              Office Supervisor/Manager
-            </label>
-            <input
-              type="text"
-              id="officeSupervisorManager"
-              name="officeSupervisorManager"
-              value={supervisorData.officeSupervisorManager}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 200);
-                setSupervisorData(prev => ({ ...prev, officeSupervisorManager: validated }));
-              }}
-              maxLength={200}
-              style={styles.input}
-            />
-          </div>
+          <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="officeSupervisorManager" style={styles.label}>
+                Office Supervisor/Manager
+              </label>
+              <input
+                type="text"
+                id="officeSupervisorManager"
+                name="officeSupervisorManager"
+                value={supervisorData.officeSupervisorManager}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 200);
+                  setSupervisorData(prev => ({ ...prev, officeSupervisorManager: validated }));
+                }}
+                maxLength={200}
+                style={styles.input}
+              />
+            </div>
 
-          <div style={styles.formGroup}>
-            <label htmlFor="checkOutBy" style={styles.label}>
-              Check out by
-            </label>
-            <input
-              type="text"
-              id="checkOutBy"
-              name="checkOutBy"
-              value={supervisorData.checkOutBy}
-              onChange={(e) => {
-                const validated = validateInput(e.target.value, 200);
-                setSupervisorData(prev => ({ ...prev, checkOutBy: validated }));
-              }}
-              maxLength={200}
-              style={styles.input}
-            />
+            <div style={{ ...styles.formGroup, flex: '1', minWidth: '150px' }}>
+              <label htmlFor="checkOutBy" style={styles.label}>
+                Check out by
+              </label>
+              <input
+                type="text"
+                id="checkOutBy"
+                name="checkOutBy"
+                value={supervisorData.checkOutBy}
+                onChange={(e) => {
+                  const validated = validateInput(e.target.value, 200);
+                  setSupervisorData(prev => ({ ...prev, checkOutBy: validated }));
+                }}
+                maxLength={200}
+                style={styles.input}
+              />
+            </div>
           </div>
         </div>
         )}

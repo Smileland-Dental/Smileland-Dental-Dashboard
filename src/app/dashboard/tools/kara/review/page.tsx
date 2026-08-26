@@ -2,7 +2,8 @@
 
 import React, { Suspense, useEffect, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { db } from '@/lib/firebase.config';
+import { auth, db } from '@/lib/firebase.config';
+import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, serverTimestamp, setDoc } from 'firebase/firestore';
 
 const PINK_BEAR_COLLECTION = 'monthly report';
@@ -1125,6 +1126,7 @@ export default function ReportTablePage() {
 }
 
 function ReportTablePageContent() {
+  const [pageReady, setPageReady] = useState(false);
   const searchParams = useSearchParams();
   const selectedMonth = searchParams.get('month') ?? '';
   const selectedOffice = searchParams.get('office') ?? '';
@@ -1195,6 +1197,58 @@ function ReportTablePageContent() {
     setEquipmentNote(nextEquipmentNote);
     resetDraftState();
   };
+
+  useEffect(() => {
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'HR' &&
+          userData?.role !== 'Director'
+        ) {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
+    });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1423,6 +1477,12 @@ function ReportTablePageContent() {
       : activeSection === 'equipment'
         ? 2000
         : 1550;
+
+  if (!pageReady) {
+    return (
+      <main style={{ minHeight: '100vh', background: '#f1f5f9' }} />
+    );
+  }
 
   return (
     <main style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>
