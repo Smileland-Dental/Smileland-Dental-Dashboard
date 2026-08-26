@@ -136,7 +136,7 @@ export const RequestTable: React.FC<RequestTableProps> = ({ requests, userRole, 
                       <div className="flex items-center gap-3">
                         <div className="flex flex-col">
                           <span className="text-sm font-semibold text-gray-900">{req.employee_name}</span>
-                          <span className="text-xs text-gray-500 font-mono tracking-tighter">#{req.employee_id}</span>
+                          <span className="text-xs text-gray-500 font-mono tracking-tighter">ID: {req.employee_id}</span>
                         </div>
                       </div>
                     </td>

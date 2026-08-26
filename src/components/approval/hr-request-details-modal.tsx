@@ -5,7 +5,7 @@ import { X, Clock, MessageSquare, Save, Archive, ArchiveRestore, AlertCircle, Fi
 import { AbsenceRequest } from "@/lib/types";
 import { ref, uploadBytes, getDownloadURL, deleteObject} from "firebase/storage";
 import { storage } from '@/lib/firebase.config';
-import { OFFICES } from '@/lib/constants';
+import { OFFICES, getRequestColor } from '@/lib/constants';
 
 interface HRDetailsProps {
   absence: AbsenceRequest;
@@ -190,7 +190,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
               <select 
                 value={tempData.office}
                 onChange={(e) => setTempData({...tempData, office: e.target.value})}
-                className={`w-full rounded-xl text-sm font-bold border-2
+                className={`w-full rounded-xl text-sm font-bold border-2 pl-1
                 ${isChanged('office') ? 'bg-rose-50 border-rose-300 text-rose-900' : 'bg-white text-slate-700 border-indigo-200'}`}
               >
               {OFFICES.map((office) => (
@@ -219,7 +219,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                     eta: needsETA ? tempData.eta : "",
                   });
                 }}
-                className={`w-full rounded-xl text-sm font-bold border-2
+                className={`w-full rounded-xl text-sm font-bold border-2 pl-1
                 ${isChanged('type_of_incident') ? 'bg-rose-50 border-rose-300 text-rose-900' : 'bg-white text-slate-700 border-indigo-200'}`}
               >
                 <option value="Late In">Late In</option>
@@ -236,8 +236,8 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
               <select 
                 value={tempData.type_of_request}
                 onChange={(e) => setTempData({...tempData, type_of_request: e.target.value as any})}
-                className={`w-full rounded-xl text-sm font-bold border-2 
-                ${isChanged('type_of_request') ? 'bg-rose-50 border-rose-300 text-rose-900' : 'bg-white text-slate-700 border-indigo-200'}`}
+                className={`w-full rounded-xl text-sm font-bold border-2 transition-colors pl-1
+                ${isChanged('type_of_request') ? 'bg-rose-50 border-rose-300 text-rose-900' : getRequestColor(tempData.type_of_request)}`}
               >
                 <option value="HR Call In">HR Call In</option>
                 <option value="Incident Notice">Incident Notice</option>
