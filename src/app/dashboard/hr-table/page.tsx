@@ -18,7 +18,7 @@ import * as XLSX from 'xlsx';
 import { useSort } from '@/hooks/use-sort'
 import { SortIcon } from '@/components/ui/table-sort'
 
-import { OFFICES } from '@/lib/constants';
+import { OFFICES, getRequestColor } from '@/lib/constants';
 const itemsPerPage = 50;
 //const incidentTypes = ["Late In", "Early Out", "Absent", "Leave and Come Back", "Long Lunch", "Switch Shift", "Cancel Cell"];
 
@@ -385,30 +385,30 @@ export default function Page() {
               {/*<th className="px-6 py-4 text-right text-xs font-bold text-gray-500 uppercase tracking-wider">Edit</th>*/}
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-50">
+          <tbody className="divide-y divide-slate/50">
             {loading ? (
               <tr><td colSpan={4} className="px-8 py-20 text-center font-bold text-slate-400 animate-pulse">Fetching from Server...</td></tr>
             ) : paginated.length > 0 ? (
               paginated.map(a => (
-              <tr key={a.id} className="hover:bg-slate-50/50 group transition-colors">
+              <tr key={a.id} className={`hover:bg-slate-50/50 group transition-colors ${getRequestColor(a.type_of_request)}`}>
                 <td className="px-6 py-4 hover:cursor-pointer" onClick={() => setSelectedAbsence(a)}>
                   <div className="font-bold text-slate-900 group-hover:text-indigo-600 transition-colors">{a.employee_name}</div>
-                  <div className="text-[10px] font-mono text-slate-400">ID: {a.employee_id}</div>
+                  <div className="text-[10px] font-mono text-slate-700">ID: {a.employee_id}</div>
                 </td>
                 <td className="px-4 py-4 text-sm font-medium text-slate-600 whitespace-nowrap">
-                  <span className="bg-slate-100 text-slate-500 px-2 py-1 rounded-md">
+                  <span className="bg-slate-100 text-black px-2 py-1 rounded-md">
                     {a.type_of_incident === "Leave and Come Back" ? "Leave & CB" : a.type_of_incident}  
                     {/* a.type_of_incident */}
                   </span>  
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{a.office}</td>
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">{a.office}</td>
                 <td className="px-6 py-4 whitespace-nowrap">
-                  <div className="flex items-center gap-2 text-sm text-gray-600">
-                    <Calendar className="h-3.5 w-3.5 text-gray-400" />
+                  <div className="flex items-center gap-2 text-sm text-black">
+                    <Calendar className="h-3.5 w-3.5 text-black" />
                     {(a.incident_start === a.incident_end) ? (<span>{(a.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')}</span>) : (<span>{(a.incident_start).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')} - {(a.incident_end).replace(/^(\d{4})-(\d{2})-(\d{2})$/, '$2/$3/$1')}</span>)}
                   </div>
                 </td>
-                <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                <td className="px-6 py-4 whitespace-nowrap text-sm text-black">
                     {a.createdAt?.toDate ? a.createdAt.toDate().toLocaleDateString() : 'N/A'}
                 </td>
                 <td className="px-5 py-4 whitespace-nowrap">
