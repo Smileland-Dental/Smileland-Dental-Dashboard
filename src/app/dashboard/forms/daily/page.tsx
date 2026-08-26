@@ -38,6 +38,11 @@ type SugarRow = {
   paper?: string;
 };
 
+type DiagnoseRow = {
+  sName?: string;
+  diagnose?: string;
+}
+
 type ReasonRow = {
   reason?: string;
   orangeJuice?: string;
@@ -112,6 +117,10 @@ type SugarTotals = {
   paper: number;
 };
 
+type DiagnoseTotals = {
+  diagnose: number;
+};
+
 type FormDoc = {
   id: string;
   date?: string;
@@ -144,6 +153,8 @@ type FormDoc = {
   coffeeActualTotals?: Partial<Record<keyof TableTotals, string>>;
   sugarRows?: SugarRow[];
   sugarTotals?: Partial<SugarTotals>;
+  diagnoseRows?: DiagnoseRow[];
+  diagnoseTotals?: Partial<DiagnoseTotals>;
   reasonRows?: ReasonRow[];
   extraInputRows?: ExtraInputRow[];
   locationSummary?: LocationSummary;
@@ -169,6 +180,7 @@ const TABLE_HEADERS = [
 ];
 
 const SUGAR_HEADERS = ['Position', 'Name', 'Sealant', 'Sealant (Billable)', 'Sealant (Redo)', 'Prophy Documented'];
+const DIAGNOSE_HEADERS = ['Name', 'Sealant Diagnose']
 const REASON_HEADERS = ['Reasoning', 'OE', 'Pro', 'CRA'];
 
 const NOTES_MAX_LENGTH = 300;
@@ -457,6 +469,8 @@ function createSubmittedReportPDFDocument(props: {
   productionSideMetrics: ProductionSideMetrics;
   sugarRows: SugarRow[];
   sugarTotals: SugarTotals | null;
+  diagnoseRows: DiagnoseRow[];
+  diagnoseTotals: DiagnoseTotals | null;
   reasonRows: ReasonRow[];
   notes: string;
   notDue: string;
@@ -490,6 +504,8 @@ function createSubmittedReportPDFDocument(props: {
     productionSideMetrics,
     sugarRows,
     sugarTotals,
+    diagnoseRows,
+    diagnoseTotals,
     reasonRows,
     notes,
     notDue,
@@ -699,6 +715,16 @@ function createSubmittedReportPDFDocument(props: {
     'sugar-table'
   );
 
+  const diagnoseTable = createPdfTable(
+    s,
+    DIAGNOSE_HEADERS,
+    diagnoseRows.map((row) => [
+      safeStr(row.sName, 40),
+      safeStr(row.diagnose, 12),
+    ]),
+    'diagnose-table'
+  );
+
   const reasonTable = createPdfTable(
     s,
     REASON_HEADERS,
@@ -739,6 +765,7 @@ function createSubmittedReportPDFDocument(props: {
       createPdfSection(s, 'Doctors', additionalInputsTable),
       createPdfSection(s, 'CRA / OE', coffeeTable),
       createPdfSection(s, 'Sealant / Prophy', sugarTable),
+      createPdfSection(s, 'Sealant Diagnose', diagnoseTable),
       createPdfSection(s, 'Short Procedures', reasonTable),
       createPdfSection(s, 'Notes', notesTable)
     )
@@ -1068,6 +1095,13 @@ function createEmptySugarRow(): SugarRow {
   };
 }
 
+function createEmptyDiagnoseRow(): DiagnoseRow {
+  return {
+    sName: '',
+    diagnose: '',
+  };
+}
+
 function createEmptyReasonRow(): ReasonRow {
   return {
     reason: '',
@@ -1195,6 +1229,13 @@ function getSugarTotalsFromRows(rows: SugarRow[]): SugarTotals {
     sugarGood: rows.reduce((sum, row) => sum + parseNumber(row.sugarGood), 0),
     sugarBad: rows.reduce((sum, row) => sum + parseNumber(row.sugarBad), 0),
     paper: rows.reduce((sum, row) => sum + parseNumber(row.paper), 0),
+  };
+}
+
+
+function getDiagnoseTotalsFromRows(rows: DiagnoseRow[]): DiagnoseTotals {
+  return {
+    diagnose: rows.reduce((sum, row) => sum + parseNumber(row.diagnose), 0),
   };
 }
 
@@ -1472,6 +1513,7 @@ export default function ViewPage() {
       tableRows: normalizedTableRows,
       coffeeActualTotals: selectedDoc.coffeeActualTotals || {},
       sugarRows: (selectedDoc.sugarRows || []).map((row) => ({ ...createEmptySugarRow(), ...row })),
+      diagnoseRows: (selectedDoc.diagnoseRows || []).map((row) => ({ ...createEmptyDiagnoseRow(), ...row })),
       reasonRows: (selectedDoc.reasonRows || []).map((row) => ({ ...createEmptyReasonRow(), ...row })),
       extraInputRows: normalizedExtraInputRows,
       locationSummary: normalizedLocationSummary,
@@ -1532,8 +1574,8 @@ export default function ViewPage() {
     );
   };
 
-  const updateRowField = <T extends ReportRow | TableRow | SugarRow | ReasonRow | ExtraInputRow>(
-    section: 'reportRows' | 'tableRows' | 'sugarRows' | 'reasonRows' | 'extraInputRows',
+  const updateRowField = <T extends ReportRow | TableRow | SugarRow | DiagnoseRow | ReasonRow | ExtraInputRow>(
+    section: 'reportRows' | 'tableRows' | 'sugarRows' | 'diagnoseRows' | 'reasonRows' | 'extraInputRows',
     rowIndex: number,
     field: keyof T,
     value: string
@@ -1621,6 +1663,10 @@ export default function ViewPage() {
         ...row,
         amount: formatMoneyValue(row.amount),
       }));
+      const diagnoseRows = (draft.diagnoseRows || []).map((row) => ({
+        ...createEmptyDiagnoseRow(),
+        ...row,
+      }));
       const reasonRows = (draft.reasonRows || []).map((row) => ({
         ...createEmptyReasonRow(),
         ...row,
@@ -1645,6 +1691,7 @@ export default function ViewPage() {
 
       const tableTotals = getTableTotalsFromRows(tableRowsWithSyncedSales);
       const sugarTotals = getSugarTotalsFromRows(sugarRows);
+      const diagnoseTotals = getDiagnoseTotalsFromRows(diagnoseRows);
       const hasCoffeeYesInput = tableRowsWithSyncedSales.some((row) => String(row.coffeeYes ?? '').trim() !== '');
       const coffeeSales = hasCoffeeYesInput ? computeCraProductionSales(tableTotals.coffeeYes) : '';
       const draftLocationSummary = {
@@ -1661,7 +1708,7 @@ export default function ViewPage() {
         ),
         mailedProduction: formatMoneyValue(draftLocationSummary.mailedProduction),
         mailedDate: String(draftLocationSummary.mailedDate ?? ''),
-        daysSinceSubmitted: String(draftLocationSummary.daysSinceSubmitted ?? ''),
+        daysSinceSubmitted: visibleDaysSinceSubmitted,
       };
       const draftSideMetrics = {
         ...createEmptyProductionSideMetrics(),
@@ -1707,6 +1754,8 @@ export default function ViewPage() {
         coffeeActualTotals,
         sugarRows,
         sugarTotals,
+        diagnoseRows,
+        diagnoseTotals,
         reasonRows,
         extraInputRows,
         locationSummary,
@@ -1765,6 +1814,15 @@ export default function ViewPage() {
     }
     return getSugarTotalsFromRows(selectedDoc.sugarRows || []);
   }, [selectedDoc]);
+  const diagnoseTotals = useMemo(() => {
+    if (!selectedDoc) return null;
+    if (selectedDoc.diagnoseTotals) {
+      return {
+        diagnose: parseNumber(selectedDoc.diagnoseTotals.diagnose),
+      };
+    }
+    return getDiagnoseTotalsFromRows(selectedDoc.diagnoseRows || []);
+  }, [selectedDoc]);
   const visibleReportRows = isEditing ? draft?.reportRows || [] : reportRows;
   const visibleTableRows = isEditing ? computeTableRows(draft?.tableRows || []) : selectedDoc?.tableRows || [];
   const visibleSugarRows = isEditing
@@ -1775,6 +1833,7 @@ export default function ViewPage() {
         }))
       )
     : selectedDoc?.sugarRows || [];
+  const visibleDiagnoseRows = isEditing ? draft?.diagnoseRows || [] : selectedDoc?.diagnoseRows || [];
   const visibleReasonRows = isEditing ? draft?.reasonRows || [] : selectedDoc?.reasonRows || [];
   const visibleExtraInputRows = isEditing
     ? computeExtraInputRows(normalizeExtraInputRows(draft?.extraInputRows, visibleTableRows.length))
@@ -1787,6 +1846,7 @@ export default function ViewPage() {
   const visibleTableTotals = isEditing ? getTableTotalsFromRows(visibleTableRows) : tableTotals;
   const visibleCoffeeActualTotals = computeCoffeeActualTotals(isEditing ? draft?.coffeeActualTotals || {} : selectedDoc?.coffeeActualTotals || {});
   const visibleSugarTotals = isEditing ? getSugarTotalsFromRows(visibleSugarRows) : sugarTotals;
+  const visibleDiagnoseTotals = isEditing ? getDiagnoseTotalsFromRows(visibleDiagnoseRows) : diagnoseTotals;
   const visibleExtraInputTotals = getExtraInputTotals(visibleExtraInputRowsWithIdentity);
   const legacyLocationSummary = getLegacyLocationSummaryFromExtraRows(selectedDoc?.extraInputRows);
   const visibleLocationSummary = {
@@ -1857,6 +1917,9 @@ export default function ViewPage() {
   const handleAddSugarRow = () => {
     setDraft((prev) => (prev ? { ...prev, sugarRows: [...(prev.sugarRows || []), createEmptySugarRow()] } : prev));
   };
+  const handleAddDiagnoseRow = () => {
+    setDraft((prev) => (prev ? { ...prev, diagnoseRows: [...(prev.diagnoseRows || []), createEmptyDiagnoseRow()] } : prev));
+  };
   const handleAddReasonRow = () => {
     setDraft((prev) => (prev ? { ...prev, reasonRows: [...(prev.reasonRows || []), createEmptyReasonRow()] } : prev));
   };
@@ -1902,6 +1965,8 @@ export default function ViewPage() {
         productionSideMetrics: visibleProductionSideMetrics,
         sugarRows: visibleSugarRows,
         sugarTotals: visibleSugarTotals,
+        diagnoseRows: visibleDiagnoseRows,
+        diagnoseTotals: visibleDiagnoseTotals,
         reasonRows: visibleReasonRows,
         notes: isEditing ? String(draft?.notes ?? '') : selectedDoc.notes || '',
         notDue: isEditing ? String(draft?.notDue ?? '') : selectedDoc.notDue || '',
@@ -2465,8 +2530,8 @@ export default function ViewPage() {
                               {isEditing ? (
                                 <input
                                   type="text"
-                                  readOnly
                                   value={String(draft?.locationSummary?.daysSinceSubmitted ?? '')}
+                                  onChange={(e) => updateLocationSummaryField('daysSinceSubmitted', e.target.value)}                                  
                                   style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }}
                                 />
                               ) : (
@@ -2952,6 +3017,54 @@ export default function ViewPage() {
                       </button>
                     </div>
                   )}
+                  <h3 style={{ margin: '16px 0 10px' }}>Sealant Diagnose</h3>
+                  <div style={dPageDetailTableBleedScroll}>
+                    <table style={{ width: '50%', minWidth: 560, borderCollapse: 'collapse', fontSize: 14 }}>
+                      <thead>
+                        <tr style={{ background: '#f3f4f6' }}>
+                          {DIAGNOSE_HEADERS.map((h) => (
+                            <th key={h} style={{ border: '1px solid #e5e7eb', padding: 8, textAlign: 'left' }}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleDiagnoseRows.map((r, idx) => (
+                          <tr key={`diagnose-${idx}`}>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="text" value={r.sName || ''} onChange={(e) => updateRowField<DiagnoseRow>('diagnoseRows', idx, 'sName', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.sName || ''}</td>
+                            <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{isEditing ? <input type="number" value={r.diagnose || ''} onChange={(e) => updateRowField<DiagnoseRow>('diagnoseRows', idx, 'diagnose', e.target.value)} style={{ width: '100%', height: 30, border: '1px solid #d1d5db', borderRadius: 6, padding: '0 8px' }} /> : r.diagnose || ''}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: '#f9fafb', fontWeight: 700 }}>
+                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>Total</td>
+                          <td style={{ border: '1px solid #e5e7eb', padding: 8 }}>{visibleDiagnoseTotals ? visibleDiagnoseTotals.diagnose : 0}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                  {isEditing && (
+                    <div style={{ marginTop: 8 }}>
+                      <button
+                        type="button"
+                        onClick={handleAddDiagnoseRow}
+                        style={{
+                          height: 34,
+                          padding: '0 12px',
+                          borderRadius: 8,
+                          border: '1px solid #cbd5e1',
+                          background: '#fff',
+                          color: '#111827',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        Add Row
+                      </button>
+                    </div>
+                  )}
                   <h3 style={{ margin: '16px 0 10px' }}>Short Procedures</h3>
                   <div style={dPageDetailTableBleedScroll}>
                     <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 14 }}>
@@ -3074,3 +3187,5 @@ export default function ViewPage() {
     </main>
   );
 }
+
+

@@ -384,7 +384,6 @@ function createPatientLogPDFDocument(props: {
     const safeTime = safeStr(row?.time, 20);
     const safeRemark = safeStr(row?.remark, 100);
     const safeSource = safeStr(row?.source, 100);
-    const safeIsOther = safeStr(row?.isOther, 100);
     const safeOtherDuty = safeStr(row?.other_duty || row?.otherDuty, 100);
     const callIn = row?.call_in === true || row?.callIn === true;
     const callOut = row?.call_out === true || row?.callOut === true;
@@ -400,7 +399,6 @@ function createPatientLogPDFDocument(props: {
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, convertTo12Hour(safeTime))),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeRemark || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeSource || '-')),
-      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeIsOther || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeOtherDuty || '-')),
     );
   });

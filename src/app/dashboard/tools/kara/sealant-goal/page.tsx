@@ -2,7 +2,8 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { db } from '@/lib/firebase.config';
+import { auth, db } from '@/lib/firebase.config';
+import { onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, getDoc, getDocs, setDoc } from 'firebase/firestore';
 
 const S_GOAL_COLUMN_HEADERS = ['Day', 'Date', 'OE Done', 'Sealant Goal', 'Sealants Done', 'Difference'];
@@ -223,7 +224,7 @@ export default function DailyReportPage() {
   const searchParams = useSearchParams();
   const month = searchParams.get('month') ?? '';
   const office = searchParams.get('office') ?? '';
-
+  const [pageReady, setPageReady] = useState(false);
   const [docs, setDocs] = useState<FormDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -237,6 +238,58 @@ export default function DailyReportPage() {
   const [oGoalNoteSaved, setOGoalNoteSaved] = useState('');
   const [oGoalNoteDraft, setOGoalNoteDraft] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('s-goal');
+
+  useEffect(() => {
+    let cancelled = false;
+    const goHome = () => {
+      if (typeof window !== 'undefined') {
+        window.location.replace('/');
+      }
+    };
+
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      try {
+        if (!currentUser) {
+          goHome();
+          return;
+        }
+
+        const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+        if (!userDoc.exists()) {
+          goHome();
+          return;
+        }
+
+        const userData = userDoc.data();
+        if (
+          userData?.role !== 'HR' &&
+          userData?.role !== 'Director'
+        ) {
+          goHome();
+          return;
+        }
+
+        if (!cancelled) {
+          setPageReady(true);
+        }
+      } catch {
+        goHome();
+      }
+    });
+
+    if (
+      process.env.NODE_ENV === 'production' &&
+      typeof window !== 'undefined' &&
+      window.location.protocol !== 'https:'
+    ) {
+      window.location.href = window.location.href.replace('http:', 'https:');
+    }
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, []);
 
   useEffect(() => {
     if (!month || !office) {
@@ -524,6 +577,12 @@ export default function DailyReportPage() {
 
   const oeGoalFooterStyles = buildGoalFooterStyles(oeGoalCellStyle);
   const sGoalFooterStyles = buildGoalFooterStyles(sGoalCellStyle);
+
+  if (!pageReady) {
+    return (
+      <main style={{ minHeight: '100vh', background: '#f1f5f9' }} />
+    );
+  }
 
   return (
     <main style={{ minHeight: '100vh', background: '#fff', padding: 24 }}>
@@ -826,3 +885,4 @@ export default function DailyReportPage() {
     </main>
   );
 }
+
