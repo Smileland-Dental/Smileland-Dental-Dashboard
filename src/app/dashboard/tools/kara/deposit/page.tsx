@@ -71,7 +71,7 @@ function californiaSubmittedAt(now = new Date()): string {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
-    hourCycle: 'h23',
+    hour12: true,
   });
   const parts = Object.fromEntries(
     dtf
@@ -79,21 +79,9 @@ function californiaSubmittedAt(now = new Date()): string {
       .filter((p) => p.type !== 'literal')
       .map((p) => [p.type, p.value])
   );
-  const hour = parts.hour === '24' ? '00' : parts.hour;
-  const asUtc = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    Number(hour),
-    Number(parts.minute),
-    Number(parts.second)
-  );
-  const offsetMin = Math.round((asUtc - now.getTime()) / 60000);
-  const sign = offsetMin >= 0 ? '+' : '-';
-  const abs = Math.abs(offsetMin);
-  const offsetHours = String(Math.floor(abs / 60)).padStart(2, '0');
-  const offsetMinutes = String(abs % 60).padStart(2, '0');
-  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}${sign}${offsetHours}:${offsetMinutes}`;
+  const hour = parts.hour === '12' ? '12' : parts.hour;
+
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second} ${parts.dayPeriod.toLowerCase()}`;
 }
 
 function totalsFromRows(tableRows: TableRow[]): SavedTotals {
@@ -160,6 +148,7 @@ export default function Deposit() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [submissions, setSubmissions] = useState<SavedSubmission[]>([]);
   const [selectedId, setSelectedId] = useState('');
+  const [selectedTotalDate, setSelectedTotalDate] = useState('');
   const [filterYear, setFilterYear] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
   const [isMonthlyView, setIsMonthlyView] = useState(false);
@@ -176,7 +165,9 @@ export default function Deposit() {
     }
 
     try {
-      const snap = await getDocs(query(collection(db, 'deposit'), where('office', '==', officeName)));
+      const snap = officeName === 'Total'
+        ? await getDocs(collection(db, 'deposit'))
+        : await getDocs(query(collection(db, 'deposit'), where('office', '==', officeName)));
       const list = snap.docs
         .map((item) => {
           const data = item.data();
@@ -254,6 +245,11 @@ export default function Deposit() {
   }, []);
 
   useEffect(() => {
+    setSelectedId('');
+    setSelectedTotalDate('');
+    setIsMonthlyView(false);
+    setIsYearlyView(false);
+    setRows(Array.from({ length: DATA_ROW_COUNT }, emptyRow));
     loadSubmissions(office);
   }, [office]);
 
@@ -283,6 +279,85 @@ export default function Deposit() {
     return submissions.filter((item) => yearMonthFromDate(item.date) === ym);
   }, [submissions, filterYear, filterMonth]);
 
+  const filteredDates = useMemo(() => {
+    const values = new Set<string>();
+    for (const item of filteredSubmissions) {
+      if (item.date) values.add(item.date);
+    }
+    return Array.from(values).sort((a, b) => b.localeCompare(a));
+  }, [filteredSubmissions]);
+
+  const totalDateOfficeRows = useMemo(() => {
+    if (office !== 'Total' || !selectedTotalDate) return [];
+    const byOffice = new Map<string, SavedSubmission>();
+    for (const item of submissions) {
+      if (item.date !== selectedTotalDate) continue;
+      if (!byOffice.has(item.office)) byOffice.set(item.office, item);
+    }
+    return Array.from(byOffice.values()).sort((a, b) => {
+      const ia = WORK_OFFICE_OPTIONS.indexOf(a.office);
+      const ib = WORK_OFFICE_OPTIONS.indexOf(b.office);
+      const sa = ia === -1 ? 999 : ia;
+      const sb = ib === -1 ? 999 : ib;
+      if (sa !== sb) return sa - sb;
+      return a.office.localeCompare(b.office);
+    });
+  }, [office, selectedTotalDate, submissions]);
+
+  const totalDateColumnTotals = useMemo(() => {
+    const totals = {} as Record<ValueKey, number>;
+    for (const key of VALUE_KEYS) {
+      totals[key] = totalDateOfficeRows.reduce((sum, item) => sum + toCents(item.totals[key]), 0);
+    }
+    return totals;
+  }, [totalDateOfficeRows]);
+
+  const totalDateGrandTotal = useMemo(
+    () =>
+      totalDateOfficeRows.reduce((sum, item) => {
+        if (item.totals.grandTotal) return sum + toCents(item.totals.grandTotal);
+        return sum + VALUE_KEYS.reduce((inner, key) => inner + toCents(item.totals[key]), 0);
+      }, 0),
+    [totalDateOfficeRows]
+  );
+
+  const totalMonthlyOfficeRows = useMemo(() => {
+    if (office !== 'Total') return [];
+    const byOffice = new Map<string, Record<ValueKey, number> & { grand: number }>();
+    for (const item of filteredSubmissions) {
+      const current = byOffice.get(item.office) || { d: 0, ic: 0, pc: 0, cc: 0, ie: 0, cac: 0, c: 0, grand: 0 };
+      for (const key of VALUE_KEYS) {
+        current[key] += toCents(item.totals[key]);
+      }
+      current.grand += item.totals.grandTotal
+        ? toCents(item.totals.grandTotal)
+        : VALUE_KEYS.reduce((sum, key) => sum + toCents(item.totals[key]), 0);
+      byOffice.set(item.office, current);
+    }
+    return Array.from(byOffice.entries())
+      .sort((a, b) => {
+        const ia = WORK_OFFICE_OPTIONS.indexOf(a[0]);
+        const ib = WORK_OFFICE_OPTIONS.indexOf(b[0]);
+        const sa = ia === -1 ? 999 : ia;
+        const sb = ib === -1 ? 999 : ib;
+        if (sa !== sb) return sa - sb;
+        return a[0].localeCompare(b[0]);
+      })
+      .map(([officeName, cents]) => ({
+        office: officeName,
+        totals: {
+          d: formatCents(cents.d),
+          ic: formatCents(cents.ic),
+          pc: formatCents(cents.pc),
+          cc: formatCents(cents.cc),
+          ie: formatCents(cents.ie),
+          cac: formatCents(cents.cac),
+          c: formatCents(cents.c),
+          grandTotal: formatCents(cents.grand),
+        } as SavedTotals,
+      }));
+  }, [office, filteredSubmissions]);
+
   useEffect(() => {
     if (availableYears.length === 0) {
       if (filterYear) setFilterYear('');
@@ -302,6 +377,13 @@ export default function Deposit() {
       setFilterMonth(availableMonths[0]);
     }
   }, [availableMonths, filterMonth]);
+
+  useEffect(() => {
+    if (!selectedTotalDate) return;
+    if (!filteredDates.includes(selectedTotalDate)) {
+      setSelectedTotalDate('');
+    }
+  }, [filteredDates, selectedTotalDate]);
 
   const rowTotals = useMemo(
     () => rows.map((row) => VALUE_KEYS.reduce((sum, key) => sum + toCents(row[key]), 0)),
@@ -392,6 +474,12 @@ export default function Deposit() {
 
   const handleHeaderDateChange = (nextDate: string) => {
     setHeaderDate(nextDate);
+    if (office === 'Total') {
+      setIsMonthlyView(false);
+      setIsYearlyView(false);
+      setSelectedTotalDate(nextDate);
+      return;
+    }
     if (isMonthlyView || isYearlyView) {
       setIsMonthlyView(false);
       setIsYearlyView(false);
@@ -404,7 +492,7 @@ export default function Deposit() {
   };
 
   const handleSubmit = async () => {
-    if (!headerDate || !office) {
+    if (!headerDate || !office || office === 'Total') {
       alert('Please fill in Date and Office.');
       return;
     }
@@ -454,16 +542,26 @@ export default function Deposit() {
     setRows(item.rows);
   };
 
+  const openTotalDate = (date: string) => {
+    setIsMonthlyView(false);
+    setIsYearlyView(false);
+    setSelectedId('');
+    setSelectedTotalDate(date);
+    setHeaderDate(date);
+  };
+
   const openMonthlyView = () => {
     setIsMonthlyView(true);
     setIsYearlyView(false);
     setSelectedId('');
+    setSelectedTotalDate('');
   };
 
   const openYearlyView = () => {
     setIsYearlyView(true);
     setIsMonthlyView(false);
     setSelectedId('');
+    setSelectedTotalDate('');
   };
 
   const handleDelete = async () => {
@@ -546,7 +644,8 @@ export default function Deposit() {
   };
 
   const isViewingSubmission = Boolean(selectedId);
-  const isReadOnly = isViewingSubmission || isMonthlyView || isYearlyView;
+  const isTotalDateView = office === 'Total' && !isMonthlyView && !isYearlyView;
+  const isReadOnly = isViewingSubmission || isMonthlyView || isYearlyView || isTotalDateView;
 
   const readOnlyCellStyle: React.CSSProperties = {
     ...inputStyle,
@@ -657,7 +756,28 @@ export default function Deposit() {
               Monthly
             </button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-              {filteredSubmissions.length === 0 ? (
+              {office === 'Total' ? (
+                filteredDates.length === 0 ? (
+                  <div style={{ fontSize: '14px', color: '#8b93a0' }}>No submissions in this month.</div>
+                ) : filteredDates.map((date) => (
+                  <button
+                    key={date}
+                    onClick={() => openTotalDate(date)}
+                    style={{
+                      textAlign: 'left',
+                      padding: '10px 12px',
+                      borderRadius: '6px',
+                      border: selectedTotalDate === date && !isMonthlyView && !isYearlyView ? '2px solid #c5ccd6' : '1px solid #e6e8eb',
+                      backgroundColor: selectedTotalDate === date && !isMonthlyView && !isYearlyView ? '#f0f2f5' : '#ffffff',
+                      color: '#3b4252',
+                      fontWeight: selectedTotalDate === date && !isMonthlyView && !isYearlyView ? 'bold' : 'normal',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {date}
+                  </button>
+                ))
+              ) : filteredSubmissions.length === 0 ? (
                 <div style={{ fontSize: '14px', color: '#8b93a0' }}>No submissions in this month.</div>
               ) : filteredSubmissions.map((item) => (
                 <button
@@ -692,6 +812,7 @@ export default function Deposit() {
               style={headerInputStyle}
             >
               <option value="">Select Office</option>
+              <option value="Total">Total</option>
               {WORK_OFFICE_OPTIONS.map((option) => (
                 <option key={option} value={option}>
                   {option}
@@ -723,7 +844,7 @@ export default function Deposit() {
                       minWidth: col === 'Date' ? '150px' : '90px',
                     }}
                   >
-                    {col === 'Date' && isYearlyView ? 'Month' : col === 'Date' && isMonthlyView ? 'Submitted Date' : col}
+                    {col === 'Date' && isYearlyView ? 'Month' : col === 'Date' && isMonthlyView && office === 'Total' ? 'Office' : col === 'Date' && isMonthlyView ? 'Submitted Date' : col === 'Date' && isTotalDateView ? 'Office' : col}
                   </th>
                 ))}
               </tr>
@@ -766,7 +887,31 @@ export default function Deposit() {
                 </>
               ) : isMonthlyView ? (
                 <>
-                  {filteredSubmissions.length === 0 ? (
+                  {office === 'Total' ? (
+                    totalMonthlyOfficeRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={COLUMNS.length} style={{ ...cellStyle, color: '#8b93a0' }}>
+                          No submissions in this month.
+                        </td>
+                      </tr>
+                    ) : (
+                      totalMonthlyOfficeRows.map((item, index) => (
+                        <tr key={item.office} style={{ backgroundColor: index % 2 === 0 ? '#fbfcfd' : '#ffffff' }}>
+                          <td style={cellStyle}>
+                            <div style={readOnlyCellStyle}>{item.office}</div>
+                          </td>
+                          {VALUE_KEYS.map((key) => (
+                            <td key={key} style={cellStyle}>
+                              <div style={readOnlyCellStyle}>
+                                {item.totals[key] === '' ? '' : `$${item.totals[key]}`}
+                              </div>
+                            </td>
+                          ))}
+                          <td style={{ ...cellStyle, fontWeight: 'bold' }}>${item.totals.grandTotal}</td>
+                        </tr>
+                      ))
+                    )
+                  ) : filteredSubmissions.length === 0 ? (
                     <tr>
                       <td colSpan={COLUMNS.length} style={{ ...cellStyle, color: '#8b93a0' }}>
                         No submissions in this month.
@@ -802,6 +947,47 @@ export default function Deposit() {
                     ))}
                     <td style={cellStyle}>${formatCents(monthlyGrandTotal)}</td>
                   </tr>
+                </>
+              ) : isTotalDateView ? (
+                <>
+                  {totalDateOfficeRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={COLUMNS.length} style={{ ...cellStyle, color: '#8b93a0' }}>
+                        {selectedTotalDate ? 'No submissions on this date.' : 'Select a date to see office totals.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    totalDateOfficeRows.map((item, index) => {
+                      const rowGrand = item.totals.grandTotal
+                        || formatCents(VALUE_KEYS.reduce((sum, key) => sum + toCents(item.totals[key]), 0));
+                      return (
+                        <tr key={item.office} style={{ backgroundColor: index % 2 === 0 ? '#fbfcfd' : '#ffffff' }}>
+                          <td style={cellStyle}>
+                            <div style={readOnlyCellStyle}>{item.office}</div>
+                          </td>
+                          {VALUE_KEYS.map((key) => (
+                            <td key={key} style={cellStyle}>
+                              <div style={readOnlyCellStyle}>
+                                {item.totals[key] === '' ? '' : `$${item.totals[key]}`}
+                              </div>
+                            </td>
+                          ))}
+                          <td style={{ ...cellStyle, fontWeight: 'bold' }}>${rowGrand}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                  {totalDateOfficeRows.length > 0 && (
+                    <tr style={{ backgroundColor: '#f5f7fa', fontWeight: 'bold' }}>
+                      <td style={cellStyle}>Total</td>
+                      {VALUE_KEYS.map((key) => (
+                        <td key={key} style={cellStyle}>
+                          ${formatCents(totalDateColumnTotals[key])}
+                        </td>
+                      ))}
+                      <td style={cellStyle}>${formatCents(totalDateGrandTotal)}</td>
+                    </tr>
+                  )}
                 </>
               ) : (
                 <>
@@ -867,21 +1053,21 @@ export default function Deposit() {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', marginTop: '24px' }}>
-          <button onClick={handleSubmit} disabled={isSubmitting || isDeleting || isMonthlyView || isYearlyView} style={{
+          <button onClick={handleSubmit} disabled={isSubmitting || isDeleting || isMonthlyView || isYearlyView || office === 'Total'} style={{
             ...buttonStyle,
-            cursor: isSubmitting || isDeleting || isMonthlyView || isYearlyView ? 'not-allowed' : 'pointer',
-            opacity: isSubmitting || isDeleting || isMonthlyView || isYearlyView ? 0.6 : 1,
+            cursor: isSubmitting || isDeleting || isMonthlyView || isYearlyView || office === 'Total' ? 'not-allowed' : 'pointer',
+            opacity: isSubmitting || isDeleting || isMonthlyView || isYearlyView || office === 'Total' ? 0.6 : 1,
           }}>
             {isSubmitting ? 'Submitting...' : 'Submit'}
           </button>
           <button
             onClick={handleDelete}
-            disabled={!selectedId || isDeleting || isSubmitting}
+            disabled={!selectedId || isDeleting || isSubmitting || office === 'Total'}
             style={{
               ...buttonStyle,
               backgroundColor: '#dc3545',
-              cursor: !selectedId || isDeleting || isSubmitting ? 'not-allowed' : 'pointer',
-              opacity: !selectedId || isDeleting || isSubmitting ? 0.6 : 1,
+              cursor: !selectedId || isDeleting || isSubmitting || office === 'Total' ? 'not-allowed' : 'pointer',
+              opacity: !selectedId || isDeleting || isSubmitting || office === 'Total' ? 0.6 : 1,
             }}
           >
             {isDeleting ? 'Deleting...' : 'Delete'}

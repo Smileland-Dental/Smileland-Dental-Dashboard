@@ -37,6 +37,11 @@ type SugarRow = {
   paper?: string;
 };
 
+type DiagnoseRow = {
+  sName?: string;
+  diagnose?: string;
+}
+
 type ExtraInputRow = {
   position?: string;
   name?: string;
@@ -92,6 +97,10 @@ type SugarTotals = {
   paper?: number | string;
 };
 
+type DiagnoseTotals = {
+  diagnose?: number | string;
+};
+
 type FormDoc = {
   id: string;
   date?: string;
@@ -124,6 +133,8 @@ type FormDoc = {
   coffeeActualTotals?: Partial<Record<keyof TableTotals, string>>;
   sugarRows?: SugarRow[];
   sugarTotals?: Partial<SugarTotals>;
+  diagnoseRows?: DiagnoseRow[];
+  diagnoseTotals?: Partial<DiagnoseTotals>;
   extraInputRows?: ExtraInputRow[];
   locationSummary?: LocationSummary;
   productionSideMetrics?: ProductionSideMetrics;
@@ -146,6 +157,8 @@ const TABLE_HEADERS = [
 ];
 
 const SUGAR_HEADERS = ['Position', 'Name', 'Sealant', 'Sealant (Billable)', 'Sealant (Redo)', 'Prophy Documented'];
+
+const DIAGNOSE_HEADERS = ['Name', 'Sealant Diagnose'];
 
 const DOCTOR_HEADERS = [
   'Position',
@@ -291,7 +304,6 @@ function parseShiftOffices(shift: unknown): string[] {
       try {
         return parseShiftOffices(JSON.parse(raw));
       } catch {
-        // fall through to delimiter split
       }
     }
     return raw
@@ -481,11 +493,13 @@ export default function ViewPage() {
 
   const tableRows = selectedDoc?.tableRows || [];
   const sugarRows = selectedDoc?.sugarRows || [];
+  const diagnoseRows = selectedDoc?.diagnoseRows || [];
   const locationSummary = selectedDoc?.locationSummary || {};
   const sideMetrics = selectedDoc?.productionSideMetrics || {};
   const coffeeActualTotals = selectedDoc?.coffeeActualTotals || {};
   const tableTotals = selectedDoc?.tableTotals || {};
   const sugarTotals = selectedDoc?.sugarTotals || {};
+  const diagnoseTotals = selectedDoc?.diagnoseTotals || {};
 
   const doctorRows = tableRows.map((tableRow, idx) => {
     const extra = selectedDoc?.extraInputRows?.[idx] || {};
@@ -840,6 +854,35 @@ export default function ViewPage() {
                           <td style={tdStyle}>{displayTotal(sugarTotals.sugarGood)}</td>
                           <td style={tdStyle}>{displayTotal(sugarTotals.sugarBad)}</td>
                           <td style={tdStyle}>{displayTotal(sugarTotals.paper)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+
+                  <h3 style={{ margin: '16px 0 10px' }}>Sealant Diagnose</h3>
+                  <div style={dPageDetailTableBleedScroll}>
+                    <table style={{ width: '50%', minWidth: 760, borderCollapse: 'collapse', fontSize: 14 }}>
+                      <thead>
+                        <tr style={{ background: '#f3f4f6' }}>
+                          {DIAGNOSE_HEADERS.map((h) => (
+                            <th key={h} style={thStyle}>
+                              {h}
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {diagnoseRows.map((r, idx) => (
+                          <tr key={`diagnose-${idx}`}>
+                            <td style={tdStyle}>{r.sName || ''}</td>
+                            <td style={tdStyle}>{r.diagnose || ''}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr style={{ background: '#f9fafb', fontWeight: 700 }}>
+                          <td style={tdStyle}>Total</td>
+                          <td style={tdStyle}>{displayTotal(diagnoseTotals.diagnose)}</td>
                         </tr>
                       </tfoot>
                     </table>
