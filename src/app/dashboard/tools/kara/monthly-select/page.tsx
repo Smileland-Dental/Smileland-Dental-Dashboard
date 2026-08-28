@@ -71,12 +71,31 @@ function getMonthOptions(docs: FormDoc[]): string[] {
   return getUniqueSorted(months, 'desc');
 }
 
-function getOfficeOptions(docs: FormDoc[], month: string): string[] {
-  if (!month) return [];
+function normalizeAllowedOffices(officeValue: unknown): string[] {
+  if (Array.isArray(officeValue)) {
+    return officeValue.map((value) => String(value ?? '').trim()).filter(Boolean);
+  }
+  if (typeof officeValue === 'string') {
+    return officeValue
+      .split(',')
+      .map((value) => value.trim())
+      .filter(Boolean);
+  }
+  if (officeValue && typeof officeValue === 'object') {
+    return Object.values(officeValue as Record<string, unknown>)
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean);
+  }
+  return [];
+}
+
+function getOfficeOptions(docs: FormDoc[], month: string, allowedOffices: string[]): string[] {
+  if (!month || allowedOffices.length === 0) return [];
+  const allowedSet = new Set(allowedOffices);
   const locations = docs
     .filter((doc) => !!doc.submittedDateTime && normalizeDocMonth(doc.date) === month)
     .map((doc) => String(doc.location ?? '').trim())
-    .filter(Boolean);
+    .filter((location) => location && allowedSet.has(location));
   return getUniqueSorted(locations, 'asc');
 }
 
@@ -206,6 +225,7 @@ export default function MonthlySelectPage() {
   const [error, setError] = useState('');
   const [selectedMonth, setSelectedMonth] = useState('');
   const [selectedOffice, setSelectedOffice] = useState('');
+  const [allowedOffices, setAllowedOffices] = useState<string[]>([]);
   const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
   const [officeDropdownOpen, setOfficeDropdownOpen] = useState(false);
   const monthDropdownRef = useRef<HTMLDivElement>(null);
@@ -242,6 +262,7 @@ export default function MonthlySelectPage() {
         }
 
         if (!cancelled) {
+          setAllowedOffices(normalizeAllowedOffices(userData?.offices));
           setPageReady(true);
         }
       } catch {
@@ -280,7 +301,10 @@ export default function MonthlySelectPage() {
   }, []);
 
   const monthOptions = useMemo(() => getMonthOptions(docs), [docs]);
-  const officeOptions = useMemo(() => getOfficeOptions(docs, selectedMonth), [docs, selectedMonth]);
+  const officeOptions = useMemo(
+    () => getOfficeOptions(docs, selectedMonth, allowedOffices),
+    [docs, selectedMonth, allowedOffices]
+  );
 
   useEffect(() => {
     if (selectedMonth && !monthOptions.includes(selectedMonth)) {
@@ -437,4 +461,3 @@ export default function MonthlySelectPage() {
     </main>
   );
 }
-

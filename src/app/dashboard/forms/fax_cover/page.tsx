@@ -357,7 +357,7 @@ export default function FaxCoverPage() {
     const s = pdfStyles;
 
     const header = React.createElement(View, { style: s.header },
-      React.createElement(Text, { style: s.headerTitle }, 'End of Day Fax Cover'),
+      React.createElement(Text, { style: s.headerTitle }, 'End of Day Cover'),
       React.createElement(Text, { style: s.headerSubtitle }, '(Check out only when leaving the office)'),
     );
 
@@ -841,7 +841,7 @@ export default function FaxCoverPage() {
         tsHours = tsHours ? tsHours : 12;
         const timeStamp = `${tsHours}${tsMinutes.toString().padStart(2, '0')}${tsAmpm}`;
 
-        const filename = `1) ${safeIsoDate}_${safeOffice || 'Unknown'}_End of Day Fax Cover_${timeStamp}.pdf`;
+        const filename = `1) ${safeIsoDate}_${safeOffice || 'Unknown'}_End of Day Cover_${timeStamp}.pdf`;
         const storageRef = ref(storage, `endofday-pdfs/${safeOffice}/${safeIsoDate}/${filename}`);
 
         await uploadBytes(storageRef, blob);
@@ -1142,7 +1142,7 @@ export default function FaxCoverPage() {
       )}
 
       <div style={styles.container}>
-        <h2 style={styles.header}>End of Day Fax Cover</h2>
+        <h2 style={styles.header}>End of Day Cover</h2>
         <p style={styles.subtitle}>(Check out only when leaving the office)</p>
 
         <div style={{ display: 'flex', gap: '20px', marginBottom: '20px', flexWrap: 'wrap' }}>
