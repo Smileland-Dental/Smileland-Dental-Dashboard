@@ -7,8 +7,8 @@ import { db, auth } from '@/lib/firebase.config';
 
 const WORK_OFFICE_OPTIONS = ['Bernard', 'California', 'Delano', 'Fresno', 'Ming', 'Ortho', 'Tulare', 'Visalia'];
 
-const COLUMNS = ['Date', 'Insurance Check', 'Personal Check', 'Credit Card', 'Ins. Electronic', 'Care Credit', 'Cash', 'Totals'] as const;
-const VALUE_KEYS = ['ic', 'pc', 'cc', 'ie', 'cac', 'c'] as const;
+const COLUMNS = ['Date', 'Dentical', 'Insurance Check', 'Personal Check', 'Credit Card', 'Ins. Electronic', 'Care Credit', 'Cash', 'Totals'] as const;
+const VALUE_KEYS = ['d', 'ic', 'pc', 'cc', 'ie', 'cac', 'c'] as const;
 const DATA_ROW_COUNT = 6;
 
 type ValueKey = (typeof VALUE_KEYS)[number];
@@ -20,6 +20,7 @@ type TableRow = {
 function emptyRow(): TableRow {
   return {
     date: '',
+    d: '',
     ic: '',
     pc: '',
     cc: '',
@@ -43,12 +44,17 @@ function formatCents(cents: number): string {
   return `${sign}${whole}.${frac}`;
 }
 
+type SavedTotals = Record<ValueKey, string> & {
+  grandTotal: string;
+};
+
 type SavedSubmission = {
   id: string;
   date: string;
   office: string;
   rows: TableRow[];
   submittedAt: string;
+  totals: SavedTotals;
 };
 
 function yearMonthFromDate(date: string): string {
@@ -56,18 +62,72 @@ function yearMonthFromDate(date: string): string {
   return matched ? `${matched[1]}-${matched[2]}` : '';
 }
 
-function submissionStamp(now = new Date()): { idTime: string; iso: string } {
-  const time = now
-    .toLocaleTimeString('en-GB', { timeZone: 'America/Los_Angeles', hour12: false })
-    .replace(/:/g, '');
-  return { idTime: time, iso: now.toISOString() };
+function californiaSubmittedAt(now = new Date()): string {
+  const dtf = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  });
+  const parts = Object.fromEntries(
+    dtf
+      .formatToParts(now)
+      .filter((p) => p.type !== 'literal')
+      .map((p) => [p.type, p.value])
+  );
+  const hour = parts.hour === '24' ? '00' : parts.hour;
+  const asUtc = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  const offsetMin = Math.round((asUtc - now.getTime()) / 60000);
+  const sign = offsetMin >= 0 ? '+' : '-';
+  const abs = Math.abs(offsetMin);
+  const offsetHours = String(Math.floor(abs / 60)).padStart(2, '0');
+  const offsetMinutes = String(abs % 60).padStart(2, '0');
+  return `${parts.year}-${parts.month}-${parts.day}T${hour}:${parts.minute}:${parts.second}${sign}${offsetHours}:${offsetMinutes}`;
 }
 
-function formatSubmittedAt(iso: string): string {
-  if (!iso) return '';
-  const parsed = new Date(iso);
-  if (!Number.isFinite(parsed.getTime())) return '';
-  return parsed.toLocaleTimeString('en-GB', { timeZone: 'America/Los_Angeles', hour12: false });
+function totalsFromRows(tableRows: TableRow[]): SavedTotals {
+  const cents = {} as Record<ValueKey, number>;
+  for (const key of VALUE_KEYS) {
+    cents[key] = tableRows.reduce((sum, row) => sum + toCents(row[key]), 0);
+  }
+  const grand = VALUE_KEYS.reduce((sum, key) => sum + cents[key], 0);
+  return {
+    d: formatCents(cents.d),
+    ic: formatCents(cents.ic),
+    pc: formatCents(cents.pc),
+    cc: formatCents(cents.cc),
+    ie: formatCents(cents.ie),
+    cac: formatCents(cents.cac),
+    c: formatCents(cents.c),
+    grandTotal: formatCents(grand),
+  };
+}
+
+function normalizeTotals(raw: any, tableRows: TableRow[]): SavedTotals {
+  const source = raw && typeof raw === 'object' ? raw : {};
+  const hasAny = VALUE_KEYS.some((key) => typeof source[key] === 'string' && source[key] !== '');
+  if (!hasAny) return totalsFromRows(tableRows);
+  return {
+    d: typeof source.d === 'string' ? source.d : '',
+    ic: typeof source.ic === 'string' ? source.ic : '',
+    pc: typeof source.pc === 'string' ? source.pc : '',
+    cc: typeof source.cc === 'string' ? source.cc : '',
+    ie: typeof source.ie === 'string' ? source.ie : '',
+    cac: typeof source.cac === 'string' ? source.cac : '',
+    c: typeof source.c === 'string' ? source.c : '',
+    grandTotal: typeof source.grandTotal === 'string' ? source.grandTotal : '',
+  };
 }
 
 function normalizeRows(raw: any): TableRow[] {
@@ -75,7 +135,8 @@ function normalizeRows(raw: any): TableRow[] {
   return Array.from({ length: DATA_ROW_COUNT }, (_, i) => {
     const row = source[i] || {};
     return {
-      date: typeof row.date === 'string' ? row.date : '',
+      date: typeof row.date === 'string' ? row.date : '',      
+      d: typeof row.d === 'string' ? row.d : '',
       ic: typeof row.ic === 'string' ? row.ic : '',
       pc: typeof row.pc === 'string' ? row.pc : '',
       cc: typeof row.cc === 'string' ? row.cc : '',
@@ -91,7 +152,6 @@ export default function Deposit() {
     new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' })
   );
   const [office, setOffice] = useState('');
-  const [userOfficesOptions, setUserOfficesOptions] = useState<string[]>([]);
   const [rows, setRows] = useState<TableRow[]>(() =>
     Array.from({ length: DATA_ROW_COUNT }, emptyRow)
   );
@@ -100,13 +160,18 @@ export default function Deposit() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [submissions, setSubmissions] = useState<SavedSubmission[]>([]);
   const [selectedId, setSelectedId] = useState('');
-  const [filterYearMonth, setFilterYearMonth] = useState('');
+  const [filterYear, setFilterYear] = useState('');
+  const [filterMonth, setFilterMonth] = useState('');
+  const [isMonthlyView, setIsMonthlyView] = useState(false);
+  const [isYearlyView, setIsYearlyView] = useState(false);
   const [pageReady, setPageReady] = useState(false);
 
   const loadSubmissions = async (officeName: string) => {
     if (!officeName) {
       setSubmissions([]);
       setSelectedId('');
+      setIsMonthlyView(false);
+      setIsYearlyView(false);
       return;
     }
 
@@ -115,12 +180,14 @@ export default function Deposit() {
       const list = snap.docs
         .map((item) => {
           const data = item.data();
+          const rows = normalizeRows(data.rows);
           return {
             id: item.id,
             date: typeof data.date === 'string' ? data.date : item.id.split('_')[0],
             office: typeof data.office === 'string' ? data.office : officeName,
-            rows: normalizeRows(data.rows),
+            rows,
             submittedAt: typeof data.submittedAt === 'string' ? data.submittedAt : '',
+            totals: normalizeTotals(data.totals, rows),
           };
         })
         .sort((a, b) => {
@@ -157,33 +224,11 @@ export default function Deposit() {
 
         const userData = userDoc.data();
         if (
-          userData?.role !== 'Manager' &&
           userData?.role !== 'HR' &&
           userData?.role !== 'Director'
         ) {
           goHome();
           return;
-        }
-
-        if (userData?.offices) {
-          const officesArray = Array.isArray(userData.offices)
-            ? userData.offices
-            : [userData.offices];
-
-          const validOptions = officesArray.filter((g: string) => WORK_OFFICE_OPTIONS.includes(g));
-
-          if (!cancelled) {
-            if (validOptions.length > 0) {
-              setUserOfficesOptions(validOptions);
-              if (validOptions.length === 1) {
-                setOffice(validOptions[0]);
-              }
-            } else {
-              setUserOfficesOptions([]);
-            }
-          }
-        } else if (!cancelled) {
-          setUserOfficesOptions([]);
         }
 
         if (!cancelled) {
@@ -212,29 +257,51 @@ export default function Deposit() {
     loadSubmissions(office);
   }, [office]);
 
-  const availableYearMonths = useMemo(() => {
+  const availableYears = useMemo(() => {
     const values = new Set<string>();
     for (const item of submissions) {
       const ym = yearMonthFromDate(item.date);
-      if (ym) values.add(ym);
+      if (ym) values.add(ym.slice(0, 4));
     }
     return Array.from(values).sort((a, b) => b.localeCompare(a));
   }, [submissions]);
 
+  const availableMonths = useMemo(() => {
+    const values = new Set<string>();
+    for (const item of submissions) {
+      const ym = yearMonthFromDate(item.date);
+      if (!ym) continue;
+      const [year, month] = ym.split('-');
+      if (year === filterYear && month) values.add(month);
+    }
+    return Array.from(values).sort((a, b) => b.localeCompare(a));
+  }, [submissions, filterYear]);
+
   const filteredSubmissions = useMemo(() => {
-    if (!filterYearMonth) return [];
-    return submissions.filter((item) => yearMonthFromDate(item.date) === filterYearMonth);
-  }, [submissions, filterYearMonth]);
+    if (!filterYear || !filterMonth) return [];
+    const ym = `${filterYear}-${filterMonth}`;
+    return submissions.filter((item) => yearMonthFromDate(item.date) === ym);
+  }, [submissions, filterYear, filterMonth]);
 
   useEffect(() => {
-    if (availableYearMonths.length === 0) {
-      if (filterYearMonth) setFilterYearMonth('');
+    if (availableYears.length === 0) {
+      if (filterYear) setFilterYear('');
       return;
     }
-    if (!availableYearMonths.includes(filterYearMonth)) {
-      setFilterYearMonth(availableYearMonths[0]);
+    if (!availableYears.includes(filterYear)) {
+      setFilterYear(availableYears[0]);
     }
-  }, [availableYearMonths, filterYearMonth]);
+  }, [availableYears, filterYear]);
+
+  useEffect(() => {
+    if (availableMonths.length === 0) {
+      if (filterMonth) setFilterMonth('');
+      return;
+    }
+    if (!availableMonths.includes(filterMonth)) {
+      setFilterMonth(availableMonths[0]);
+    }
+  }, [availableMonths, filterMonth]);
 
   const rowTotals = useMemo(
     () => rows.map((row) => VALUE_KEYS.reduce((sum, key) => sum + toCents(row[key]), 0)),
@@ -254,6 +321,69 @@ export default function Deposit() {
     [rowTotals]
   );
 
+  const monthlyColumnTotals = useMemo(() => {
+    const totals = {} as Record<ValueKey, number>;
+    for (const key of VALUE_KEYS) {
+      totals[key] = filteredSubmissions.reduce((sum, item) => sum + toCents(item.totals[key]), 0);
+    }
+    return totals;
+  }, [filteredSubmissions]);
+
+  const monthlyGrandTotal = useMemo(
+    () =>
+      filteredSubmissions.reduce((sum, item) => {
+        if (item.totals.grandTotal) return sum + toCents(item.totals.grandTotal);
+        return sum + VALUE_KEYS.reduce((inner, key) => inner + toCents(item.totals[key]), 0);
+      }, 0),
+    [filteredSubmissions]
+  );
+
+  const yearlyRows = useMemo(() => {
+    if (!filterYear) return [];
+    const byMonth = new Map<string, Record<ValueKey, number> & { grand: number }>();
+    for (const item of submissions) {
+      const ym = yearMonthFromDate(item.date);
+      if (!ym || ym.slice(0, 4) !== filterYear) continue;
+      const month = ym.slice(5, 7);
+      const current = byMonth.get(month) || { d: 0, ic: 0, pc: 0, cc: 0, ie: 0, cac: 0, c: 0, grand: 0 };
+      for (const key of VALUE_KEYS) {
+        current[key] += toCents(item.totals[key]);
+      }
+      current.grand += item.totals.grandTotal
+        ? toCents(item.totals.grandTotal)
+        : VALUE_KEYS.reduce((sum, key) => sum + toCents(item.totals[key]), 0);
+      byMonth.set(month, current);
+    }
+    return Array.from(byMonth.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([month, cents]) => ({
+        month,
+        totals: {          
+          d: formatCents(cents.d),
+          ic: formatCents(cents.ic),
+          pc: formatCents(cents.pc),
+          cc: formatCents(cents.cc),
+          ie: formatCents(cents.ie),
+          cac: formatCents(cents.cac),
+          c: formatCents(cents.c),
+          grandTotal: formatCents(cents.grand),
+        } as SavedTotals,
+      }));
+  }, [submissions, filterYear]);
+
+  const yearlyColumnTotals = useMemo(() => {
+    const totals = {} as Record<ValueKey, number>;
+    for (const key of VALUE_KEYS) {
+      totals[key] = yearlyRows.reduce((sum, item) => sum + toCents(item.totals[key]), 0);
+    }
+    return totals;
+  }, [yearlyRows]);
+
+  const yearlyGrandTotal = useMemo(
+    () => yearlyRows.reduce((sum, item) => sum + toCents(item.totals.grandTotal), 0),
+    [yearlyRows]
+  );
+
   const updateCell = (index: number, field: keyof TableRow, value: string) => {
     setRows((prev) =>
       prev.map((row, i) => (i === index ? { ...row, [field]: value } : row))
@@ -262,6 +392,12 @@ export default function Deposit() {
 
   const handleHeaderDateChange = (nextDate: string) => {
     setHeaderDate(nextDate);
+    if (isMonthlyView || isYearlyView) {
+      setIsMonthlyView(false);
+      setIsYearlyView(false);
+      setRows(Array.from({ length: DATA_ROW_COUNT }, emptyRow));
+      return;
+    }
     if (!selectedId) return;
     setSelectedId('');
     setRows(Array.from({ length: DATA_ROW_COUNT }, emptyRow));
@@ -273,8 +409,8 @@ export default function Deposit() {
       return;
     }
 
-    const { idTime, iso: submittedAt } = submissionStamp();
-    const docId = `${headerDate}_${office}_${idTime}`.replace(/[\/\s]/g, '_');
+    const submittedAt = californiaSubmittedAt();
+    const docId = `${headerDate}_${office}`.replace(/[\/\s]/g, '_');
     setIsSubmitting(true);
     setSubmitStatus('');
 
@@ -284,7 +420,8 @@ export default function Deposit() {
         office,
         submittedAt,
         rows,
-        totals: {
+        totals: {          
+          d: formatCents(columnTotals.d),
           ic: formatCents(columnTotals.ic),
           pc: formatCents(columnTotals.pc),
           cc: formatCents(columnTotals.cc),
@@ -309,10 +446,24 @@ export default function Deposit() {
   };
 
   const openSubmission = (item: SavedSubmission) => {
+    setIsMonthlyView(false);
+    setIsYearlyView(false);
     setSelectedId(item.id);
     setHeaderDate(item.date || '');
     setOffice(item.office);
     setRows(item.rows);
+  };
+
+  const openMonthlyView = () => {
+    setIsMonthlyView(true);
+    setIsYearlyView(false);
+    setSelectedId('');
+  };
+
+  const openYearlyView = () => {
+    setIsYearlyView(true);
+    setIsMonthlyView(false);
+    setSelectedId('');
   };
 
   const handleDelete = async () => {
@@ -395,6 +546,7 @@ export default function Deposit() {
   };
 
   const isViewingSubmission = Boolean(selectedId);
+  const isReadOnly = isViewingSubmission || isMonthlyView || isYearlyView;
 
   const readOnlyCellStyle: React.CSSProperties = {
     ...inputStyle,
@@ -422,7 +574,7 @@ export default function Deposit() {
             fontWeight: 'bold',
           }}
         >
-          Dentical Deposit
+          Weekly Deposits
         </h1>
 
         <div style={{ display: 'flex', gap: '24px', alignItems: 'flex-start' }}>
@@ -444,18 +596,66 @@ export default function Deposit() {
             <div style={{ fontSize: '14px', color: '#8b93a0' }}>No submissions yet.</div>
           ) : (
             <>
-            <div style={{ marginBottom: '12px' }}>
-              <label style={{ ...labelStyle, fontSize: '13px' }}>Year / Month</label>
-              <select
-                value={filterYearMonth}
-                onChange={(e) => setFilterYearMonth(e.target.value)}
-                style={headerInputStyle}
-              >
-                {availableYearMonths.map((ym) => (
-                  <option key={ym} value={ym}>{ym}</option>
-                ))}
-              </select>
+            <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <label style={{ ...labelStyle, fontSize: '13px' }}>Year</label>
+                <select
+                  value={filterYear}
+                  onChange={(e) => setFilterYear(e.target.value)}
+                  style={headerInputStyle}
+                >
+                  {availableYears.map((year) => (
+                    <option key={year} value={year}>{year}</option>
+                  ))}
+                </select>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <label style={{ ...labelStyle, fontSize: '13px' }}>Month</label>
+                <select
+                  value={filterMonth}
+                  onChange={(e) => setFilterMonth(e.target.value)}
+                  style={headerInputStyle}
+                >
+                  {availableMonths.map((month) => (
+                    <option key={month} value={month}>{month}</option>
+                  ))}
+                </select>
+              </div>
             </div>
+            <button
+              onClick={openYearlyView}
+              style={{
+                width: '100%',
+                textAlign: 'center',
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: isYearlyView ? '2px solid #c5ccd6' : '1px solid #e6e8eb',
+                backgroundColor: isYearlyView ? '#f0f2f5' : '#ffffff',
+                color: '#3b4252',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                marginBottom: '8px',
+              }}
+            >
+              Yearly
+            </button>
+            <button
+              onClick={openMonthlyView}
+              style={{
+                width: '100%',
+                textAlign: 'center',
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: isMonthlyView ? '2px solid #c5ccd6' : '1px solid #e6e8eb',
+                backgroundColor: isMonthlyView ? '#f0f2f5' : '#ffffff',
+                color: '#3b4252',
+                fontWeight: 'bold',
+                cursor: 'pointer',
+                marginBottom: '8px',
+              }}
+            >
+              Monthly
+            </button>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {filteredSubmissions.length === 0 ? (
                 <div style={{ fontSize: '14px', color: '#8b93a0' }}>No submissions in this month.</div>
@@ -475,7 +675,6 @@ export default function Deposit() {
                   }}
                 >
                   {item.date || item.id}
-                  {item.submittedAt ? ` ${formatSubmittedAt(item.submittedAt)}` : ''}
                 </button>
               ))}
             </div>
@@ -486,6 +685,21 @@ export default function Deposit() {
         <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap', marginBottom: '24px' }}>
           <div style={{ flex: '1', minWidth: '200px' }}>
+            <label style={labelStyle}>Office:</label>
+            <select
+              value={office}
+              onChange={(e) => setOffice(e.target.value)}
+              style={headerInputStyle}
+            >
+              <option value="">Select Office</option>
+              {WORK_OFFICE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div style={{ flex: '1', minWidth: '200px' }}>
             <label style={labelStyle}>Date:</label>
             <input
               type="date"
@@ -494,37 +708,6 @@ export default function Deposit() {
               style={headerInputStyle}
             />
           </div>
-          {userOfficesOptions.length > 0 && (
-            <div style={{ flex: '1', minWidth: '200px' }}>
-              <label style={labelStyle}>Office:</label>
-              {userOfficesOptions.length === 1 ? (
-                <div
-                  style={{
-                    ...headerInputStyle,
-                    display: 'flex',
-                    alignItems: 'center',
-                    backgroundColor: '#f8f9fb',
-                    fontWeight: '600',
-                  }}
-                >
-                  {office}
-                </div>
-              ) : (
-                <select
-                  value={office}
-                  onChange={(e) => setOffice(e.target.value)}
-                  style={headerInputStyle}
-                >
-                  <option value="">Select Office</option>
-                  {userOfficesOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          )}
         </div>
 
         <div style={{ overflowX: 'auto' }}>
@@ -540,16 +723,92 @@ export default function Deposit() {
                       minWidth: col === 'Date' ? '150px' : '90px',
                     }}
                   >
-                    {col}
+                    {col === 'Date' && isYearlyView ? 'Month' : col === 'Date' && isMonthlyView ? 'Submitted Date' : col}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
+              {isYearlyView ? (
+                <>
+                  {yearlyRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={COLUMNS.length} style={{ ...cellStyle, color: '#8b93a0' }}>
+                        No submissions in this year.
+                      </td>
+                    </tr>
+                  ) : (
+                    yearlyRows.map((item, index) => (
+                      <tr key={item.month} style={{ backgroundColor: index % 2 === 0 ? '#fbfcfd' : '#ffffff' }}>
+                        <td style={cellStyle}>
+                          <div style={readOnlyCellStyle}>{item.month}</div>
+                        </td>
+                        {VALUE_KEYS.map((key) => (
+                          <td key={key} style={cellStyle}>
+                            <div style={readOnlyCellStyle}>
+                              {item.totals[key] === '' ? '' : `$${item.totals[key]}`}
+                            </div>
+                          </td>
+                        ))}
+                        <td style={{ ...cellStyle, fontWeight: 'bold' }}>${item.totals.grandTotal}</td>
+                      </tr>
+                    ))
+                  )}
+                  <tr style={{ backgroundColor: '#f5f7fa', fontWeight: 'bold' }}>
+                    <td style={cellStyle}>Total</td>
+                    {VALUE_KEYS.map((key) => (
+                      <td key={key} style={cellStyle}>
+                        ${formatCents(yearlyColumnTotals[key])}
+                      </td>
+                    ))}
+                    <td style={cellStyle}>${formatCents(yearlyGrandTotal)}</td>
+                  </tr>
+                </>
+              ) : isMonthlyView ? (
+                <>
+                  {filteredSubmissions.length === 0 ? (
+                    <tr>
+                      <td colSpan={COLUMNS.length} style={{ ...cellStyle, color: '#8b93a0' }}>
+                        No submissions in this month.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredSubmissions.map((item, index) => {
+                      const rowGrand = item.totals.grandTotal
+                        || formatCents(VALUE_KEYS.reduce((sum, key) => sum + toCents(item.totals[key]), 0));
+                      return (
+                        <tr key={item.id} style={{ backgroundColor: index % 2 === 0 ? '#fbfcfd' : '#ffffff' }}>
+                          <td style={cellStyle}>
+                            <div style={readOnlyCellStyle}>{item.date}</div>
+                          </td>
+                          {VALUE_KEYS.map((key) => (
+                            <td key={key} style={cellStyle}>
+                              <div style={readOnlyCellStyle}>
+                                {item.totals[key] === '' ? '' : `$${item.totals[key]}`}
+                              </div>
+                            </td>
+                          ))}
+                          <td style={{ ...cellStyle, fontWeight: 'bold' }}>${rowGrand}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                  <tr style={{ backgroundColor: '#f5f7fa', fontWeight: 'bold' }}>
+                    <td style={cellStyle}>Total</td>
+                    {VALUE_KEYS.map((key) => (
+                      <td key={key} style={cellStyle}>
+                        ${formatCents(monthlyColumnTotals[key])}
+                      </td>
+                    ))}
+                    <td style={cellStyle}>${formatCents(monthlyGrandTotal)}</td>
+                  </tr>
+                </>
+              ) : (
+                <>
               {rows.map((row, index) => (
                 <tr key={index} style={{ backgroundColor: index % 2 === 0 ? '#fbfcfd' : '#ffffff' }}>
                   <td style={cellStyle}>
-                    {isViewingSubmission ? (
+                    {isReadOnly ? (
                       <div style={readOnlyCellStyle}>{row.date}</div>
                     ) : (
                       <input
@@ -562,7 +821,7 @@ export default function Deposit() {
                   </td>
                   {VALUE_KEYS.map((key) => (
                     <td key={key} style={cellStyle}>
-                      {isViewingSubmission ? (
+                      {isReadOnly ? (
                         <div style={readOnlyCellStyle}>
                           {row[key] === '' ? '' : `$${row[key]}`}
                         </div>
@@ -601,12 +860,18 @@ export default function Deposit() {
                 ))}
                 <td style={cellStyle}>${formatCents(grandTotal)}</td>
               </tr>
+                </>
+              )}
             </tbody>
           </table>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '12px', marginTop: '24px' }}>
-          <button onClick={handleSubmit} disabled={isSubmitting || isDeleting} style={buttonStyle}>
+          <button onClick={handleSubmit} disabled={isSubmitting || isDeleting || isMonthlyView || isYearlyView} style={{
+            ...buttonStyle,
+            cursor: isSubmitting || isDeleting || isMonthlyView || isYearlyView ? 'not-allowed' : 'pointer',
+            opacity: isSubmitting || isDeleting || isMonthlyView || isYearlyView ? 0.6 : 1,
+          }}>
             {isSubmitting ? 'Submitting...' : 'Submit'}
           </button>
           <button

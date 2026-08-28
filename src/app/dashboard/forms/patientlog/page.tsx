@@ -1208,13 +1208,14 @@ export default function PatientLogSystem(): React.ReactElement {
         }
         
         const rowsWithDate = patientListForPdf.filter(row => row.appt_date && row.appt_date.trim() !== '');
-        const byApptDate = new Map<string, { name: string; office: string }[]>();
+        const byApptDate = new Map<string, { name: string; office: string, source: string; }[]>();
         for (const row of rowsWithDate) {
           const d = (row.appt_date || '').trim();
           if (!byApptDate.has(d)) byApptDate.set(d, []);
           byApptDate.get(d)!.push({
             name: safeStr(row.name, 100),
             office: safeStr(row.office, 100),
+            source: safeStr(row.source, 100),
           });
         }
 
