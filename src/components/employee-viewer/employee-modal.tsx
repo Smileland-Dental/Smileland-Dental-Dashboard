@@ -20,7 +20,9 @@ import {
   CalendarClock, 
   Stethoscope, 
   Banknote,
-  Tag
+  Tag,
+  Archive,
+  ArchiveRestore
 } from 'lucide-react';
 
 import { GeneralTab } from '@/components/employee-viewer/tabs/general-tab';
@@ -48,6 +50,7 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
   const [newImageFile, setNewImageFile] = useState<File | null>(null);
 
   const hasUnsavedChanges = JSON.stringify(formData) !== JSON.stringify(employee) || newImageFile !== null;
+  const isTerminated = formData.status === 'Terminated';
 
   const defaultProfileURL = "https://firebasestorage.googleapis.com/v0/b/smileland-dental-dashboard.firebasestorage.app/o/employee-pictures%2F.DefaultProfile%2Fprofile.png?alt=media&token=70b1a79f-1a33-4b6c-9b9b-c8e3debd209d"
 
@@ -149,12 +152,49 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
     setIsSaving(true);
     try {
       const employeeRef = doc(db, 'employees', idToArchive);
-      
+
       // Update status to 'Archived' (or add a dedicated boolean field 'isArchived: true')
       await updateDoc(employeeRef, {
         status: 'Terminated', 
         archivedAt: new Date(),
       });
+
+      const absencesQuery = query(
+        collection(db, 'absences'),
+        where('employeeFirestoreID', '==', idToArchive)
+      );
+
+      const absenceSnapshot = await getDocs(absencesQuery);
+
+      // 3. Batch update all fetched absences to 'denied'
+      const updatePromises = absenceSnapshot.docs.map((absenceDoc) => {
+        const absenceRef = doc(db, 'absences', absenceDoc.id);
+        const currentData = absenceDoc.data();
+        const currentDate = new Date();
+        const formattedDate = currentDate.toLocaleDateString('en-US', {
+          timeZone: 'America/Los_Angeles'
+        });
+        
+        const terminationNote = `Employee Terminated on ${formattedDate}`;
+        
+        // Get existing notes if present
+        const existingNotes = currentData.final_notes ? currentData.final_notes.trim() : '';
+
+        // Append 'Employee Terminated' to existing notes or set it as the initial note
+        const updatedNotes = existingNotes 
+          ? `${existingNotes} | ${terminationNote}` // Use your preferred delimiter (e.g., ' | ', '\n', or ' - ')
+          : terminationNote;
+
+        return updateDoc(absenceRef, {
+          final_approval: 'denied',
+          updatedAt: currentDate,
+          final_notes: updatedNotes, // Optional automated note
+        });
+      });
+
+      await Promise.all(updatePromises);
+
+
 
       alert("Employee archived successfully.");
       
@@ -164,6 +204,43 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
     } catch (error) {
       console.error("Error archiving employee:", error);
       alert("Failed to archive employee record.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+  
+  const handleUnarchiveEmployee = async () => {
+    const idToUnarchive = employee?.id;
+
+    if (!idToUnarchive) {
+      alert("Error: Could not find the database record ID.");
+      return;
+    }
+
+    const confirmUnarchive = window.confirm(
+      `Are you sure you want to UNARCHIVE ${formData.firstName} ${formData.lastName}? Their status will be restored to Current.`
+    );
+
+    if (!confirmUnarchive) return;
+
+    setIsSaving(true);
+    try {
+      const employeeRef = doc(db, 'employees', idToUnarchive);
+
+      await updateDoc(employeeRef, {
+        status: 'Current',
+        dateOfTermination: '', // Clear termination date upon unarchiving
+        archivedAt: null,
+        updatedAt: new Date(),
+      });
+
+      alert("Employee unarchived successfully.");
+      
+      if (onUpdate) onUpdate();
+      onClose();
+    } catch (error) {
+      console.error("Error unarchiving employee:", error);
+      alert("Failed to unarchive employee record.");
     } finally {
       setIsSaving(false);
     }
@@ -256,28 +333,39 @@ const EmployeeModal: React.FC<EmployeeModalProps> = ({ employee, userRole, onClo
           {/* LEFT SIDEBAR */}
           <div className="lg:col-span-1 lg:border-r lg:pr-6 flex flex-col lg:overflow-hidden">
             <div className="flex flex-col items-center text-center gap-4 mb-6 flex-shrink-0 relative">
-                {isEditing && (
+              {isEditing && (
+                isTerminated ? (
+                  <button
+                    onClick={handleUnarchiveEmployee}
+                    disabled={isSaving}
+                    className="mt-4 flex items-center justify-center gap-2 px-4 py-2 text-green-700 bg-green-50 hover:bg-green-100 rounded-md border border-green-300 font-medium transition-colors w-full"
+                  >
+                    <ArchiveRestore size={16} /> Unarchive Employee
+                  </button>
+                ) : (
                   <button
                     onClick={handleArchiveEmployee}
-                    className="mt-4 flex items-center justify-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-md border border-red-200 transition-colors"
+                    disabled={isSaving}
+                    className="mt-4 flex items-center justify-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-md border border-red-200 font-medium transition-colors w-full"
                   >
-                    <X size={16} /> Archive Employee Record
+                    <Archive size={16} /> Archive Employee Record
                   </button>
-                )}
+                )
+              )}
 
-                <div className="relative group">
-                    <img
-                        src={newImageFile ? URL.createObjectURL(newImageFile) : (formData.imageURL || defaultProfileURL)}
-                        alt={formData.firstName + ' ' + formData.lastName}
-                        className="w-40 h-40 md:w-48 md:h-48 rounded-full object-cover border-4 border-gray-200 flex-shrink-0"
-                    />
-                    {isEditing && (
-                        <label className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Upload className="text-white" size={24} />
-                            <input type="file" className="hidden" accept="image/*" onChange={handleImageChange} />
-                        </label>
-                    )}
-                </div>
+              <div className="relative group">
+                  <img
+                      src={newImageFile ? URL.createObjectURL(newImageFile) : (formData.imageURL || defaultProfileURL)}
+                      alt={formData.firstName + ' ' + formData.lastName}
+                      className="w-40 h-40 md:w-48 md:h-48 rounded-full object-cover border-4 border-gray-200 flex-shrink-0"
+                  />
+                  {isEditing && (
+                      <label className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity">
+                          <Upload className="text-white" size={24} />
+                          <input type="file" className="hidden" accept="image/*" onChange={handleImageChange} />
+                      </label>
+                  )}
+              </div>
 
                 <div className="flex-grow pt-2">
                     <h3 className="text-xl font-bold text-gray-900">{formData.firstName + ' ' + formData.lastName}</h3>

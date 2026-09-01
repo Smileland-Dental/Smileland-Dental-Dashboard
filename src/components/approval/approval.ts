@@ -88,12 +88,12 @@ export async function getAbsenceRequestsByUser(user: User, startDateString: stri
 
 // Helper to derive the visible text status from an object
 export const getRequestStatusText = (req: AbsenceRequest): string => {
-  if (req.status === 'pending_action') return "Pending Employee";
   if (req.status === 'cancellation_requested') return "Cancellation Requested";
-  if (req.manager_approval === 'denied' && req.final_approval === 'pending') return "Manager Denied";
-  if (req.manager_approval === 'denied' || req.final_approval === 'denied') return "Denied";
   if (req.final_approval === 'approved') return "Approved";
-  if (req.final_approval === 'approved_with_note') return "Approved With Note"
+  if (req.final_approval === 'approved_with_note') return "Approved With Note";
+  if (req.manager_approval === 'denied' && req.final_approval === 'pending') return "Manager Denied";
+  if (req.final_approval === 'denied') return "Denied";
+  if (req.status === 'pending_action') return "Pending Employee";
   if (req.manager_approval === 'approved') return "Manager Approved";
   if (req.manager_approval === 'not_required' && req.final_approval === 'pending') return "Pending Final Approval";
   return "Pending Manager Approval";

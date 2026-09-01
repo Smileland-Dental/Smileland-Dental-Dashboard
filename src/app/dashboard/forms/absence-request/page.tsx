@@ -19,6 +19,7 @@ export default function Page() {
   const [employeeID, setEmployeeID] = useState("");
   const [employeeTitle, setEmployeeTitle] = useState("");
   const [employeeName, setEmployeeName] = useState("");
+  const [employeeOffice, setEmployeeOffice] = useState("");
   const [year, setYear] = useState("");
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
@@ -70,7 +71,8 @@ export default function Page() {
           setEmployeeInfo(data);
           setEmployeeTitle(data.jobTitle);
           setEmployeeName(`${data.firstName} ${data.lastName}`);
-        
+          setEmployeeOffice(data.office);
+
           // 7. Fetch history using the employee's ID string
           fetchAbsences(employeeID);
         } 
@@ -341,6 +343,7 @@ export default function Page() {
             employeeID={employeeID} 
             employeeTitle={employeeTitle} 
             employeeName={employeeName} 
+            employeeOffice={employeeOffice}
             employeeSkipManagerApproval={employeeInfo.skipManagerApproval}
             employeeExistingRequests={conflictingRequestsEvaluation}
             onFormSubmit={handleFormSubmit} 

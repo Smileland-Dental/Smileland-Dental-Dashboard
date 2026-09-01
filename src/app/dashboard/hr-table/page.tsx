@@ -113,8 +113,12 @@ export default function Page() {
       if (activeFilter === 'exempt') {
       // Instant lookup in memory — zero database reads!
         requestStatusMatches = exemptEmployeeIds.has(a.employeeFirestoreID);
+      } else if (activeFilter === 'active') {
+        requestStatusMatches = requestCurrentStatus === 'active' || requestCurrentStatus === 'pending_action' && (a.manager_approval === 'denied' || a.final_approval === 'denied');
       } else if (activeFilter === 'active_and_pending') {
         requestStatusMatches = requestCurrentStatus === 'active' || requestCurrentStatus === 'pending_action';
+      } else if (activeFilter === 'pending_action'){
+       requestStatusMatches = requestCurrentStatus === 'pending_action' && a.manager_approval !== 'denied' && a.final_approval !== 'denied';
       } else {
         requestStatusMatches = requestCurrentStatus === activeFilter;
       }
@@ -123,24 +127,34 @@ export default function Page() {
       let statusMatches = true;
       if (statusFilter !== 'all'){
         if (statusFilter === 'pending_employee') {
-          statusMatches = a.status === 'pending_action';
+          statusMatches = a.status === 'pending_action' && (a.manager_approval !== 'denied') && (a.final_approval !== 'denied');
         }
         else if (statusFilter === 'approved') {
           // Approved if final_approval is approved (or approved_with_note)
-          statusMatches = a.status !== 'pending_action' && (a.final_approval === 'approved' || a.final_approval === 'approved_with_note');
+          statusMatches = (a.final_approval === 'approved' || a.final_approval === 'approved_with_note');
         } 
         else if (statusFilter === 'denied') {
           // Denied if either final approval or manager approval is denied
-          statusMatches = a.status !== 'pending_action' && (a.manager_approval === 'denied' && a.final_approval === 'pending' || a.manager_approval === 'denied' || a.final_approval === 'denied');
+          statusMatches = a.manager_approval === 'denied' || a.final_approval === 'denied';
         }
         else if (statusFilter === 'pending_manager') {
           // If you define "Pending Manager" as pending manager approval
-          statusMatches = a.manager_approval === 'pending' && a.status !== 'pending_action';
+          statusMatches = a.manager_approval === 'pending' && a.status !== 'pending_action' && a.final_approval !== 'approved' && a.final_approval !== 'approved_with_note' && a.final_approval !== 'denied';
         } 
         else if (statusFilter === 'pending_corporate') {
           // If you define "Pending Corporate" as pending final approval
           statusMatches = a.final_approval === 'pending' && a.status !== 'pending_action' && (a.manager_approval === 'approved' || a.manager_approval === 'not_required');
         }
+        /*else if (statusFilter === 'other' || statusFilter === 'unmatched') {
+          // Matches records that DO NOT fit into any of the above categories
+          const isPendingEmployee = a.status === 'pending_action' && a.manager_approval !== 'denied' && a.final_approval !== 'denied';
+          const isApproved = a.status !== 'pending_action' && (a.final_approval === 'approved' || a.final_approval === 'approved_with_note');
+          const isDenied = ((a.manager_approval === 'denied' && a.final_approval === 'pending') || a.manager_approval === 'denied' || a.final_approval === 'denied');
+          const isPendingManager = a.manager_approval === 'pending' && a.status !== 'pending_action' && a.final_approval !== 'approved' && a.final_approval !== 'approved_with_note' && a.final_approval !== 'denied';
+          const isPendingCorporate = a.final_approval === 'pending' && a.status !== 'pending_action' && (a.manager_approval === 'approved' || a.manager_approval === 'not_required');
+
+          statusMatches = !isPendingEmployee && !isApproved && !isDenied && !isPendingManager && !isPendingCorporate;
+        }*/
       }
 
       // 3. Return combined verification array checks
@@ -306,6 +320,7 @@ export default function Page() {
             <option value="cancellation_requested">Cancellation Requested</option>
             <option value="archived">Archived</option>
             <option value="exempt">Exempt Requests</option>
+            {/*<option value="other">Other</option>*/}
           </select>
         </div>
         <div className="flex col-span-1 items-center gap-2 bg-slate-50 px-3 py-1 rounded-xl border border-slate-100">
@@ -348,6 +363,7 @@ export default function Page() {
             <option value="pending_manager">Pending Manager</option>
             <option value="approved">Approved</option>
             <option value="denied">Denied</option>
+            {/*<option value="other">Other</option>*/}
           </select>
         </div>
         {/*<label 

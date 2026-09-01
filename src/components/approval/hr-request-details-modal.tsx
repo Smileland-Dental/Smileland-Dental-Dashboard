@@ -324,13 +324,13 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-1 gap-6">
-            {/* Opening Comment */}
+            {/* Opening an Closing Comment */}
             <div className="space-y-2 p-4 rounded-3xl border transition-all bg-amber-200/50 border-amber-100 shadow-sm">
               <label className="text-s underline block text-center font-bold text-red-500 uppercase">For Key Holders or Supervisors</label>
               <div className="flex items-center">
                 <label className="w-20 text-[10px] font-black text-black uppercase ml-1">Opening</label>
                 <textarea name="comment_opening" value={tempData.comment_opening || ""} onChange={e => setTempData({ ...tempData, comment_opening: e.target.value })} 
-                  className={`w-full p-1 rounded-md border text-xs font-medium transition-all outline-none resize-none ${
+                  className={`w-full p-1 rounded-md border text-xs font-bold transition-all outline-none resize-none ${
                   isChanged('comment_opening')
                     ? 'bg-rose-50 border-rose-300 text-rose-900 focus:ring-2 focus:ring-rose-200'
                     : 'bg-white border-slate-200 text-slate-800 focus:ring-2 focus:ring-indigo-100'
@@ -340,7 +340,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
               <div className="flex items-center">
                 <label className="w-20 text-[10px] font-black text-black uppercase ml-1">Closing</label>
                 <textarea name="comment_closing" value={tempData.comment_closing || ""} onChange={e => setTempData({ ...tempData, comment_closing: e.target.value })}
-                className={`w-full p-1 rounded-md border text-xs font-medium transition-all outline-none resize-none ${
+                className={`w-full p-1 rounded-md border text-xs font-bold transition-all outline-none resize-none ${
                   isChanged('comment_closing')
                     ? 'bg-rose-50 border-rose-300 text-rose-900 focus:ring-2 focus:ring-rose-200'
                     : 'bg-white border-slate-200 text-slate-800 focus:ring-2 focus:ring-indigo-100'

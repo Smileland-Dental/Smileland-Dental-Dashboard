@@ -18,6 +18,7 @@ export default function ExistingAbsenceForm({ absence, onFormSubmit, onClose }: 
   const isApproved = absence.final_approval === 'approved' || absence.final_approval === 'approved_with_note';
   const isHRCallIn = absence.type_of_request === "HR Call In";
   const isPendingAction = absence.status === 'pending_action';
+  const isDentist = absence.office === 'Dentist';
 
   // Master disabled rules flags
   const disableCoreInputs = isDenied || isApproved || isHRCallIn;
@@ -222,6 +223,8 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
   const changed = isPendingAction ? true : isDataChanged();
   const activeExistingNotesCount = (absence.excuse_note || []).length - notesToRemove.length;
 
+  // Filter out Dentist unless it's the current absence's office value
+  const availableOffices = OFFICES.filter(o => o !== 'Dentist' || isDentist);
   return (
     <>
       <div className="fixed inset-0 bg-black/50 flex justify-center items-center z-50">
@@ -309,8 +312,10 @@ const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement 
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Office Location</label>
-                <select name="office" value={formData.office} onChange={handleChange} disabled={disableCoreInputs} className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required>
-                  {OFFICES.map(o => <option key={o} value={o}>{o}</option>)}
+                <select name="office" value={formData.office} onChange={handleChange} disabled={disableCoreInputs || isDentist} 
+                  className="w-full border border-gray-300 p-2.5 rounded-md outline-none disabled:bg-gray-50 disabled:text-gray-500" required
+                >
+                  {availableOffices.map(o => <option key={o} value={o}>{o}</option>)}
                 </select>
               </div>
             </div>
