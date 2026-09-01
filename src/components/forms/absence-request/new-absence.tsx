@@ -17,13 +17,14 @@ interface NewAbsenceFormProps {
   employeeID: string;
   employeeTitle: string;
   employeeName: string;
+  employeeOffice: string;
   employeeSkipManagerApproval: boolean;
   employeeExistingRequests: AbsenceRequest[]; // Pass existing requests to check for overlaps
   onFormSubmit: () => void;
   onClose: () => void;
 }
 
-export default function NewAbsenceForm({employeeFirestore, employeeID, employeeTitle, employeeName, employeeSkipManagerApproval, employeeExistingRequests, onFormSubmit, onClose }: NewAbsenceFormProps) {
+export default function NewAbsenceForm({employeeFirestore, employeeID, employeeTitle, employeeName, employeeOffice, employeeSkipManagerApproval, employeeExistingRequests, onFormSubmit, onClose }: NewAbsenceFormProps) {
   const [formData, setFormData] = useState({
     employeeFirestoreID: employeeFirestore || '',
     employee_id: employeeID || '',
@@ -31,7 +32,7 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
     employee_name: employeeName || '',
     type_of_request: '',
     type_of_incident: '',
-    office: '',
+    office: employeeOffice === "Dentist" ? "Dentist" : "",
     incident_start: '',
     incident_end: '',
     employee_comments: '',
@@ -249,9 +250,23 @@ export default function NewAbsenceForm({employeeFirestore, employeeID, employeeT
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-medium text-gray-500 uppercase tracking-wider">Office Location</label>
-                <select name="office" value={formData.office} onChange={handleChange} className="w-full border border-gray-300 p-2.5 rounded-md focus:ring-2 focus:ring-blue-500 outline-none" required>
+                <select name="office" value={formData.office} onChange={handleChange} disabled={employeeOffice === "Dentist"}
+                  className={`w-full border border-gray-300 p-2.5 rounded-md focus:ring-2 focus:ring-blue-500 outline-none ${
+                    employeeOffice === "Dentist" ? "bg-gray-100 text-gray-500 cursor-not-allowed" : "bg-white"}`} required
+                >
                   <option value="">Select Office</option>
-                  {OFFICES.map(o => <option key={o} value={o}>{o}</option>)}
+                  {/* Shows Dentist if user is a Dentist, marked as disabled so it cannot be selected again */}
+                  {employeeOffice === "Dentist" && (
+                    <option value="Dentist" disabled>
+                      Dentist
+                    </option>
+                  )}
+                  {/* Other options from constant */}
+                  {OFFICES.filter((o) => o !== "Dentist").map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
                 </select>
               </div>
             </div>

@@ -20,12 +20,15 @@ interface TabProps {
 const departments = ["Back Office", "Front Office", "Support Services", "Management", "Call Center", "Accounts Receivable", "Dentist"];
 const jobStatuses = ["Full-Time", "Part-Time"];
 const employmentStatuses = ["Exempt", "Non-Exempt", "Contracted"];
-const statusOptions = ["Current", "Terminated", "On Leave"];
+const statusOptions = ["Current", "On Leave"];
 
 export const EmployeeInfoTab = ({
   formData, handleInputChange, setFormData, isEditing, setIsEditing, 
   handleCancelEdit, handleSave, isSaving, hasUnsavedChanges, userRole
 }: TabProps) => {
+  // Check if employee is currently terminated
+  const isTerminated = formData.status === 'Terminated';
+
   return (
     <div className="relative">
       <div className="sticky top-0 z-10 bg-white pb-4 border-b mb-4 flex justify-between items-center">
@@ -58,8 +61,11 @@ export const EmployeeInfoTab = ({
 
           <div className="space-y-1">
             <label className="text-xs font-semibold text-gray-500">Status</label>
-            <select name="status" value={formData.status || ''} onChange={handleInputChange} className="w-full border p-2 rounded">
+            <select name="status" value={formData.status || ''} onChange={handleInputChange} disabled={isTerminated} className={`w-full border p-2 rounded ${isTerminated ? 'bg-gray-100 cursor-not-allowed text-gray-500' : ''}`}>
               <option value="" disabled hidden>Select Status</option>
+              {/* Show Terminated option ONLY if already Terminated so the field renders correctly */}
+              {isTerminated && <option value="Terminated">Terminated</option>}
+
               {statusOptions.map(status => (
                 <option key={status} value={status}>{status}</option>
               ))}
