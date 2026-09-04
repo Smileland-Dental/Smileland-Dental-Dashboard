@@ -79,6 +79,14 @@ const PatientRow = React.memo(({
           ))}
         </select>
       </td>
+      <td style={{ padding: '8px' }}>
+        <input
+          type="text"
+          value={row.reason}
+          onChange={(e) => updatePatientRow(row.id, 'reason', e.target.value)}
+          style={{ ...inputStyle, margin: 0, fontSize: '14px' }}
+        />
+      </td>
       <td style={{ padding: '8px', textAlign: 'center' }}>
         <input
           type="checkbox"
@@ -205,6 +213,7 @@ const PatientRow = React.memo(({
     prevProps.row.office === nextProps.row.office &&
     prevProps.row.appt_date === nextProps.row.appt_date &&
     prevProps.row.visit_type === nextProps.row.visit_type &&
+    prevProps.row.reason === nextProps.row.reason &&
     prevProps.row.call_in === nextProps.row.call_in &&
     prevProps.row.call_out === nextProps.row.call_out &&
     prevProps.row.time === nextProps.row.time &&
@@ -368,6 +377,7 @@ function createPatientLogPDFDocument(props: {
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Office')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Appt. Date')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Visit Type')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Reason')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Call In')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Call Out')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Time')),
@@ -381,6 +391,7 @@ function createPatientLogPDFDocument(props: {
     const safeOffice = safeStr(row?.office, 50);
     const safeApptDate = safeStr(row?.appt_date || row?.apptDate, 20);
     const safeVisitType = safeStr(row?.visit_type || row?.visitType, 50);
+    const safeReason = safeStr(row?.reason, 50);
     const safeTime = safeStr(row?.time, 20);
     const safeRemark = safeStr(row?.remark, 100);
     const safeSource = safeStr(row?.source, 100);
@@ -394,6 +405,7 @@ function createPatientLogPDFDocument(props: {
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeOffice || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeApptDate || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeVisitType || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeReason || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, callIn ? 'O' : '')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, callOut ? 'O' : '')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, convertTo12Hour(safeTime))),
@@ -421,7 +433,7 @@ function createPatientLogPDFDocument(props: {
   );
 
   return React.createElement(Document, null,
-    React.createElement(Page, { size: 'A4', orientation: 'portrait', style: s.page }, 
+    React.createElement(Page, { size: 'A4', orientation: 'landscape', style: s.page }, 
       header, 
       infoSection, 
       stats, 
@@ -474,6 +486,7 @@ export default function PatientLogSystem(): React.ReactElement {
       office: '',
       appt_date: '',
       visit_type: '',
+      reason: '',
       call_in: false,
       call_out: false,
       time: '',
@@ -493,15 +506,13 @@ export default function PatientLogSystem(): React.ReactElement {
 
   const getVisitTypeOptions = useCallback((office: string): string[] => {
     if (office === 'Ortho') {
-      return ['Adjustment', 'Bonding', 'Consult', 'FMS', 'Full Deband', 'Partial Deband', 'Records', 'Retainer Check', 'RPE Check', 'Seals'];
+      return ['Adjustment', 'Bonding', 'Consult', 'FMS', 'Full Deband', 'Partial Deband', 'Records', 'Retainer Check', 'RPE Check', 'Seals', 'Cancelled', 'Rescheduled', 'Cancelled/Transfer'];
     } else if (office === 'California') {
-      return ['Consult', 'Crown', 'Emergency', 'FMS', 'New Patient', 'RCRA', 'RCT', 'Recall', 'Seals', 'Tx'];
+      return ['Consult', 'Crown', 'Emergency', 'FMS', 'New Patient', 'RCRA', 'RCT', 'Recall', 'Seals', 'Tx', 'Cancelled', 'Rescheduled', 'Cancelled/Transfer'];
     } else {
-      return ['Emergency', 'FMS', 'New Patient', 'RCRA', 'Recall', 'Seals', 'Tx'];
+      return ['Emergency', 'FMS', 'New Patient', 'RCRA', 'Recall', 'Seals', 'Tx', 'Cancelled', 'Rescheduled', 'Cancelled/Transfer'];
     }
   }, []);
-
-
 
   const remarkOptions = ['Disc', 'Elsewhere', 'LMA', 'LMW', 'NA', 'Not Interested', 'Will Call Back', 'Wrong'];
 
@@ -526,6 +537,7 @@ export default function PatientLogSystem(): React.ReactElement {
         row.office ||
         row.appt_date ||
         row.visit_type ||
+        (typeof row.reason === 'string' && row.reason.trim()) ||
         row.call_in ||
         row.call_out ||
         row.time ||
@@ -736,6 +748,7 @@ export default function PatientLogSystem(): React.ReactElement {
                   office: '',
                   appt_date: '',
                   visit_type: '',
+                  reason: '',
                   call_in: false,
                   call_out: false,
                   time: '',
@@ -787,6 +800,7 @@ export default function PatientLogSystem(): React.ReactElement {
               office: '',
               appt_date: '',
               visit_type: '',
+              reason: '',
               call_in: false,
               call_out: false,
               time: '',
@@ -877,6 +891,7 @@ export default function PatientLogSystem(): React.ReactElement {
           office: '',
           appt_date: '',
           visit_type: '',
+          reason: '',
           call_in: false,
           call_out: false,
           time: '',
@@ -968,6 +983,7 @@ export default function PatientLogSystem(): React.ReactElement {
         office: 50,
         appt_date: 20,
         visit_type: 50,
+        reason: 100,
         time: 20,
         remark: 200,
         source: 200,
@@ -1006,6 +1022,7 @@ export default function PatientLogSystem(): React.ReactElement {
         office: '',
         appt_date: '',
         visit_type: '',
+        reason: '',
         call_in: false,
         call_out: false,
         time: '',
@@ -1081,6 +1098,7 @@ export default function PatientLogSystem(): React.ReactElement {
       office: '',
       appt_date: '',
       visit_type: '',
+      reason: '',
       call_in: false,
       call_out: false,
       time: '',
@@ -1131,7 +1149,7 @@ export default function PatientLogSystem(): React.ReactElement {
       setProgress(30);
       
       const patientListForPdf = patientRows.filter(row => 
-        row.name || row.office || row.appt_date || row.visit_type || 
+        row.name || row.office || row.appt_date || row.visit_type || row.reason ||
         row.call_in || row.call_out || row.time || row.remark || row.source || row.other_duty
       );
       
@@ -1208,7 +1226,7 @@ export default function PatientLogSystem(): React.ReactElement {
         }
         
         const rowsWithDate = patientListForPdf.filter(row => row.appt_date && row.appt_date.trim() !== '');
-        const byApptDate = new Map<string, { name: string; office: string, source: string; }[]>();
+        const byApptDate = new Map<string, { name: string; office: string, source: string, reason: string, }[]>();
         for (const row of rowsWithDate) {
           const d = (row.appt_date || '').trim();
           if (!byApptDate.has(d)) byApptDate.set(d, []);
@@ -1216,6 +1234,7 @@ export default function PatientLogSystem(): React.ReactElement {
             name: safeStr(row.name, 100),
             office: safeStr(row.office, 100),
             source: safeStr(row.source, 100),
+            reason: safeStr(row.reason, 100),
           });
         }
 
@@ -1663,6 +1682,7 @@ export default function PatientLogSystem(): React.ReactElement {
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '100px' }}>Office</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '120px' }}>Appt. Date</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '120px' }}>Type of Visit</th>
+                  <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '120px' }}>Cancellation / Reschedule Reason</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Call In</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Call Out</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Time</th>

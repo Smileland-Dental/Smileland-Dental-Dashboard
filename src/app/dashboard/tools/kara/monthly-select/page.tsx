@@ -1,235 +1,47 @@
-'use client';
+'use client'
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import { auth, db } from '@/lib/firebase.config';
 import { onAuthStateChanged } from 'firebase/auth';
-import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 
-const BLACK_BEAR_COLLECTION = 'simple-forms';
+function yearMonthFromDate(date: string): string {
+  const matched = /^(\d{4})-(\d{2})/.exec(date || '');
+  return matched ? `${matched[1]}-${matched[2]}` : '';
+}
 
-const colors = {
-  pageBg: '#f8fafc',
-  cardBg: '#ffffff',
-  cardBorder: '#e5e7eb',
-  title: '#111827',
-  text: '#111827',
-  placeholder: '#9ca3af',
-  label: '#374151',
-  accent: '#6b7280',
-  accentSoft: '#f3f4f6',
-  accentText: '#111827',
-  inputBorder: '#d1d5db',
-  reportBg: '#ffffff',
-  reportBorder: '#e5e7eb',
-  reportDisabledBg: '#f9fafb',
-  reportDisabledText: '#9ca3af',
-  hint: '#6b7280',
+type PatientItem = {
+  office: string;
+  source: string;
+  reason: string;
 };
 
-type SelectDestination = {
-  label: string;
-  path: string;
-};
-
-const SELECT_DESTINATIONS: SelectDestination[] = [
-  { label: 'Monthly Summary', path: '/dashboard/tools/kara/monthly-summary' },
-  { label: 'Monthly Production', path: '/dashboard/tools/kara/monthly' },
-  { label: 'Sealant & OE Goal', path: '/dashboard/tools/kara/sealant-goal' },
-  { label: 'Monthly Reviews', path: '/dashboard/tools/kara/review' },
-];
-
-type FormDoc = {
+type ShowDoc = {
   id: string;
-  date?: string;
-  location?: string;
-  submittedDateTime?: string;
+  yearMonth: string;
+  patients: PatientItem[];
 };
 
-function normalizeDocMonth(dateValue: unknown): string {
-  const raw = String(dateValue ?? '').trim();
-  const match = raw.match(/^(\d{4})-(\d{1,2})/);
-  if (!match) return '';
-  return `${match[1]}-${String(Number(match[2])).padStart(2, '0')}`;
-}
+function normalizePatient(patients: unknown): PatientItem[] {
+  if (!Array.isArray(patients)) return [];
 
-function buildDestinationUrl(path: string, month: string, office: string): string {
-  const params = new URLSearchParams({ month, office });
-  return `${path}?${params.toString()}`;
-}
-
-function getUniqueSorted(values: string[], direction: 'asc' | 'desc'): string[] {
-  const sorted = Array.from(new Set(values));
-  sorted.sort((a, b) => (direction === 'asc' ? a.localeCompare(b) : b.localeCompare(a)));
-  return sorted;
-}
-
-function getMonthOptions(docs: FormDoc[]): string[] {
-  const months = docs
-    .filter((doc) => !!doc.submittedDateTime)
-    .map((doc) => normalizeDocMonth(doc.date))
-    .filter(Boolean);
-  return getUniqueSorted(months, 'desc');
-}
-
-function normalizeAllowedOffices(officeValue: unknown): string[] {
-  if (Array.isArray(officeValue)) {
-    return officeValue.map((value) => String(value ?? '').trim()).filter(Boolean);
+  const items: PatientItem[] = [];
+  for (const item of patients) {
+    if (!item || typeof item !== 'object') continue;
+    const office = typeof item.office === 'string' ? item.office : '';
+    const source = typeof item.source === 'string' ? item.source : '';
+    const reason = typeof item.reason === 'string' ? item.reason : '';
+    if (!office && !source && !reason) continue;
+    items.push({ office, source, reason });
   }
-  if (typeof officeValue === 'string') {
-    return officeValue
-      .split(',')
-      .map((value) => value.trim())
-      .filter(Boolean);
-  }
-  if (officeValue && typeof officeValue === 'object') {
-    return Object.values(officeValue as Record<string, unknown>)
-      .map((value) => String(value ?? '').trim())
-      .filter(Boolean);
-  }
-  return [];
+  return items;
 }
 
-function getOfficeOptions(docs: FormDoc[], month: string, allowedOffices: string[]): string[] {
-  if (!month || allowedOffices.length === 0) return [];
-  const allowedSet = new Set(allowedOffices);
-  const locations = docs
-    .filter((doc) => !!doc.submittedDateTime && normalizeDocMonth(doc.date) === month)
-    .map((doc) => String(doc.location ?? '').trim())
-    .filter((location) => location && allowedSet.has(location));
-  return getUniqueSorted(locations, 'asc');
-}
-
-const dropdownOptionStyle = (active: boolean): React.CSSProperties => ({
-  width: '100%',
-  border: 0,
-  borderRadius: 8,
-  padding: '10px 12px',
-  background: active ? colors.accentSoft : 'transparent',
-  color: active ? colors.accentText : colors.text,
-  textAlign: 'left',
-  cursor: 'pointer',
-  fontWeight: active ? 600 : 400,
-});
-
-const reportButtonStyle = (enabled: boolean): React.CSSProperties => ({
-  width: '100%',
-  border: `1px solid ${enabled ? colors.reportBorder : colors.cardBorder}`,
-  borderRadius: 10,
-  padding: '12px 14px',
-  background: enabled ? colors.reportBg : colors.reportDisabledBg,
-  textAlign: 'left',
-  cursor: enabled ? 'pointer' : 'not-allowed',
-});
-
-type DropdownFieldProps = {
-  label: string;
-  value: string;
-  isOpen: boolean;
-  onToggle: () => void;
-  canOpen: boolean;
-  dropdownRef: React.RefObject<HTMLDivElement | null>;
-  children: React.ReactNode;
-};
-
-function DropdownField({
-  label,
-  value,
-  isOpen,
-  onToggle,
-  canOpen,
-  dropdownRef,
-  children,
-}: DropdownFieldProps) {
-  return (
-    <div ref={dropdownRef} style={{ position: 'relative' }}>
-      <label style={{ display: 'block', marginBottom: 6, fontWeight: 600, fontSize: 13, color: colors.label }}>
-        {label}
-      </label>
-      <button
-        type="button"
-        onClick={() => canOpen && onToggle()}
-        style={{
-          width: '100%',
-          height: 40,
-          border: `1px solid ${isOpen ? colors.accent : colors.inputBorder}`,
-          borderRadius: 10,
-          padding: '0 12px',
-          background: colors.cardBg,
-          color: value ? colors.text : colors.placeholder,
-          textAlign: 'left',
-          cursor: canOpen ? 'pointer' : 'default',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          fontWeight: value ? 600 : 400,
-          fontSize: 14,
-        }}
-      >
-        <span>{value || `Select ${label.toLowerCase()}`}</span>
-        {canOpen && (
-          <span style={{ color: colors.accent, fontSize: 11 }}>{isOpen ? '▲' : '▼'}</span>
-        )}
-      </button>
-      {isOpen && children}
-    </div>
-  );
-}
-
-function DropdownList({ children }: { children: React.ReactNode }) {
-  return (
-    <ul
-      style={{
-        position: 'absolute',
-        top: 'calc(100% + 4px)',
-        left: 0,
-        right: 0,
-        margin: 0,
-        padding: 4,
-        listStyle: 'none',
-        border: `1px solid ${colors.cardBorder}`,
-        borderRadius: 10,
-        background: colors.cardBg,
-        boxShadow: '0 4px 16px rgba(15, 23, 42, 0.06)',
-        maxHeight: 220,
-        overflowY: 'auto',
-        zIndex: 10,
-      }}
-    >
-      {children}
-    </ul>
-  );
-}
-
-function DropdownOption({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <li>
-      <button type="button" onClick={onClick} style={dropdownOptionStyle(active)}>
-        {children}
-      </button>
-    </li>
-  );
-}
-
-export default function MonthlySelectPage() {
+export default function Page() {
   const [pageReady, setPageReady] = useState(false);
-  const [docs, setDocs] = useState<FormDoc[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('');
-  const [selectedOffice, setSelectedOffice] = useState('');
-  const [allowedOffices, setAllowedOffices] = useState<string[]>([]);
-  const [monthDropdownOpen, setMonthDropdownOpen] = useState(false);
-  const [officeDropdownOpen, setOfficeDropdownOpen] = useState(false);
-  const monthDropdownRef = useRef<HTMLDivElement>(null);
-  const officeDropdownRef = useRef<HTMLDivElement>(null);
+  const [month, setMonth] = useState('');
+  const [office, setOffice] = useState('');
+  const [showDocs, setShowDocs] = useState<ShowDoc[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -254,6 +66,7 @@ export default function MonthlySelectPage() {
 
         const userData = userDoc.data();
         if (
+          userData?.role !== 'Manager' &&
           userData?.role !== 'HR' &&
           userData?.role !== 'Director'
         ) {
@@ -262,7 +75,6 @@ export default function MonthlySelectPage() {
         }
 
         if (!cancelled) {
-          setAllowedOffices(normalizeAllowedOffices(userData?.offices));
           setPageReady(true);
         }
       } catch {
@@ -285,179 +97,328 @@ export default function MonthlySelectPage() {
   }, []);
 
   useEffect(() => {
-    const load = async () => {
+    let cancelled = false;
+
+    const loadShow = async () => {
       try {
-        const snap = await getDocs(collection(db, BLACK_BEAR_COLLECTION));
-        const loaded = snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<FormDoc, 'id'>) }));
-        setDocs(loaded);
-      } catch (e: unknown) {
-        const message = e instanceof Error ? e.message : 'Error';
-        setError(message);
-      } finally {
-        setLoading(false);
+        const snap = await getDocs(collection(db, 'show-noshow'));
+        const docs: ShowDoc[] = [];
+
+        for (const item of snap.docs) {
+          const yearMonth = yearMonthFromDate(item.id);
+          if (!yearMonth) continue;
+          docs.push({
+            id: item.id,
+            yearMonth,
+            patients: normalizePatient(item.data()?.patients),
+          });
+        }
+
+        if (!cancelled) setShowDocs(docs);
+      } catch {
+        if (!cancelled) setShowDocs([]);
       }
     };
-    load();
+
+    loadShow();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const monthOptions = useMemo(() => getMonthOptions(docs), [docs]);
-  const officeOptions = useMemo(
-    () => getOfficeOptions(docs, selectedMonth, allowedOffices),
-    [docs, selectedMonth, allowedOffices]
-  );
+  const availableMonths = useMemo(() => {
+    const months = new Set<string>();
+    for (const doc of showDocs) months.add(doc.yearMonth);
+    return Array.from(months).sort((a, b) => b.localeCompare(a));
+  }, [showDocs]);
+
+  const officeOptions = useMemo(() => {
+    const offices = new Set<string>();
+    for (const doc of showDocs) {
+      if (doc.yearMonth !== month) continue;
+      for (const item of doc.patients) {
+        if (item.office) offices.add(item.office);
+      }
+    }
+    return Array.from(offices).sort((a, b) => a.localeCompare(b));
+  }, [showDocs, month]);
+
+  const sourceRows = useMemo(() => {
+    if (!month || !office) return [];
+
+    const counts = new Map<string, number>();
+    for (const doc of showDocs) {
+      if (doc.yearMonth !== month) continue;
+      for (const item of doc.patients) {
+        if (item.office !== office || !item.source) continue;
+        counts.set(item.source, (counts.get(item.source) || 0) + 1);
+      }
+    }
+
+    const total = Array.from(counts.values()).reduce((sum, n) => sum + n, 0);
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([source, count]) => ({
+        source,
+        count,
+        percentage: total > 0 ? (count / total) * 100 : 0,
+      }));
+  }, [showDocs, month, office]);
+
+  const reasonRows = useMemo(() => {
+    if (!month || !office) return [];
+
+    const counts = new Map<string, number>();
+    for (const doc of showDocs) {
+      if (doc.yearMonth !== month) continue;
+      for (const item of doc.patients) {
+        if (item.office !== office || !item.reason) continue;
+        counts.set(item.reason, (counts.get(item.reason) || 0) + 1);
+      }
+    }
+
+    const total = Array.from(counts.values()).reduce((sum, n) => sum + n, 0);
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([reason, count]) => ({
+        reason,
+        count,
+        percentage: total > 0 ? (count / total) * 100 : 0,
+      }));
+  }, [showDocs, month, office]);
 
   useEffect(() => {
-    if (selectedMonth && !monthOptions.includes(selectedMonth)) {
-      setSelectedMonth('');
+    if (availableMonths.length === 0) {
+      if (month) setMonth('');
+      return;
     }
-    if (selectedOffice && !officeOptions.includes(selectedOffice)) {
-      setSelectedOffice('');
+    if (!availableMonths.includes(month)) {
+      setMonth(availableMonths[0]);
     }
-  }, [monthOptions, officeOptions, selectedMonth, selectedOffice]);
+  }, [availableMonths, month]);
 
   useEffect(() => {
-    if (!monthDropdownOpen && !officeDropdownOpen) return;
+    if (office && !officeOptions.includes(office)) {
+      setOffice('');
+    }
+  }, [office, officeOptions]);
 
-    const handleClickOutside = (event: MouseEvent) => {
-      const target = event.target as Node;
-      if (monthDropdownRef.current && !monthDropdownRef.current.contains(target)) {
-        setMonthDropdownOpen(false);
-      }
-      if (officeDropdownRef.current && !officeDropdownRef.current.contains(target)) {
-        setOfficeDropdownOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [monthDropdownOpen, officeDropdownOpen]);
-
-  const handleMonthSelect = (month: string) => {
-    setSelectedMonth(month);
-    setSelectedOffice('');
-    setMonthDropdownOpen(false);
-    setOfficeDropdownOpen(false);
+  const pageStyle: React.CSSProperties = {
+    minHeight: '100vh',
+    margin: 0,
+    padding: '48px 24px',
+    background: '#f1f5f9',
+    fontFamily:
+      'ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif',
+    color: '#0f172a',
   };
 
-  const handleOfficeSelect = (office: string) => {
-    setSelectedOffice(office);
-    setOfficeDropdownOpen(false);
+  const cardStyle: React.CSSProperties = {
+    maxWidth: 1300,
+    margin: '0 auto',
+    background: '#fff',
+    borderRadius: 12,
+    boxShadow: '0 10px 30px rgba(15, 23, 42, 0.08)',
+    overflow: 'hidden',
   };
 
-  const canNavigate = selectedMonth !== '' && selectedOffice !== '';
+  const filtersStyle: React.CSSProperties = {
+    display: 'flex',
+    gap: 20,
+    flexWrap: 'wrap',
+    padding: '20px 24px',
+    borderBottom: '1px solid #e2e8f0',
+  };
 
-  const handleDestinationClick = (path: string) => {
-    if (!canNavigate) return;
-    window.open(buildDestinationUrl(path, selectedMonth, selectedOffice), '_blank', 'noopener,noreferrer');
+  const fieldStyle: React.CSSProperties = {
+    flex: 1,
+    minWidth: 200,
+  };
+
+  const labelStyle: React.CSSProperties = {
+    display: 'block',
+    marginBottom: 5,
+    fontWeight: 'bold',
+  };
+
+  const inputStyle: React.CSSProperties = {
+    padding: '8px 10px',
+    border: '1px solid #e6e8eb',
+    borderRadius: 4,
+    fontSize: '1em',
+    backgroundColor: '#ffffff',
+    color: '#3b4252',
+    width: '100%',
+    boxSizing: 'border-box',
+  };
+
+  const tableStyle: React.CSSProperties = {
+    width: '100%',
+    borderCollapse: 'collapse',
+  };
+
+  const thStyle: React.CSSProperties = {
+    padding: '12px 24px',
+    fontSize: 13,
+    fontWeight: 600,
+    letterSpacing: '0.02em',
+    color: '#475569',
+    background: '#f8fafc',
+    borderBottom: '1px solid #e2e8f0',
+  };
+
+  const tdStyle: React.CSSProperties = {
+    padding: '12px 24px',
+    fontSize: 14,
+    height: 44,
+    borderBottom: '1px solid #e2e8f0',
   };
 
   if (!pageReady) {
-    return <main style={{ minHeight: '100vh', background: colors.pageBg }} />;
+    return (
+      <main style={{ minHeight: '100vh', background: '#f1f5f9' }} />
+    );
   }
 
   return (
-    <main style={{ minHeight: '100vh', background: colors.pageBg, padding: 32 }}>
-      <section
-        style={{
-          maxWidth: 520,
-          margin: '32px auto',
-          border: `1px solid ${colors.cardBorder}`,
-          borderRadius: 14,
-          padding: '28px 26px',
-          background: colors.cardBg,
-          boxShadow: '0 2px 12px rgba(15, 23, 42, 0.05)',
-        }}
-      >
-        <h1 style={{ margin: '0 0 20px', fontSize: 24, fontWeight: 700, color: colors.title }}>
-          Monthly Reports
-        </h1>
-
-        {loading && <p style={{ margin: 0, color: colors.hint }}>Loading...</p>}
-        {error && <p style={{ margin: 0, color: '#ef4444' }}>{error}</p>}
-
-        {!loading && !error && (
-          <div style={{ display: 'grid', gap: 14 }}>
-            <DropdownField
-              label="Month"
-              value={selectedMonth}
-              isOpen={monthDropdownOpen}
-              onToggle={() => setMonthDropdownOpen((prev) => !prev)}
-              canOpen={monthOptions.length > 0}
-              dropdownRef={monthDropdownRef}
+    <main style={pageStyle}>
+      <h1
+          style={{
+            color: '#4b5563',
+            textAlign: 'center',
+            marginBottom: '24px',
+            fontSize: '2.2rem',
+            fontWeight: 'bold',
+          }}
+        >
+          Appointment Details
+      </h1>
+      <div style={cardStyle}>
+        <div style={filtersStyle}>
+          <div style={fieldStyle}>
+            <label style={labelStyle}>Month:</label>
+            <select
+              value={month}
+              onChange={(e) => setMonth(e.target.value)}
+              style={inputStyle}
             >
-              <DropdownList>
-                {monthOptions.map((month) => (
-                  <DropdownOption
-                    key={month}
-                    active={month === selectedMonth}
-                    onClick={() => handleMonthSelect(month)}
-                  >
-                    {month}
-                  </DropdownOption>
-                ))}
-              </DropdownList>
-            </DropdownField>
-
-            <DropdownField
-              label="Office"
-              value={selectedOffice}
-              isOpen={officeDropdownOpen}
-              onToggle={() => setOfficeDropdownOpen((prev) => !prev)}
-              canOpen={!!selectedMonth && officeOptions.length > 0}
-              dropdownRef={officeDropdownRef}
-            >
-              <DropdownList>
-                {officeOptions.map((office) => (
-                  <DropdownOption
-                    key={office}
-                    active={office === selectedOffice}
-                    onClick={() => handleOfficeSelect(office)}
-                  >
-                    {office}
-                  </DropdownOption>
-                ))}
-              </DropdownList>
-            </DropdownField>
-
-            <div
-              style={{
-                marginTop: 4,
-                paddingTop: 18,
-                borderTop: `1px solid ${colors.cardBorder}`,
-              }}
-            >
-              <p style={{ margin: '0 0 10px', fontWeight: 600, fontSize: 14, color: colors.text }}>
-                Reports
-              </p>
-              {!canNavigate && (
-                <p style={{ margin: '0 0 10px', fontSize: 13, color: colors.hint }}>
-                  Please select Month and Office first.
-                </p>
+              {availableMonths.length === 0 ? (
+                <option value="">No months</option>
+              ) : (
+                availableMonths.map((value) => (
+                  <option key={value} value={value}>
+                    {value}
+                  </option>
+                ))
               )}
-              <div style={{ display: 'grid', gap: 8 }}>
-                {SELECT_DESTINATIONS.map((destination) => (
-                  <button
-                    key={destination.path}
-                    type="button"
-                    onClick={() => handleDestinationClick(destination.path)}
-                    disabled={!canNavigate}
-                    style={reportButtonStyle(canNavigate)}
-                  >
-                    <div
-                      style={{
-                        fontWeight: 600,
-                        color: canNavigate ? colors.text : colors.reportDisabledText,
-                      }}
-                    >
-                      {destination.label}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
+            </select>
           </div>
-        )}
-      </section>
+          <div style={fieldStyle}>
+            <label style={labelStyle}>Office:</label>
+            <select
+              value={office}
+              onChange={(e) => setOffice(e.target.value)}
+              style={inputStyle}
+            >
+              <option value="">Select Office</option>
+              {officeOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Discovery Source</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Count</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Percentage</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sourceRows.length === 0
+              ? Array.from({ length: 10 }, (_, index) => (
+                  <tr
+                    key={index}
+                    style={{
+                      background: index % 2 === 0 ? '#fff' : '#f8fafc',
+                    }}
+                  >
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                  </tr>
+                ))
+              : sourceRows.map((row, index) => (
+                  <tr
+                    key={row.source}
+                    style={{
+                      background: index % 2 === 0 ? '#fff' : '#f8fafc',
+                    }}
+                  >
+                    <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 500 }}>
+                      {row.source}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      {row.count.toLocaleString()}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      {row.percentage.toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+          </tbody>
+        </table>
+
+        <div style={{ height: 125 }} />
+
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Cancellation / Reschedule Reason</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Count</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Percentage</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reasonRows.length === 0
+              ? Array.from({ length: 10 }, (_, index) => (
+                  <tr
+                    key={index}
+                    style={{
+                      background: index % 2 === 0 ? '#fff' : '#f8fafc',
+                    }}
+                  >
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                  </tr>
+                ))
+              : reasonRows.map((row, index) => (
+                  <tr
+                    key={row.reason}
+                    style={{
+                      background: index % 2 === 0 ? '#fff' : '#f8fafc',
+                    }}
+                  >
+                    <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 500 }}>
+                      {row.reason}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      {row.count.toLocaleString()}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      {row.percentage.toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+          </tbody>
+        </table>
+      </div>
     </main>
   );
 }
+

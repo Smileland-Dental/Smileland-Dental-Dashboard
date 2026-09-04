@@ -13,6 +13,7 @@ function yearMonthFromDate(date: string): string {
 type PatientItem = {
   office: string;
   source: string;
+  reason: string;
 };
 
 type ShowDoc = {
@@ -29,8 +30,9 @@ function normalizePatient(patients: unknown): PatientItem[] {
     if (!item || typeof item !== 'object') continue;
     const office = typeof item.office === 'string' ? item.office : '';
     const source = typeof item.source === 'string' ? item.source : '';
-    if (!office && !source) continue;
-    items.push({ office, source });
+    const reason = typeof item.reason === 'string' ? item.reason : '';
+    if (!office && !source && !reason) continue;
+    items.push({ office, source, reason });
   }
   return items;
 }
@@ -163,6 +165,28 @@ export default function Page() {
       }));
   }, [showDocs, month, office]);
 
+  const reasonRows = useMemo(() => {
+    if (!month || !office) return [];
+
+    const counts = new Map<string, number>();
+    for (const doc of showDocs) {
+      if (doc.yearMonth !== month) continue;
+      for (const item of doc.patients) {
+        if (item.office !== office || !item.reason) continue;
+        counts.set(item.reason, (counts.get(item.reason) || 0) + 1);
+      }
+    }
+
+    const total = Array.from(counts.values()).reduce((sum, n) => sum + n, 0);
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([reason, count]) => ({
+        reason,
+        count,
+        percentage: total > 0 ? (count / total) * 100 : 0,
+      }));
+  }, [showDocs, month, office]);
+
   useEffect(() => {
     if (availableMonths.length === 0) {
       if (month) setMonth('');
@@ -190,7 +214,7 @@ export default function Page() {
   };
 
   const cardStyle: React.CSSProperties = {
-    maxWidth: 720,
+    maxWidth: 1300,
     margin: '0 auto',
     background: '#fff',
     borderRadius: 12,
@@ -267,7 +291,7 @@ export default function Page() {
             fontWeight: 'bold',
           }}
         >
-          How Did You Hear About Us?
+          Appointment Details
       </h1>
       <div style={cardStyle}>
         <div style={filtersStyle}>
@@ -309,9 +333,9 @@ export default function Page() {
         <table style={tableStyle}>
           <thead>
             <tr>
-              <th style={{ ...thStyle, textAlign: 'left' }}>Source</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>Count</th>
-              <th style={{ ...thStyle, textAlign: 'right' }}>Percentage</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Discovery Source</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Count</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Percentage</th>
             </tr>
           </thead>
           <tbody>
@@ -323,9 +347,9 @@ export default function Page() {
                       background: index % 2 === 0 ? '#fff' : '#f8fafc',
                     }}
                   >
-                    <td style={{ ...tdStyle, textAlign: 'left' }} />
-                    <td style={{ ...tdStyle, textAlign: 'right' }} />
-                    <td style={{ ...tdStyle, textAlign: 'right' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
                   </tr>
                 ))
               : sourceRows.map((row, index) => (
@@ -335,13 +359,58 @@ export default function Page() {
                       background: index % 2 === 0 ? '#fff' : '#f8fafc',
                     }}
                   >
-                    <td style={{ ...tdStyle, textAlign: 'left', fontWeight: 500 }}>
+                    <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 500 }}>
                       {row.source}
                     </td>
-                    <td style={{ ...tdStyle, textAlign: 'right' }}>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
                       {row.count.toLocaleString()}
                     </td>
-                    <td style={{ ...tdStyle, textAlign: 'right' }}>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      {row.percentage.toFixed(1)}%
+                    </td>
+                  </tr>
+                ))}
+          </tbody>
+        </table>
+
+        <div style={{ height: 125 }} />
+
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Cancellation / Reschedule Reason</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Count</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Percentage</th>
+            </tr>
+          </thead>
+          <tbody>
+            {reasonRows.length === 0
+              ? Array.from({ length: 10 }, (_, index) => (
+                  <tr
+                    key={index}
+                    style={{
+                      background: index % 2 === 0 ? '#fff' : '#f8fafc',
+                    }}
+                  >
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                  </tr>
+                ))
+              : reasonRows.map((row, index) => (
+                  <tr
+                    key={row.reason}
+                    style={{
+                      background: index % 2 === 0 ? '#fff' : '#f8fafc',
+                    }}
+                  >
+                    <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 500 }}>
+                      {row.reason}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      {row.count.toLocaleString()}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
                       {row.percentage.toFixed(1)}%
                     </td>
                   </tr>
@@ -352,3 +421,4 @@ export default function Page() {
     </main>
   );
 }
+
