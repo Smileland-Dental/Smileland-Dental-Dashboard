@@ -2309,6 +2309,63 @@ export default function SimpleFormsDropdownViewPage() {
                     })}
                   </tr>
                 ) : null}
+                <tr style={averageRowStyle}>
+                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Average</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  {footerSlotTotals.flatMap((fv, slotIndex) => {
+                    const slotId = columnSlots[slotIndex] as ColumnFieldId;
+                    const denom = dayCountForAverage > 0 ? dayCountForAverage : 1;
+                    if (fv.type === 'empty') {
+                      return [<td key={`fa-${slotIndex}`} style={cellStyle} />];
+                    }
+                    // Short procedures / Name / Position bundles: no average
+                    if (fv.type === 'bundle') {
+                      return fv.values.map((_, ri) => (
+                        <td key={`fa-${slotIndex}-${ri}`} style={{ ...cellStyle, color: '#64748b' }}>
+                          —
+                        </td>
+                      ));
+                    }
+                    if (fv.type === 'nameBundle') {
+                      return fv.values.map((_, ri) => (
+                        <td key={`fa-${slotIndex}-nb-${ri}`} style={{ ...cellStyle, color: '#64748b' }}>
+                          —
+                        </td>
+                      ));
+                    }
+                    if (fv.type === 'positionBundle') {
+                      return fv.valuesByMetric.flatMap((perPerson, mi) =>
+                        perPerson.map((_, pi) => (
+                          <td key={`fa-${slotIndex}-pb-${mi}-${pi}`} style={{ ...cellStyle, color: '#64748b' }}>
+                            —
+                          </td>
+                        ))
+                      );
+                    }
+                    if (fv.type === 'operating') {
+                      return OPERATING_SUB_LABELS.map((_, ri) => (
+                        <td
+                          key={`fa-op-${slotIndex}-${ri}`}
+                          style={{
+                            ...operatingColumnTdStyle(ri, cellStyle),
+                            color: '#64748b',
+                          }}
+                        >
+                          —
+                        </td>
+                      ));
+                    }
+                    return [
+                      <td key={`fa-${slotIndex}`} style={cellStyle}>
+                        {formatTotalCell(
+                          Math.round(fv.total / denom),
+                          isCurrencyField(slotId),
+                          isPercentField(slotId)
+                        )}
+                      </td>,
+                    ];
+                  })}
+                </tr>
                 <tr style={footerRowStyle}>
                   <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Total</td>
                   <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
@@ -2364,63 +2421,6 @@ export default function SimpleFormsDropdownViewPage() {
                       <td key={`ft-${slotIndex}`} style={cellStyle}>
                         {formatTotalCell(
                           fv.total,
-                          isCurrencyField(slotId),
-                          isPercentField(slotId)
-                        )}
-                      </td>,
-                    ];
-                  })}
-                </tr>
-                <tr style={averageRowStyle}>
-                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Average</td>
-                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
-                  {footerSlotTotals.flatMap((fv, slotIndex) => {
-                    const slotId = columnSlots[slotIndex] as ColumnFieldId;
-                    const denom = dayCountForAverage > 0 ? dayCountForAverage : 1;
-                    if (fv.type === 'empty') {
-                      return [<td key={`fa-${slotIndex}`} style={cellStyle} />];
-                    }
-                    // Short procedures / Name / Position bundles: no average
-                    if (fv.type === 'bundle') {
-                      return fv.values.map((_, ri) => (
-                        <td key={`fa-${slotIndex}-${ri}`} style={{ ...cellStyle, color: '#64748b' }}>
-                          —
-                        </td>
-                      ));
-                    }
-                    if (fv.type === 'nameBundle') {
-                      return fv.values.map((_, ri) => (
-                        <td key={`fa-${slotIndex}-nb-${ri}`} style={{ ...cellStyle, color: '#64748b' }}>
-                          —
-                        </td>
-                      ));
-                    }
-                    if (fv.type === 'positionBundle') {
-                      return fv.valuesByMetric.flatMap((perPerson, mi) =>
-                        perPerson.map((_, pi) => (
-                          <td key={`fa-${slotIndex}-pb-${mi}-${pi}`} style={{ ...cellStyle, color: '#64748b' }}>
-                            —
-                          </td>
-                        ))
-                      );
-                    }
-                    if (fv.type === 'operating') {
-                      return OPERATING_SUB_LABELS.map((_, ri) => (
-                        <td
-                          key={`fa-op-${slotIndex}-${ri}`}
-                          style={{
-                            ...operatingColumnTdStyle(ri, cellStyle),
-                            color: '#64748b',
-                          }}
-                        >
-                          —
-                        </td>
-                      ));
-                    }
-                    return [
-                      <td key={`fa-${slotIndex}`} style={cellStyle}>
-                        {formatTotalCell(
-                          Math.round(fv.total / denom),
                           isCurrencyField(slotId),
                           isPercentField(slotId)
                         )}
@@ -2631,17 +2631,6 @@ export default function SimpleFormsDropdownViewPage() {
                     </button>
                   </th>
                 </tr>
-                <tr style={footerRowStyle}>
-                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Total</td>
-                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
-                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
-                  {personModeMetricTotals.map((total, mi) => (
-                    <td key={`person-total-${mi}`} style={cellStyle}>
-                      {formatTotalCell(total, isCurrencyField(personModeMetrics[mi] ?? ''))}
-                    </td>
-                  ))}
-                  <td style={cellStyle} />
-                </tr>
                 <tr style={averageRowStyle}>
                   <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Average</td>
                   <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
@@ -2657,6 +2646,17 @@ export default function SimpleFormsDropdownViewPage() {
                       </td>
                     );
                   })}
+                  <td style={cellStyle} />
+                </tr>
+                <tr style={footerRowStyle}>
+                  <td style={{ ...cellStyle, whiteSpace: 'nowrap' }}>Total</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  <td style={{ ...cellStyle, color: '#64748b' }}>—</td>
+                  {personModeMetricTotals.map((total, mi) => (
+                    <td key={`person-total-${mi}`} style={cellStyle}>
+                      {formatTotalCell(total, isCurrencyField(personModeMetrics[mi] ?? ''))}
+                    </td>
+                  ))}
                   <td style={cellStyle} />
                 </tr>
               </thead>
@@ -2738,5 +2738,4 @@ export default function SimpleFormsDropdownViewPage() {
     </main>
   );
 }
-
 

@@ -330,7 +330,7 @@ export default function SignLogPage() {
         }
 
         const userData = userDoc.data();
-        if (userData?.role !== 'HR') {
+        if (userData?.role !== 'HR' && userData?.role !== 'Corporate') {
           goHome();
           return;
         }
