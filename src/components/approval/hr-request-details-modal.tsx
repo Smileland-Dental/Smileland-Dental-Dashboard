@@ -372,12 +372,12 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
             </div>
 
             <div className="flex gap-2">
-              {['pending', 'submitted', 'not_provided'].map((status) => {
+              {['pending', 'submitted', 'not_provided', 'na'].map((status) => {
                 const isSelected = tempData.excuse_note_submitted === status;
                 const fieldChanged = isChanged('excuse_note_submitted');
                 // Logic: Disable "Not Provided" if any files exist (staged or database)
                 const hasFiles = (tempData.excuse_note?.length || 0) > 0 || newFiles.length > 0;
-                const notProvidedDisabled = status === 'not_provided' && hasFiles;
+                const notProvidedDisabled = (status === 'not_provided' || status === 'na') && hasFiles;
 
                 return (
                   <button
@@ -393,7 +393,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
                           : 'bg-white text-slate-400 border-slate-100 hover:border-slate-200'
                     }`}
                   >
-                    {status.replace('_', ' ')}
+                    {status === 'na' ? 'N/A' : status.replace(/_/g, ' ')}
                   </button>
                 );
               })}
@@ -482,7 +482,7 @@ export const HRRequestDetailsModal = ({ absence, userName, onClose, onUpdate, on
               <div className="flex justify-between items-center ml-1">
                 <div className="flex items-center gap-2">
                   <label className="text-[10px] font-black text-black uppercase ml-1">Final Approval</label>
-                  {/* 💡 📝 Dynamic Notes Trigger Button inside Box */}
+                  {/* Dynamic Notes Trigger Button inside Box */}
                   {!showFinalNotes && (
                     <button 
                       type="button" 
