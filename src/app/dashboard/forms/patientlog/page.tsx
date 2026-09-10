@@ -13,6 +13,7 @@ interface PatientRowProps {
   removePatientRow: (id: number) => void;
   patientOfficeOptions: string[];
   getVisitTypeOptions: (office: string) => string[];
+  unscheduledOptions: string[];
   remarkOptions: string[];
   sourceOptions: string[];
   otherDutyOptions: string[];
@@ -26,6 +27,7 @@ const PatientRow = React.memo(({
   removePatientRow, 
   patientOfficeOptions, 
   getVisitTypeOptions, 
+  unscheduledOptions,
   remarkOptions, 
   sourceOptions,
   otherDutyOptions,
@@ -76,6 +78,18 @@ const PatientRow = React.memo(({
           <option value=""></option>
           {visitTypeOptions.map(type => (
             <option key={type} value={type}>{type}</option>
+          ))}
+        </select>
+      </td>
+      <td style={{ padding: '8px' }}>
+        <select
+          value={row.unscheduled}
+          onChange={(e) => updatePatientRow(row.id, 'unscheduled', e.target.value)}
+          style={{ ...inputStyle, margin: 0, fontSize: '14px' }}
+        >
+          <option value=""></option>
+          {unscheduledOptions.map(unscheduled => (
+            <option key={unscheduled} value={unscheduled}>{unscheduled}</option>
           ))}
         </select>
       </td>
@@ -213,6 +227,7 @@ const PatientRow = React.memo(({
     prevProps.row.office === nextProps.row.office &&
     prevProps.row.appt_date === nextProps.row.appt_date &&
     prevProps.row.visit_type === nextProps.row.visit_type &&
+    prevProps.row.unscheduled === nextProps.row.unscheduled &&
     prevProps.row.reason === nextProps.row.reason &&
     prevProps.row.call_in === nextProps.row.call_in &&
     prevProps.row.call_out === nextProps.row.call_out &&
@@ -377,6 +392,7 @@ function createPatientLogPDFDocument(props: {
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Office')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Appt. Date')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Visit Type')),
+    React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Unscheduled')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Reason')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Call In')),
     React.createElement(View, { style: s.tableCell }, React.createElement(Text, { style: { fontWeight: 'bold' } }, 'Call Out')),
@@ -391,6 +407,7 @@ function createPatientLogPDFDocument(props: {
     const safeOffice = safeStr(row?.office, 50);
     const safeApptDate = safeStr(row?.appt_date || row?.apptDate, 20);
     const safeVisitType = safeStr(row?.visit_type || row?.visitType, 50);
+    const safeUnscheduled = safeStr(row?.unscheduled, 100);
     const safeReason = safeStr(row?.reason, 50);
     const safeTime = safeStr(row?.time, 20);
     const safeRemark = safeStr(row?.remark, 100);
@@ -405,6 +422,7 @@ function createPatientLogPDFDocument(props: {
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeOffice || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeApptDate || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeVisitType || '-')),
+      React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeUnscheduled || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, safeReason || '-')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, callIn ? 'O' : '')),
       React.createElement(View, { style: s.tableCell }, React.createElement(Text, null, callOut ? 'O' : '')),
@@ -486,6 +504,7 @@ export default function PatientLogSystem(): React.ReactElement {
       office: '',
       appt_date: '',
       visit_type: '',
+      unscheduled: '',
       reason: '',
       call_in: false,
       call_out: false,
@@ -506,16 +525,16 @@ export default function PatientLogSystem(): React.ReactElement {
 
   const getVisitTypeOptions = useCallback((office: string): string[] => {
     if (office === 'Ortho') {
-      return ['Adjustment', 'Bonding', 'Consult', 'FMS', 'Full Deband', 'Partial Deband', 'Records', 'Retainer Check', 'RPE Check', 'Seals', 'Cancelled', 'Rescheduled', 'Cancelled/Transfer'];
+      return ['Adjustment', 'Bonding', 'Consult', 'FMS', 'Full Deband', 'Partial Deband', 'Records', 'Retainer Check', 'RPE Check', 'Seals'];
     } else if (office === 'California') {
-      return ['Consult', 'Crown', 'Emergency', 'FMS', 'New Patient', 'RCRA', 'RCT', 'Recall', 'Seals', 'Tx', 'Cancelled', 'Rescheduled', 'Cancelled/Transfer'];
+      return ['Consult', 'Crown', 'Emergency', 'FMS', 'New Patient', 'RCRA', 'RCT', 'Recall', 'Seals', 'Tx'];
     } else {
-      return ['Emergency', 'FMS', 'New Patient', 'RCRA', 'Recall', 'Seals', 'Tx', 'Cancelled', 'Rescheduled', 'Cancelled/Transfer'];
+      return ['Emergency', 'FMS', 'New Patient', 'RCRA', 'Recall', 'Seals', 'Tx'];
     }
   }, []);
 
   const remarkOptions = ['Disc', 'Elsewhere', 'LMA', 'LMW', 'NA', 'Not Interested', 'Will Call Back', 'Wrong'];
-
+  const unscheduledOptions = ['Cancel', 'Reschedule', 'Cancel/Transfer'];
   const sourceOptions = ['Google', 'Social Media', 'Physician', 'Friend/Family', 'Insurance', 'Passed By'];
 
   const otherDutyOptions = [
@@ -537,6 +556,7 @@ export default function PatientLogSystem(): React.ReactElement {
         row.office ||
         row.appt_date ||
         row.visit_type ||
+        row.unscheduled ||
         (typeof row.reason === 'string' && row.reason.trim()) ||
         row.call_in ||
         row.call_out ||
@@ -748,6 +768,7 @@ export default function PatientLogSystem(): React.ReactElement {
                   office: '',
                   appt_date: '',
                   visit_type: '',
+                  unscheduled: '',
                   reason: '',
                   call_in: false,
                   call_out: false,
@@ -800,6 +821,7 @@ export default function PatientLogSystem(): React.ReactElement {
               office: '',
               appt_date: '',
               visit_type: '',
+              unscheduled: '',
               reason: '',
               call_in: false,
               call_out: false,
@@ -891,6 +913,7 @@ export default function PatientLogSystem(): React.ReactElement {
           office: '',
           appt_date: '',
           visit_type: '',
+          unscheduled: '',
           reason: '',
           call_in: false,
           call_out: false,
@@ -983,6 +1006,7 @@ export default function PatientLogSystem(): React.ReactElement {
         office: 50,
         appt_date: 20,
         visit_type: 50,
+        unscheduled: 50,
         reason: 100,
         time: 20,
         remark: 200,
@@ -1022,6 +1046,7 @@ export default function PatientLogSystem(): React.ReactElement {
         office: '',
         appt_date: '',
         visit_type: '',
+        unscheduled: '',
         reason: '',
         call_in: false,
         call_out: false,
@@ -1098,6 +1123,7 @@ export default function PatientLogSystem(): React.ReactElement {
       office: '',
       appt_date: '',
       visit_type: '',
+      unscheduled: '',
       reason: '',
       call_in: false,
       call_out: false,
@@ -1149,7 +1175,7 @@ export default function PatientLogSystem(): React.ReactElement {
       setProgress(30);
       
       const patientListForPdf = patientRows.filter(row => 
-        row.name || row.office || row.appt_date || row.visit_type || row.reason ||
+        row.name || row.office || row.appt_date || row.visit_type || row.unscheduled || row.reason ||
         row.call_in || row.call_out || row.time || row.remark || row.source || row.other_duty
       );
       
@@ -1226,15 +1252,13 @@ export default function PatientLogSystem(): React.ReactElement {
         }
         
         const rowsWithDate = patientListForPdf.filter(row => row.appt_date && row.appt_date.trim() !== '');
-        const byApptDate = new Map<string, { name: string; office: string, source: string, reason: string, }[]>();
+        const byApptDate = new Map<string, { name: string; office: string, }[]>();
         for (const row of rowsWithDate) {
           const d = (row.appt_date || '').trim();
           if (!byApptDate.has(d)) byApptDate.set(d, []);
           byApptDate.get(d)!.push({
             name: safeStr(row.name, 100),
             office: safeStr(row.office, 100),
-            source: safeStr(row.source, 100),
-            reason: safeStr(row.reason, 100),
           });
         }
 
@@ -1250,6 +1274,64 @@ export default function PatientLogSystem(): React.ReactElement {
         if (byApptDate.size === 0) {
           const showDocId = formData.dutyDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
           const docRef = doc(db, 'show-noshow', showDocId);
+          await setDoc(docRef, sanitizeFirebaseDataClient({
+            appt_date: formData.dutyDate,
+          }), { merge: true });
+        }
+
+        const rowsWithUnscheduled = patientListForPdf.filter(row => row.unscheduled && row.unscheduled.trim() !== '');
+        const byUnscheduled = new Map<string, { office: string, type_of_visit: string, unscheduled: string; reason: string, }[]>();
+        for (const row of rowsWithUnscheduled) {
+          const u = (row.unscheduled || '').trim();
+          if (!byUnscheduled.has(u)) byUnscheduled.set(u, []);
+          byUnscheduled.get(u)!.push({
+            office: safeStr(row.office, 100),
+            type_of_visit: safeStr(row.visit_type, 100),
+            unscheduled: safeStr(row.unscheduled, 100),
+            reason: safeStr(row.reason, 100),
+          });
+        }
+        
+        for (const [dutyDate, patients] of byUnscheduled) {
+          const showDocId = formData.dutyDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
+          const docRef = doc(db, 'patientlog-details', showDocId);
+          const sanitizedPatients = patients.map((p) => sanitizeFirebaseDataClient(p));
+          await setDoc(docRef, {
+            ...sanitizeFirebaseDataClient({ date: formData.dutyDate }),
+            unscheduled: arrayUnion(...sanitizedPatients),
+          }, { merge: true });
+        }
+        if (byUnscheduled.size === 0) {
+          const showDocId = formData.dutyDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
+          const docRef = doc(db, 'patientlog-details', showDocId);
+          await setDoc(docRef, sanitizeFirebaseDataClient({
+            appt_date: formData.dutyDate,
+          }), { merge: true });
+        }
+
+        const rowsWithSource = patientListForPdf.filter(row => row.source && row.source.trim() !== '');
+        const bySource = new Map<string, { office: string, source: string, }[]>();
+        for (const row of rowsWithSource) {
+          const u = (row.source || '').trim();
+          if (!bySource.has(u)) bySource.set(u, []);
+          bySource.get(u)!.push({
+            office: safeStr(row.office, 100),
+            source: safeStr(row.source, 100),
+          });
+        }
+        
+        for (const [dutyDate, patients] of bySource) {
+          const showDocId = formData.dutyDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
+          const docRef = doc(db, 'patientlog-details', showDocId);
+          const sanitizedPatients = patients.map((p) => sanitizeFirebaseDataClient(p));
+          await setDoc(docRef, {
+            ...sanitizeFirebaseDataClient({ date: formData.dutyDate }),
+            source: arrayUnion(...sanitizedPatients),
+          }, { merge: true });
+        }
+        if (bySource.size === 0) {
+          const showDocId = formData.dutyDate.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 1500);
+          const docRef = doc(db, 'patientlog-details', showDocId);
           await setDoc(docRef, sanitizeFirebaseDataClient({
             appt_date: formData.dutyDate,
           }), { merge: true });
@@ -1682,7 +1764,8 @@ export default function PatientLogSystem(): React.ReactElement {
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '100px' }}>Office</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '120px' }}>Appt. Date</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '120px' }}>Type of Visit</th>
-                  <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '120px' }}>Cancellation / Reschedule Reason</th>
+                  <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '120px' }}>Unscheduled</th>
+                  <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '120px' }}>Reason</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Call In</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Call Out</th>
                   <th style={{ padding: '12px 8px', textAlign: 'center', minWidth: '80px' }}>Time</th>
@@ -1701,6 +1784,7 @@ export default function PatientLogSystem(): React.ReactElement {
                     removePatientRow={removePatientRow}
                     patientOfficeOptions={patientOfficeOptions}
                     getVisitTypeOptions={getVisitTypeOptions}
+                    unscheduledOptions={unscheduledOptions}
                     remarkOptions={remarkOptions}
                     sourceOptions={sourceOptions}
                     otherDutyOptions={otherDutyOptions}

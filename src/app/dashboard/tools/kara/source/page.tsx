@@ -10,29 +10,51 @@ function yearMonthFromDate(date: string): string {
   return matched ? `${matched[1]}-${matched[2]}` : '';
 }
 
-type PatientItem = {
+type SourceItem = {
   office: string;
   source: string;
+};
+
+type UnscheduledItem = {
+  office: string;
   reason: string;
+  type_of_visit: string;
+  unscheduled: string;
 };
 
 type ShowDoc = {
   id: string;
   yearMonth: string;
-  patients: PatientItem[];
+  source: SourceItem[];
+  unscheduled: UnscheduledItem[];
 };
 
-function normalizePatient(patients: unknown): PatientItem[] {
-  if (!Array.isArray(patients)) return [];
+function normalizeSource(source: unknown): SourceItem[] {
+  if (!Array.isArray(source)) return [];
 
-  const items: PatientItem[] = [];
-  for (const item of patients) {
+  const items: SourceItem[] = [];
+  for (const item of source) {
     if (!item || typeof item !== 'object') continue;
     const office = typeof item.office === 'string' ? item.office : '';
     const source = typeof item.source === 'string' ? item.source : '';
+    if (!office && !source) continue;
+    items.push({ office, source });
+  }
+  return items;
+}
+
+function normalizeUnscheduled(unscheduled: unknown): UnscheduledItem[] {
+  if (!Array.isArray(unscheduled)) return [];
+
+  const items: UnscheduledItem[] = [];
+  for (const item of unscheduled) {
+    if (!item || typeof item !== 'object') continue;
+    const office = typeof item.office === 'string' ? item.office : '';
     const reason = typeof item.reason === 'string' ? item.reason : '';
-    if (!office && !source && !reason) continue;
-    items.push({ office, source, reason });
+    const type_of_visit = typeof item.type_of_visit === 'string' ? item.type_of_visit : '';
+    const unscheduled = typeof item.unscheduled === 'string' ? item.unscheduled : '';
+    if (!office && !reason && !type_of_visit && !unscheduled) continue;
+    items.push({ office, reason, type_of_visit, unscheduled });
   }
   return items;
 }
@@ -101,7 +123,7 @@ export default function Page() {
 
     const loadShow = async () => {
       try {
-        const snap = await getDocs(collection(db, 'show-noshow'));
+        const snap = await getDocs(collection(db, 'patientlog-details'));
         const docs: ShowDoc[] = [];
 
         for (const item of snap.docs) {
@@ -110,7 +132,8 @@ export default function Page() {
           docs.push({
             id: item.id,
             yearMonth,
-            patients: normalizePatient(item.data()?.patients),
+            source: normalizeSource(item.data()?.source),
+            unscheduled: normalizeUnscheduled (item.data()?.unscheduled),
           });
         }
 
@@ -136,7 +159,10 @@ export default function Page() {
     const offices = new Set<string>();
     for (const doc of showDocs) {
       if (doc.yearMonth !== month) continue;
-      for (const item of doc.patients) {
+      for (const item of doc.source) {
+        if (item.office) offices.add(item.office);
+      }
+      for (const item of doc.unscheduled) {
         if (item.office) offices.add(item.office);
       }
     }
@@ -149,7 +175,7 @@ export default function Page() {
     const counts = new Map<string, number>();
     for (const doc of showDocs) {
       if (doc.yearMonth !== month) continue;
-      for (const item of doc.patients) {
+      for (const item of doc.source) {
         if (item.office !== office || !item.source) continue;
         counts.set(item.source, (counts.get(item.source) || 0) + 1);
       }
@@ -166,26 +192,65 @@ export default function Page() {
   }, [showDocs, month, office]);
 
   const reasonRows = useMemo(() => {
-    if (!month || !office) return [];
+  if (!month || !office) return [];
 
-    const counts = new Map<string, number>();
-    for (const doc of showDocs) {
-      if (doc.yearMonth !== month) continue;
-      for (const item of doc.patients) {
-        if (item.office !== office || !item.reason) continue;
-        counts.set(item.reason, (counts.get(item.reason) || 0) + 1);
+  const counts = new Map<
+    string,
+    { unscheduled: string; visit_type: string; count: number }
+  >();
+
+  for (const doc of showDocs) {
+    if (doc.yearMonth !== month) continue;
+
+    for (const item of doc.unscheduled) {
+      if (item.office !== office || !item.reason) continue;
+
+      const existing = counts.get(item.reason);
+
+      if (existing) {
+        existing.count += 1;
+      } else {
+        counts.set(item.reason, {
+          unscheduled: item.unscheduled,
+          visit_type: item.type_of_visit,
+          count: 1,
+        });
       }
     }
+  }
 
-    const total = Array.from(counts.values()).reduce((sum, n) => sum + n, 0);
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-      .map(([reason, count]) => ({
-        reason,
-        count,
-        percentage: total > 0 ? (count / total) * 100 : 0,
-      }));
-  }, [showDocs, month, office]);
+  const total = Array.from(counts.values()).reduce(
+    (sum, item) => sum + item.count,
+    0
+  );
+  const unscheduledOrder = [
+  'No Show',
+  'Cancelled',
+  'Rescheduled',
+  'Other',
+];
+
+  return Array.from(counts.entries())
+  .sort((a, b) => {
+    const aOrder = unscheduledOrder.indexOf(a[1].unscheduled);
+    const bOrder = unscheduledOrder.indexOf(b[1].unscheduled);
+
+    const safeAOrder = aOrder === -1 ? 999 : aOrder;
+    const safeBOrder = bOrder === -1 ? 999 : bOrder;
+
+    return (
+      safeAOrder - safeBOrder ||
+      a[1].unscheduled.localeCompare(b[1].unscheduled)
+    );
+  })
+  .map(([reason, data]) => ({
+    unscheduled: data.unscheduled,
+    visit_type: data.visit_type,
+    reason,
+    count: data.count,
+    percentage: total > 0 ? (data.count / total) * 100 : 0,
+  }));
+}, [showDocs, month, office]);
 
   useEffect(() => {
     if (availableMonths.length === 0) {
@@ -378,6 +443,8 @@ export default function Page() {
         <table style={tableStyle}>
           <thead>
             <tr>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Unscheduled</th>
+              <th style={{ ...thStyle, textAlign: 'center' }}>Type of Visit</th>
               <th style={{ ...thStyle, textAlign: 'center' }}>Cancellation / Reschedule Reason</th>
               <th style={{ ...thStyle, textAlign: 'center' }}>Count</th>
               <th style={{ ...thStyle, textAlign: 'center' }}>Percentage</th>
@@ -395,15 +462,23 @@ export default function Page() {
                     <td style={{ ...tdStyle, textAlign: 'center' }} />
                     <td style={{ ...tdStyle, textAlign: 'center' }} />
                     <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
+                    <td style={{ ...tdStyle, textAlign: 'center' }} />
                   </tr>
                 ))
               : reasonRows.map((row, index) => (
                   <tr
-                    key={row.reason}
+                   key={`${row.unscheduled}-${row.visit_type}-${row.reason}`}
                     style={{
                       background: index % 2 === 0 ? '#fff' : '#f8fafc',
                     }}
                   >
+                    <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 500 }}>
+                      {row.unscheduled}
+                    </td>
+                    <td style={{ ...tdStyle, textAlign: 'center' }}>
+                      {row.visit_type}
+                    </td>
                     <td style={{ ...tdStyle, textAlign: 'center', fontWeight: 500 }}>
                       {row.reason}
                     </td>
@@ -421,4 +496,3 @@ export default function Page() {
     </main>
   );
 }
-
