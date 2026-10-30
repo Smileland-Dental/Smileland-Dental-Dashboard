@@ -1221,6 +1221,7 @@ function ReportTablePageContent() {
 
         const userData = userDoc.data();
         if (
+          userData?.role !== 'Employee' &&
           userData?.role !== 'HR' &&
           userData?.role !== 'Director'
         ) {
